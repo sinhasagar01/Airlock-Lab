@@ -1,0 +1,26 @@
+{
+  "name": "ai-developer-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @ai-dev/desktop",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@types/node": "26.1.0",
+    "eslint": "10.6.0",
+    "prettier": "3.9.4",
+    "typescript": "6.0.3",
+    "vitest": "4.1.10"
+  }
+}

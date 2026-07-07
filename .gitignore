@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+coverage/
+
+# Tauri/Rust output
+target/
+apps/desktop/src-tauri/target/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
