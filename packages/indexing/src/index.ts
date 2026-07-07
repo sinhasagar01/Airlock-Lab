@@ -20,6 +20,26 @@ export type RepositorySummary = {
   lastIndexedAt: string | null;
 };
 
+function repositoryNameFromPath(path: string): string {
+  const normalizedPath = path.replace(/\/$/, "");
+  const pathSegments = normalizedPath.split("/");
+  return pathSegments.at(-1) || normalizedPath;
+}
+
+export function createRepositorySummaryFromPath(
+  path: string,
+): RepositorySummary {
+  return {
+    id: `repo-${path}`,
+    name: repositoryNameFromPath(path),
+    path,
+    branch: "unknown",
+    status: "not_indexed",
+    openChanges: 0,
+    lastIndexedAt: null,
+  };
+}
+
 export function summarizeScanTarget(target: ScanTarget): ScanTargetSummary {
   const includes = ["file-tree"];
 
@@ -48,15 +68,6 @@ export function createMockRepositories(): RepositorySummary[] {
       status: "indexed",
       openChanges: 0,
       lastIndexedAt: "Today, 10:24",
-    },
-    {
-      id: "repo-empty-state",
-      name: "Select another repository",
-      path: "/select/a/repository",
-      branch: "none",
-      status: "not_indexed",
-      openChanges: 0,
-      lastIndexedAt: null,
     },
   ];
 }

@@ -158,6 +158,22 @@ p {
   min-width: 260px;
 }
 
+.primary-action,
+.empty-state button {
+  background: #17202a;
+  border-radius: 6px;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 700;
+  min-height: 38px;
+  padding: 9px 13px;
+}
+
+.primary-action:hover,
+.empty-state button:hover {
+  background: #2f3a47;
+}
+
 .overview-grid {
   display: grid;
   gap: 12px;
@@ -202,6 +218,18 @@ dt {
   display: grid;
   gap: 16px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.inline-notice {
+  background: #fff4df;
+  border: 1px solid #f1d4a4;
+  border-radius: 8px;
+  color: #7a4b20;
+  font-size: 14px;
+  font-weight: 650;
+  grid-column: 1 / -1;
+  line-height: 1.45;
+  padding: 13px 14px;
 }
 
 .panel {
@@ -278,16 +306,6 @@ dd {
 
 .empty-state__action {
   margin-top: 4px;
-}
-
-.empty-state button {
-  background: #17202a;
-  border-radius: 6px;
-  color: #ffffff;
-  font-size: 14px;
-  font-weight: 700;
-  min-height: 38px;
-  padding: 9px 13px;
 }
 
 @media (max-width: 920px) {

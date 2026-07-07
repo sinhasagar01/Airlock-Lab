@@ -1,13 +1,15 @@
 import { useMemo, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { createMockAgentRuns, createMockProvider } from "@ai-dev/ai";
 import {
   createMockWorkspaceSnapshot,
   primaryNavigation,
   type DomainStatus,
   type NavigationSection,
 } from "@ai-dev/core";
-import { createMockAgentRuns, createMockProvider } from "@ai-dev/ai";
 import {
   createMockRepositories,
+  createRepositorySummaryFromPath,
   summarizeScanTarget,
   type RepositorySummary,
 } from "@ai-dev/indexing";
@@ -15,13 +17,8 @@ import { EmptyState, StatTile, StatusBadge } from "@ai-dev/ui";
 
 const workspace = createMockWorkspaceSnapshot();
 const provider = createMockProvider();
-const repositories = createMockRepositories();
+const mockRepositories = createMockRepositories();
 const agentRuns = createMockAgentRuns();
-const scanTarget = summarizeScanTarget({
-  path: workspace.summary.name,
-  includeGitState: true,
-  includeDocumentation: true,
-});
 
 const statusTone: Record<
   DomainStatus,
@@ -53,13 +50,62 @@ function repositoryTone(
 export function App() {
   const [activeSection, setActiveSection] =
     useState<NavigationSection>("overview");
+  const [repositories, setRepositories] =
+    useState<RepositorySummary[]>(mockRepositories);
+  const [repositoryPickerError, setRepositoryPickerError] = useState<
+    string | null
+  >(null);
 
   const activeRepository = repositories[0];
-  const emptyRepositorySlots = useMemo(
+  const indexedRepositoryCount = useMemo(
     () =>
-      repositories.filter((repository) => repository.status === "not_indexed"),
-    [],
+      repositories.filter((repository) => repository.status === "indexed")
+        .length,
+    [repositories],
   );
+  const scanTarget = summarizeScanTarget({
+    path: activeRepository?.path ?? workspace.summary.name,
+    includeGitState: true,
+    includeDocumentation: true,
+  });
+
+  async function selectRepositories() {
+    setRepositoryPickerError(null);
+
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: true,
+        title: "Choose repositories",
+      });
+
+      if (!selected) {
+        return;
+      }
+
+      const selectedPaths = Array.isArray(selected) ? selected : [selected];
+      const selectedRepositories = selectedPaths.map((path) =>
+        createRepositorySummaryFromPath(path),
+      );
+
+      setRepositories((currentRepositories) => {
+        const existingPaths = new Set(
+          currentRepositories.map((repository) => repository.path),
+        );
+        const newRepositories = selectedRepositories.filter(
+          (repository) => !existingPaths.has(repository.path),
+        );
+
+        return [...currentRepositories, ...newRepositories];
+      });
+      setActiveSection("repositories");
+    } catch {
+      setRepositoryPickerError(
+        "Repository selection is available in the native Tauri app. The web preview cannot open local folders.",
+      );
+      setActiveSection("repositories");
+    }
+  }
 
   return (
     <main className="app-shell">
@@ -97,6 +143,13 @@ export function App() {
             <StatusBadge tone="warning">
               Pending approvals: {workspace.summary.pendingApprovals}
             </StatusBadge>
+            <button
+              className="primary-action"
+              onClick={selectRepositories}
+              type="button"
+            >
+              Choose repository
+            </button>
           </div>
         </header>
 
@@ -104,7 +157,7 @@ export function App() {
           <StatTile
             detail={`Last indexed ${workspace.summary.lastIndexedAt}`}
             label="Repositories"
-            value={workspace.summary.repositories}
+            value={repositories.length}
           />
           <StatTile
             detail="One run is waiting for human approval"
@@ -112,7 +165,7 @@ export function App() {
             value={workspace.summary.activeRuns}
           />
           <StatTile
-            detail={scanTarget.includes.join(", ")}
+            detail={`${indexedRepositoryCount} indexed, ${scanTarget.includes.join(", ")}`}
             label="Context mode"
             value={scanTarget.mode}
           />
@@ -172,6 +225,12 @@ export function App() {
 
         {activeSection === "repositories" ? (
           <section className="content-grid">
+            {repositoryPickerError ? (
+              <div className="inline-notice" role="status">
+                {repositoryPickerError}
+              </div>
+            ) : null}
+
             {repositories.map((repository) => (
               <article className="panel repository-card" key={repository.id}>
                 <div className="panel-heading">
@@ -196,15 +255,18 @@ export function App() {
                 </dl>
               </article>
             ))}
-            {emptyRepositorySlots.length > 0 ? (
-              <EmptyState
-                action={<button type="button">Choose repository</button>}
-                title="Connect another local repository"
-              >
-                Repository selection will use the Tauri dialog bridge in the
-                next implementation slice.
-              </EmptyState>
-            ) : null}
+
+            <EmptyState
+              action={
+                <button onClick={selectRepositories} type="button">
+                  Choose repository
+                </button>
+              }
+              title="Connect another local repository"
+            >
+              The native app opens a local directory picker and adds selected
+              repositories to this workspace.
+            </EmptyState>
           </section>
         ) : null}
 
