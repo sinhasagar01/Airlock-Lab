@@ -1,0 +1,188 @@
+# Human Approval
+
+## Purpose
+
+This document defines how human approval works across AI workflows.
+
+Human approval is a core product principle, not a modal dialog added at the end. The system should model approval as durable product state that governs agent runs, tool use, changes, Git actions, and external side effects.
+
+## Core Rule
+
+AI may propose, prepare, analyze, draft, and validate.
+
+Humans approve consequential action.
+
+## Actions That Require Approval
+
+Approval should be required before:
+
+- Starting implementation from a plan
+- Writing files
+- Deleting files
+- Running risky commands
+- Modifying Git state
+- Changing files outside approved scope
+- Sending broad or sensitive context to external providers
+- Calling external integrations with side effects
+- Creating commits
+- Publishing pull requests
+- Triggering CI or deployment workflows
+- Changing provider, tool, or permission settings in ways that affect safety
+
+## Approval Object
+
+An approval should record:
+
+- Action being approved
+- Actor
+- Timestamp
+- Scope
+- Preview shown to the user
+- Risks presented
+- Files or systems affected
+- Tool or workflow requesting approval
+- Conditions or limits
+- Resulting action status
+
+Approval should be queryable later as part of audit history.
+
+## Approval Types
+
+### Plan Approval
+
+Approves a technical plan as the basis for implementation.
+
+### Tool Approval
+
+Approves a specific tool call or class of tool calls for a bounded run.
+
+### Scope Expansion Approval
+
+Approves work beyond the originally accepted task or plan.
+
+### Change Acceptance
+
+Approves keeping a proposed change after review.
+
+### Git Approval
+
+Approves commits, branch operations, or pull request preparation.
+
+### External Side-Effect Approval
+
+Approves actions that affect external systems.
+
+## Approval Preview
+
+Before approval, the user should see:
+
+- Requested action
+- Reason for action
+- Scope
+- Affected files or systems
+- Expected result
+- Risks
+- Alternatives if relevant
+- Whether action is reversible
+- What happens next
+
+Approval prompts should be specific, not generic.
+
+## Permission Scope
+
+Approvals should be scoped.
+
+Scope dimensions:
+
+- Time
+- Agent run
+- Tool
+- Repository
+- File path
+- Command
+- External integration
+- Action type
+
+The system should avoid broad, indefinite permission grants in early versions.
+
+## Denial And Revision
+
+The user should be able to:
+
+- Deny approval
+- Request changes
+- Narrow scope
+- Add constraints
+- Ask for more explanation
+- Cancel the workflow
+
+Denial should be treated as useful signal, not failure noise.
+
+## Approval And Agent Runs
+
+Agent runs should pause when approval is needed.
+
+The run should record:
+
+- Why approval was requested
+- What was approved or denied
+- How the run resumed or stopped
+
+If an agent cannot proceed safely without approval, it should stop.
+
+## Destructive Actions
+
+Destructive actions require the strongest approval behavior.
+
+Examples:
+
+- File deletion
+- Overwriting user changes
+- Resetting Git state
+- Removing branches
+- Running destructive shell commands
+- Modifying production systems
+
+The system should show clear previews and prefer reversible alternatives.
+
+## External Side Effects
+
+External side effects include:
+
+- Publishing PRs
+- Creating issues
+- Triggering CI
+- Deploying
+- Posting comments
+- Calling third-party APIs that write data
+
+These should never happen silently.
+
+## MVP Scope
+
+The MVP should support:
+
+- Plan approval
+- Implementation approval
+- File write approval
+- Scope expansion approval
+- Change acceptance
+- Validation command approval where needed
+- Basic approval history
+
+The MVP can defer:
+
+- Organization-wide policies
+- Role-based team approvals
+- Multi-party approval workflows
+- Advanced policy engine
+
+## Success Criteria
+
+Human approval is successful when:
+
+- Users know what they are approving
+- Approvals are specific and scoped
+- Agents stop at meaningful boundaries
+- Approval history can explain what happened
+- The system never hides destructive or external side effects
