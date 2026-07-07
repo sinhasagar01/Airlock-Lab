@@ -1,35 +1,85 @@
-import { createWorkspaceSummary } from "@ai-dev/core";
-import { createMockProvider } from "@ai-dev/ai";
-import { summarizeScanTarget } from "@ai-dev/indexing";
-import { StatusBadge } from "@ai-dev/ui";
+import { useMemo, useState } from "react";
+import {
+  createMockWorkspaceSnapshot,
+  primaryNavigation,
+  type DomainStatus,
+  type NavigationSection,
+} from "@ai-dev/core";
+import { createMockAgentRuns, createMockProvider } from "@ai-dev/ai";
+import {
+  createMockRepositories,
+  summarizeScanTarget,
+  type RepositorySummary,
+} from "@ai-dev/indexing";
+import { EmptyState, StatTile, StatusBadge } from "@ai-dev/ui";
 
-const workspace = createWorkspaceSummary({
-  name: "AI Developer Workspace",
-  repositories: 0,
-  activeRuns: 0,
-  pendingApprovals: 0
-});
-
+const workspace = createMockWorkspaceSnapshot();
 const provider = createMockProvider();
+const repositories = createMockRepositories();
+const agentRuns = createMockAgentRuns();
 const scanTarget = summarizeScanTarget({
-  path: "/select/a/repository",
+  path: workspace.summary.name,
   includeGitState: true,
-  includeDocumentation: true
+  includeDocumentation: true,
 });
+
+const statusTone: Record<
+  DomainStatus,
+  "neutral" | "success" | "warning" | "danger"
+> = {
+  draft: "neutral",
+  ready: "success",
+  pending_approval: "warning",
+  running: "neutral",
+  paused: "warning",
+  completed: "success",
+  failed: "danger",
+};
+
+function repositoryTone(
+  status: RepositorySummary["status"],
+): "neutral" | "success" | "warning" {
+  if (status === "indexed") {
+    return "success";
+  }
+
+  if (status === "indexing") {
+    return "neutral";
+  }
+
+  return "warning";
+}
 
 export function App() {
+  const [activeSection, setActiveSection] =
+    useState<NavigationSection>("overview");
+
+  const activeRepository = repositories[0];
+  const emptyRepositorySlots = useMemo(
+    () =>
+      repositories.filter((repository) => repository.status === "not_indexed"),
+    [],
+  );
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
-        <div className="brand">AI Developer Workspace</div>
+        <div>
+          <span className="product-mark">ADW</span>
+          <div className="brand">AI Developer Workspace</div>
+        </div>
+
         <nav aria-label="Primary navigation">
-          <a aria-current="page">Home</a>
-          <a>Repositories</a>
-          <a>Tasks</a>
-          <a>Agent Runs</a>
-          <a>Changes</a>
-          <a>Documents</a>
-          <a>Settings</a>
+          {primaryNavigation.map((item) => (
+            <button
+              aria-current={activeSection === item.id ? "page" : undefined}
+              key={item.id}
+              onClick={() => setActiveSection(item.id)}
+              type="button"
+            >
+              {item.label}
+            </button>
+          ))}
         </nav>
       </aside>
 
@@ -37,38 +87,175 @@ export function App() {
         <header className="topbar">
           <div>
             <p className="eyebrow">Workspace</p>
-            <h1>{workspace.name}</h1>
+            <h1>{workspace.summary.name}</h1>
+            <p>{workspace.summary.description}</p>
           </div>
           <div className="status-row">
-            <StatusBadge tone="neutral">Provider: {provider.id}</StatusBadge>
+            <StatusBadge tone="success">
+              Provider: {provider.displayName}
+            </StatusBadge>
             <StatusBadge tone="warning">
-              Pending approvals: {workspace.pendingApprovals}
+              Pending approvals: {workspace.summary.pendingApprovals}
             </StatusBadge>
           </div>
         </header>
 
-        <section className="panel" aria-labelledby="mvp-start-heading">
-          <p className="eyebrow">MVP scaffold</p>
-          <h2 id="mvp-start-heading">Local-first app shell ready</h2>
-          <p>
-            The first screen is intentionally operational: workspace context,
-            repository readiness, agent state, and approval visibility.
-          </p>
-          <div className="grid">
-            <div>
-              <span className="metric">{workspace.repositories}</span>
-              <span className="label">Repositories</span>
-            </div>
-            <div>
-              <span className="metric">{workspace.activeRuns}</span>
-              <span className="label">Active runs</span>
-            </div>
-            <div>
-              <span className="metric">{scanTarget.mode}</span>
-              <span className="label">Indexing mode</span>
-            </div>
-          </div>
+        <section className="overview-grid" aria-label="Workspace metrics">
+          <StatTile
+            detail={`Last indexed ${workspace.summary.lastIndexedAt}`}
+            label="Repositories"
+            value={workspace.summary.repositories}
+          />
+          <StatTile
+            detail="One run is waiting for human approval"
+            label="Agent runs"
+            value={workspace.summary.activeRuns}
+          />
+          <StatTile
+            detail={scanTarget.includes.join(", ")}
+            label="Context mode"
+            value={scanTarget.mode}
+          />
         </section>
+
+        {activeSection === "overview" ? (
+          <section className="content-grid">
+            <article className="panel">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Active repository</p>
+                  <h2>{activeRepository.name}</h2>
+                </div>
+                <StatusBadge tone={repositoryTone(activeRepository.status)}>
+                  {activeRepository.status.replace("_", " ")}
+                </StatusBadge>
+              </div>
+              <dl className="metadata-list">
+                <div>
+                  <dt>Path</dt>
+                  <dd>{activeRepository.path}</dd>
+                </div>
+                <div>
+                  <dt>Branch</dt>
+                  <dd>{activeRepository.branch}</dd>
+                </div>
+                <div>
+                  <dt>Open changes</dt>
+                  <dd>{activeRepository.openChanges}</dd>
+                </div>
+              </dl>
+            </article>
+
+            <article className="panel">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Recent activity</p>
+                  <h2>Workspace pulse</h2>
+                </div>
+              </div>
+              <div className="activity-list">
+                {workspace.activity.map((activity) => (
+                  <div className="activity-item" key={activity.id}>
+                    <StatusBadge tone={statusTone[activity.status]}>
+                      {activity.status.replace("_", " ")}
+                    </StatusBadge>
+                    <div>
+                      <h3>{activity.title}</h3>
+                      <p>{activity.detail}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </article>
+          </section>
+        ) : null}
+
+        {activeSection === "repositories" ? (
+          <section className="content-grid">
+            {repositories.map((repository) => (
+              <article className="panel repository-card" key={repository.id}>
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">Repository</p>
+                    <h2>{repository.name}</h2>
+                  </div>
+                  <StatusBadge tone={repositoryTone(repository.status)}>
+                    {repository.status.replace("_", " ")}
+                  </StatusBadge>
+                </div>
+                <p>{repository.path}</p>
+                <dl className="metadata-list">
+                  <div>
+                    <dt>Branch</dt>
+                    <dd>{repository.branch}</dd>
+                  </div>
+                  <div>
+                    <dt>Open changes</dt>
+                    <dd>{repository.openChanges}</dd>
+                  </div>
+                </dl>
+              </article>
+            ))}
+            {emptyRepositorySlots.length > 0 ? (
+              <EmptyState
+                action={<button type="button">Choose repository</button>}
+                title="Connect another local repository"
+              >
+                Repository selection will use the Tauri dialog bridge in the
+                next implementation slice.
+              </EmptyState>
+            ) : null}
+          </section>
+        ) : null}
+
+        {activeSection === "agents" ? (
+          <section className="content-grid">
+            {agentRuns.map((run) => (
+              <article className="panel" key={run.id}>
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">{run.repository}</p>
+                    <h2>{run.title}</h2>
+                  </div>
+                  <StatusBadge
+                    tone={
+                      run.status === "waiting_for_approval"
+                        ? "warning"
+                        : "neutral"
+                    }
+                  >
+                    {run.status.replaceAll("_", " ")}
+                  </StatusBadge>
+                </div>
+                <p>{run.nextStep}</p>
+              </article>
+            ))}
+          </section>
+        ) : null}
+
+        {activeSection === "approvals" ? (
+          <EmptyState
+            action={<button type="button">Review pending plan</button>}
+            title="Human approval queue"
+          >
+            Approval cards will show proposed file edits, provider reasoning
+            summaries, and explicit accept or reject actions.
+          </EmptyState>
+        ) : null}
+
+        {activeSection === "changes" ? (
+          <EmptyState title="No local changes waiting for review">
+            Change review will connect repository status, generated diffs,
+            tests, and release readiness checks.
+          </EmptyState>
+        ) : null}
+
+        {activeSection === "settings" ? (
+          <EmptyState title="Provider and workspace settings">
+            Settings will manage provider adapters, local storage, indexing
+            policy, and approval defaults.
+          </EmptyState>
+        ) : null}
       </section>
     </main>
   );
