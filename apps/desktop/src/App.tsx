@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { createMockAgentRuns, createMockProvider } from "@ai-dev/ai";
 import {
@@ -14,6 +14,10 @@ import {
   type RepositorySummary,
 } from "@ai-dev/indexing";
 import { EmptyState, StatTile, StatusBadge } from "@ai-dev/ui";
+import {
+  loadSavedRepositories,
+  saveRepositories,
+} from "./storage/repositoryStore";
 
 const workspace = createMockWorkspaceSnapshot();
 const provider = createMockProvider();
@@ -55,6 +59,9 @@ export function App() {
   const [repositoryPickerError, setRepositoryPickerError] = useState<
     string | null
   >(null);
+  const [storageStatus, setStorageStatus] = useState<
+    "loading" | "ready" | "unavailable"
+  >("loading");
 
   const activeRepository = repositories[0];
   const indexedRepositoryCount = useMemo(
@@ -68,6 +75,43 @@ export function App() {
     includeGitState: true,
     includeDocumentation: true,
   });
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function hydrateRepositories() {
+      try {
+        const savedRepositories = await loadSavedRepositories();
+
+        if (!isMounted) {
+          return;
+        }
+
+        if (savedRepositories.length > 0) {
+          setRepositories(savedRepositories);
+        } else {
+          await saveRepositories(mockRepositories);
+        }
+
+        setStorageStatus("ready");
+      } catch {
+        if (!isMounted) {
+          return;
+        }
+
+        setStorageStatus("unavailable");
+        setRepositoryPickerError(
+          "Local repository storage is available in the native Tauri app. The web preview uses in-memory data.",
+        );
+      }
+    }
+
+    void hydrateRepositories();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   async function selectRepositories() {
     setRepositoryPickerError(null);
@@ -88,7 +132,8 @@ export function App() {
         createRepositorySummaryFromPath(path),
       );
 
-      setRepositories((currentRepositories) => {
+      const nextRepositories = (() => {
+        const currentRepositories = repositories;
         const existingPaths = new Set(
           currentRepositories.map((repository) => repository.path),
         );
@@ -97,7 +142,11 @@ export function App() {
         );
 
         return [...currentRepositories, ...newRepositories];
-      });
+      })();
+
+      setRepositories(nextRepositories);
+      await saveRepositories(nextRepositories);
+      setStorageStatus("ready");
       setActiveSection("repositories");
     } catch {
       setRepositoryPickerError(
@@ -142,6 +191,11 @@ export function App() {
             </StatusBadge>
             <StatusBadge tone="warning">
               Pending approvals: {workspace.summary.pendingApprovals}
+            </StatusBadge>
+            <StatusBadge
+              tone={storageStatus === "ready" ? "success" : "warning"}
+            >
+              Storage: {storageStatus}
             </StatusBadge>
             <button
               className="primary-action"
