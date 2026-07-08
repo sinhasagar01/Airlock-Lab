@@ -18,6 +18,7 @@ import {
   createIndexingJob,
   createMockRepositories,
   createRepositorySummaryFromPath,
+  type IndexedFileFact,
   type IndexingJob,
   summarizeScanTarget,
   type RepositorySummary,
@@ -28,7 +29,12 @@ import {
   saveApprovalRequests,
   updateApprovalRequestStatus,
 } from "./storage/approvalRequestStore";
+import { scanRepositoryFileTree } from "./storage/fileTreeScanner";
 import { loadRepositoriesGitMetadata } from "./storage/gitMetadata";
+import {
+  loadIndexedFileFacts,
+  replaceIndexedFileFacts,
+} from "./storage/indexedFileStore";
 import { loadIndexingJobs, saveIndexingJob } from "./storage/indexingJobStore";
 import {
   loadSavedRepositories,
@@ -110,6 +116,7 @@ export function App() {
   const [indexingJobs, setIndexingJobs] = useState<IndexingJob[]>([]);
   const [approvalRequests, setApprovalRequests] =
     useState<ApprovalRequest[]>(mockApprovalRequests);
+  const [indexedFiles, setIndexedFiles] = useState<IndexedFileFact[]>([]);
 
   const activeRepository = repositories[0];
   const indexedRepositoryCount = useMemo(
@@ -154,11 +161,19 @@ export function App() {
             await loadRepositoriesGitMetadata(savedRepositories);
           setRepositories(repositoriesWithGitMetadata);
           await saveRepositories(repositoriesWithGitMetadata);
+          const savedFiles = await loadIndexedFileFacts(
+            repositoriesWithGitMetadata[0].id,
+          );
+          setIndexedFiles(savedFiles);
         } else {
           const repositoriesWithGitMetadata =
             await loadRepositoriesGitMetadata(mockRepositories);
           setRepositories(repositoriesWithGitMetadata);
           await saveRepositories(repositoriesWithGitMetadata);
+          const savedFiles = await loadIndexedFileFacts(
+            repositoriesWithGitMetadata[0].id,
+          );
+          setIndexedFiles(savedFiles);
         }
 
         setStorageStatus("ready");
@@ -229,13 +244,65 @@ export function App() {
     const job: IndexingJob = {
       ...createIndexingJob(repository),
       status: "running",
-      progress: 35,
-      step: "Reading repository metadata and preparing file tree scan",
+      progress: 15,
+      step: "Scanning repository file tree",
       updatedAt: timestamp,
     };
 
     setIndexingJobs((currentJobs) => [job, ...currentJobs]);
     await saveIndexingJob(job);
+
+    try {
+      const scanResult = await scanRepositoryFileTree(
+        repository.id,
+        repository.path,
+      );
+      await replaceIndexedFileFacts(repository.id, scanResult.files);
+
+      const completedAt = new Date().toISOString();
+      const completedJob: IndexingJob = {
+        ...job,
+        status: "completed",
+        progress: 100,
+        step: `Indexed ${scanResult.scannedFiles} files; skipped ${scanResult.skippedEntries} entries`,
+        updatedAt: completedAt,
+      };
+      const indexedRepository: RepositorySummary = {
+        ...repository,
+        status: "indexed",
+        lastIndexedAt: completedAt,
+      };
+      const nextRepositories = repositories.map((currentRepository) =>
+        currentRepository.id === repository.id
+          ? indexedRepository
+          : currentRepository,
+      );
+
+      setIndexedFiles(scanResult.files);
+      setIndexingJobs((currentJobs) =>
+        currentJobs.map((currentJob) =>
+          currentJob.id === job.id ? completedJob : currentJob,
+        ),
+      );
+      setRepositories(nextRepositories);
+      await saveIndexingJob(completedJob);
+      await saveRepositories(nextRepositories);
+    } catch {
+      const failedJob: IndexingJob = {
+        ...job,
+        status: "failed",
+        progress: 100,
+        step: "File-tree scan failed before facts could be persisted",
+        updatedAt: new Date().toISOString(),
+      };
+
+      setIndexingJobs((currentJobs) =>
+        currentJobs.map((currentJob) =>
+          currentJob.id === job.id ? failedJob : currentJob,
+        ),
+      );
+      await saveIndexingJob(failedJob);
+    }
   }
 
   async function updateApprovalStatus(
@@ -414,6 +481,9 @@ export function App() {
                   the local context pipeline.
                 </p>
               )}
+              <p className="supporting-note">
+                Persisted file facts: {indexedFiles.length}
+              </p>
             </article>
           </section>
         ) : null}

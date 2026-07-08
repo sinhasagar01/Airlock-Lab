@@ -83,6 +83,7 @@ export async function saveIndexingJob(job: IndexingJob) {
         status = excluded.status,
         progress = excluded.progress,
         step = excluded.step,
+        created_at = excluded.created_at,
         updated_at = excluded.updated_at
     `,
     [

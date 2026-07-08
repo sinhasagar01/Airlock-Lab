@@ -34,6 +34,21 @@ export type IndexingJob = {
   updatedAt: string;
 };
 
+export type IndexedFileFact = {
+  repositoryId: string;
+  path: string;
+  sizeBytes: number;
+  extension: string | null;
+  modifiedAt: string | null;
+};
+
+export type FileTreeScanResult = {
+  repositoryPath: string;
+  scannedFiles: number;
+  skippedEntries: number;
+  files: IndexedFileFact[];
+};
+
 function repositoryNameFromPath(path: string): string {
   const normalizedPath = path.replace(/\/$/, "");
   const pathSegments = normalizedPath.split("/");
