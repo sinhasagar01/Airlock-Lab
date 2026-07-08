@@ -341,6 +341,125 @@ dd {
   justify-content: flex-end;
 }
 
+.file-browser-shell {
+  display: grid;
+  max-width: 1160px;
+}
+
+.file-browser.full {
+  min-height: 620px;
+}
+
+.file-browser.compact {
+  grid-column: 1 / -1;
+}
+
+.file-browser-controls {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) 180px;
+}
+
+.file-browser-controls input,
+.file-browser-controls select {
+  background: #ffffff;
+  border: 1px solid #cfd6e2;
+  border-radius: 6px;
+  color: #17202a;
+  font: inherit;
+  min-height: 38px;
+  padding: 8px 10px;
+  width: 100%;
+}
+
+.extension-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.extension-summary button,
+.extension-summary span {
+  background: #f2f5f8;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 8px;
+}
+
+.extension-summary button[aria-pressed="true"] {
+  background: #e7edf5;
+  border-color: #9fb3d0;
+  color: #17202a;
+}
+
+.file-browser-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1.25fr) minmax(260px, 0.75fr);
+}
+
+.file-results {
+  border: 1px solid #edf0f4;
+  border-radius: 8px;
+  display: grid;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.file-results button {
+  align-items: center;
+  background: #ffffff;
+  border-bottom: 1px solid #edf0f4;
+  color: #17202a;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  min-height: 40px;
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.file-results button:last-child {
+  border-bottom: 0;
+}
+
+.file-results button:hover,
+.file-results button[aria-current="true"] {
+  background: #f2f5f8;
+}
+
+.file-results span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-results small {
+  color: #667085;
+  font-size: 12px;
+}
+
+.file-results p,
+.file-detail p {
+  padding: 12px;
+}
+
+.file-detail {
+  align-content: start;
+  border: 1px solid #edf0f4;
+  border-radius: 8px;
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+
+.file-detail h3 {
+  overflow-wrap: anywhere;
+}
+
 .progress-stack {
   display: grid;
   gap: 10px;
@@ -418,6 +537,11 @@ dd {
 
   .overview-grid,
   .content-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .file-browser-controls,
+  .file-browser-grid {
     grid-template-columns: 1fr;
   }
 }

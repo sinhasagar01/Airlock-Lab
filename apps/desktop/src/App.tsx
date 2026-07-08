@@ -117,6 +117,9 @@ export function App() {
   const [approvalRequests, setApprovalRequests] =
     useState<ApprovalRequest[]>(mockApprovalRequests);
   const [indexedFiles, setIndexedFiles] = useState<IndexedFileFact[]>([]);
+  const [fileSearch, setFileSearch] = useState("");
+  const [extensionFilter, setExtensionFilter] = useState("all");
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
 
   const activeRepository = repositories[0];
   const indexedRepositoryCount = useMemo(
@@ -134,6 +137,37 @@ export function App() {
   const pendingApprovalCount = approvalRequests.filter(
     (approval) => approval.status === "pending",
   ).length;
+  const extensionCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+
+    for (const file of indexedFiles) {
+      const extension = file.extension ?? "none";
+      counts.set(extension, (counts.get(extension) ?? 0) + 1);
+    }
+
+    return [...counts.entries()].sort(([left], [right]) =>
+      left.localeCompare(right),
+    );
+  }, [indexedFiles]);
+  const filteredIndexedFiles = useMemo(() => {
+    const normalizedSearch = fileSearch.trim().toLowerCase();
+
+    return indexedFiles.filter((file) => {
+      const matchesSearch =
+        normalizedSearch.length === 0 ||
+        file.path.toLowerCase().includes(normalizedSearch);
+      const matchesExtension =
+        extensionFilter === "all" ||
+        (extensionFilter === "none" && file.extension === null) ||
+        file.extension === extensionFilter;
+
+      return matchesSearch && matchesExtension;
+    });
+  }, [extensionFilter, fileSearch, indexedFiles]);
+  const selectedIndexedFile =
+    filteredIndexedFiles.find((file) => file.path === selectedFilePath) ??
+    filteredIndexedFiles[0] ??
+    null;
 
   useEffect(() => {
     let isMounted = true;
@@ -165,6 +199,7 @@ export function App() {
             repositoriesWithGitMetadata[0].id,
           );
           setIndexedFiles(savedFiles);
+          setSelectedFilePath(savedFiles[0]?.path ?? null);
         } else {
           const repositoriesWithGitMetadata =
             await loadRepositoriesGitMetadata(mockRepositories);
@@ -174,6 +209,7 @@ export function App() {
             repositoriesWithGitMetadata[0].id,
           );
           setIndexedFiles(savedFiles);
+          setSelectedFilePath(savedFiles[0]?.path ?? null);
         }
 
         setStorageStatus("ready");
@@ -279,6 +315,7 @@ export function App() {
       );
 
       setIndexedFiles(scanResult.files);
+      setSelectedFilePath(scanResult.files[0]?.path ?? null);
       setIndexingJobs((currentJobs) =>
         currentJobs.map((currentJob) =>
           currentJob.id === job.id ? completedJob : currentJob,
@@ -315,6 +352,127 @@ export function App() {
       ),
     );
     await updateApprovalRequestStatus(approvalId, status);
+  }
+
+  function formatFileSize(sizeBytes: number): string {
+    if (sizeBytes < 1024) {
+      return `${sizeBytes} B`;
+    }
+
+    if (sizeBytes < 1024 * 1024) {
+      return `${(sizeBytes / 1024).toFixed(1)} KB`;
+    }
+
+    return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function renderIndexedFileBrowser(variant: "compact" | "full") {
+    const visibleFiles =
+      variant === "compact"
+        ? filteredIndexedFiles.slice(0, 8)
+        : filteredIndexedFiles;
+
+    return (
+      <article className={`panel file-browser ${variant}`}>
+        <div className="panel-heading">
+          <div>
+            <p className="eyebrow">Indexed files</p>
+            <h2>{activeRepository.name}</h2>
+          </div>
+          <StatusBadge tone={indexedFiles.length > 0 ? "success" : "warning"}>
+            {indexedFiles.length} files
+          </StatusBadge>
+        </div>
+
+        <div className="file-browser-controls">
+          <input
+            aria-label="Search indexed files"
+            onChange={(event) => setFileSearch(event.target.value)}
+            placeholder="Search paths"
+            type="search"
+            value={fileSearch}
+          />
+          <select
+            aria-label="Filter indexed files by extension"
+            onChange={(event) => setExtensionFilter(event.target.value)}
+            value={extensionFilter}
+          >
+            <option value="all">All extensions</option>
+            {extensionCounts.map(([extension, count]) => (
+              <option key={extension} value={extension}>
+                {extension} ({count})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div
+          className="extension-summary"
+          aria-label="File counts by extension"
+        >
+          {extensionCounts.length > 0 ? (
+            extensionCounts.slice(0, 10).map(([extension, count]) => (
+              <button
+                aria-pressed={extensionFilter === extension}
+                key={extension}
+                onClick={() => setExtensionFilter(extension)}
+                type="button"
+              >
+                {extension} {count}
+              </button>
+            ))
+          ) : (
+            <span>No indexed file facts yet</span>
+          )}
+        </div>
+
+        <div className="file-browser-grid">
+          <div className="file-results" aria-label="Indexed file results">
+            {visibleFiles.length > 0 ? (
+              visibleFiles.map((file) => (
+                <button
+                  aria-current={
+                    selectedIndexedFile?.path === file.path ? "true" : undefined
+                  }
+                  key={file.path}
+                  onClick={() => setSelectedFilePath(file.path)}
+                  type="button"
+                >
+                  <span>{file.path}</span>
+                  <small>{formatFileSize(file.sizeBytes)}</small>
+                </button>
+              ))
+            ) : (
+              <p>No files match the current filter.</p>
+            )}
+          </div>
+
+          <div className="file-detail" aria-label="Selected file details">
+            {selectedIndexedFile ? (
+              <>
+                <h3>{selectedIndexedFile.path}</h3>
+                <dl className="metadata-list">
+                  <div>
+                    <dt>Size</dt>
+                    <dd>{formatFileSize(selectedIndexedFile.sizeBytes)}</dd>
+                  </div>
+                  <div>
+                    <dt>Extension</dt>
+                    <dd>{selectedIndexedFile.extension ?? "none"}</dd>
+                  </div>
+                  <div>
+                    <dt>Modified</dt>
+                    <dd>{selectedIndexedFile.modifiedAt ?? "unknown"}</dd>
+                  </div>
+                </dl>
+              </>
+            ) : (
+              <p>Select a file after running indexing.</p>
+            )}
+          </div>
+        </div>
+      </article>
+    );
   }
 
   return (
@@ -485,6 +643,8 @@ export function App() {
                 Persisted file facts: {indexedFiles.length}
               </p>
             </article>
+
+            {renderIndexedFileBrowser("compact")}
           </section>
         ) : null}
 
@@ -619,10 +779,9 @@ export function App() {
         ) : null}
 
         {activeSection === "changes" ? (
-          <EmptyState title="No local changes waiting for review">
-            Change review will connect repository status, generated diffs,
-            tests, and release readiness checks.
-          </EmptyState>
+          <section className="file-browser-shell">
+            {renderIndexedFileBrowser("full")}
+          </section>
         ) : null}
 
         {activeSection === "settings" ? (
