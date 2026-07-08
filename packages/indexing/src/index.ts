@@ -21,6 +21,19 @@ export type RepositorySummary = {
   lastIndexedAt: string | null;
 };
 
+export type IndexingJobStatus = "queued" | "running" | "completed" | "failed";
+
+export type IndexingJob = {
+  id: string;
+  repositoryId: string;
+  repositoryName: string;
+  status: IndexingJobStatus;
+  progress: number;
+  step: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 function repositoryNameFromPath(path: string): string {
   const normalizedPath = path.replace(/\/$/, "");
   const pathSegments = normalizedPath.split("/");
@@ -39,6 +52,21 @@ export function createRepositorySummaryFromPath(
     status: "not_indexed",
     openChanges: 0,
     lastIndexedAt: null,
+  };
+}
+
+export function createIndexingJob(repository: RepositorySummary): IndexingJob {
+  const timestamp = new Date().toISOString();
+
+  return {
+    id: `index-${repository.id}-${timestamp}`,
+    repositoryId: repository.id,
+    repositoryName: repository.name,
+    status: "queued",
+    progress: 0,
+    step: "Waiting to scan repository files",
+    createdAt: timestamp,
+    updatedAt: timestamp,
   };
 }
 
