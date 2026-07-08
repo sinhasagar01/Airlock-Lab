@@ -159,6 +159,7 @@ p {
 }
 
 .primary-action,
+.secondary-action,
 .empty-state button {
   background: #17202a;
   border-radius: 6px;
@@ -170,8 +171,20 @@ p {
 }
 
 .primary-action:hover,
+.secondary-action:hover,
 .empty-state button:hover {
   background: #2f3a47;
+}
+
+.secondary-action {
+  background: #ffffff;
+  border: 1px solid #cfd6e2;
+  color: #17202a;
+  justify-self: start;
+}
+
+.secondary-action:hover {
+  background: #f2f5f8;
 }
 
 .overview-grid {
@@ -280,6 +293,31 @@ dd {
 
 .repository-card p {
   overflow-wrap: anywhere;
+}
+
+.indexing-panel {
+  min-height: 180px;
+}
+
+.progress-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.progress-track {
+  background: #edf0f4;
+  border-radius: 999px;
+  height: 10px;
+  overflow: hidden;
+  width: 100%;
+}
+
+.progress-track span {
+  background: #2f6fed;
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+  transition: width 160ms ease;
 }
 
 .empty-state {

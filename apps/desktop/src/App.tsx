@@ -8,13 +8,16 @@ import {
   type NavigationSection,
 } from "@ai-dev/core";
 import {
+  createIndexingJob,
   createMockRepositories,
   createRepositorySummaryFromPath,
+  type IndexingJob,
   summarizeScanTarget,
   type RepositorySummary,
 } from "@ai-dev/indexing";
 import { EmptyState, StatTile, StatusBadge } from "@ai-dev/ui";
 import { loadRepositoriesGitMetadata } from "./storage/gitMetadata";
+import { loadIndexingJobs, saveIndexingJob } from "./storage/indexingJobStore";
 import {
   loadSavedRepositories,
   saveRepositories,
@@ -63,6 +66,7 @@ export function App() {
   const [storageStatus, setStorageStatus] = useState<
     "loading" | "ready" | "unavailable"
   >("loading");
+  const [indexingJobs, setIndexingJobs] = useState<IndexingJob[]>([]);
 
   const activeRepository = repositories[0];
   const indexedRepositoryCount = useMemo(
@@ -76,6 +80,7 @@ export function App() {
     includeGitState: true,
     includeDocumentation: true,
   });
+  const activeIndexingJob = indexingJobs[0];
 
   useEffect(() => {
     let isMounted = true;
@@ -83,10 +88,13 @@ export function App() {
     async function hydrateRepositories() {
       try {
         const savedRepositories = await loadSavedRepositories();
+        const savedIndexingJobs = await loadIndexingJobs();
 
         if (!isMounted) {
           return;
         }
+
+        setIndexingJobs(savedIndexingJobs);
 
         if (savedRepositories.length > 0) {
           const repositoriesWithGitMetadata =
@@ -163,6 +171,20 @@ export function App() {
     }
   }
 
+  async function startIndexingJob(repository: RepositorySummary) {
+    const timestamp = new Date().toISOString();
+    const job: IndexingJob = {
+      ...createIndexingJob(repository),
+      status: "running",
+      progress: 35,
+      step: "Reading repository metadata and preparing file tree scan",
+      updatedAt: timestamp,
+    };
+
+    setIndexingJobs((currentJobs) => [job, ...currentJobs]);
+    await saveIndexingJob(job);
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -226,9 +248,13 @@ export function App() {
             value={workspace.summary.activeRuns}
           />
           <StatTile
-            detail={`${indexedRepositoryCount} indexed, ${scanTarget.includes.join(", ")}`}
-            label="Context mode"
-            value={scanTarget.mode}
+            detail={
+              activeIndexingJob
+                ? activeIndexingJob.step
+                : `${indexedRepositoryCount} indexed, ${scanTarget.includes.join(", ")}`
+            }
+            label="Indexing"
+            value={activeIndexingJob?.status ?? scanTarget.mode}
           />
         </section>
 
@@ -262,6 +288,13 @@ export function App() {
                   <dd>{activeRepository.openChanges}</dd>
                 </div>
               </dl>
+              <button
+                className="secondary-action"
+                onClick={() => startIndexingJob(activeRepository)}
+                type="button"
+              >
+                Start indexing
+              </button>
             </article>
 
             <article className="panel">
@@ -284,6 +317,38 @@ export function App() {
                   </div>
                 ))}
               </div>
+            </article>
+
+            <article className="panel indexing-panel">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">Indexing</p>
+                  <h2>{activeIndexingJob?.repositoryName ?? "No job yet"}</h2>
+                </div>
+                <StatusBadge tone={activeIndexingJob ? "neutral" : "warning"}>
+                  {activeIndexingJob?.status ?? "idle"}
+                </StatusBadge>
+              </div>
+              {activeIndexingJob ? (
+                <div className="progress-stack">
+                  <div
+                    aria-label="Indexing progress"
+                    aria-valuemax={100}
+                    aria-valuemin={0}
+                    aria-valuenow={activeIndexingJob.progress}
+                    className="progress-track"
+                    role="progressbar"
+                  >
+                    <span style={{ width: `${activeIndexingJob.progress}%` }} />
+                  </div>
+                  <p>{activeIndexingJob.step}</p>
+                </div>
+              ) : (
+                <p>
+                  Start an indexing job from the active repository to prepare
+                  the local context pipeline.
+                </p>
+              )}
             </article>
           </section>
         ) : null}
