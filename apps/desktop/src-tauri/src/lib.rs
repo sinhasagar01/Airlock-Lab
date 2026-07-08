@@ -8,6 +8,7 @@ use std::{
 use serde::Serialize;
 
 const MAX_INDEXED_FILES: usize = 5_000;
+const MAX_PREVIEW_BYTES: u64 = 256 * 1024;
 const IGNORED_DIRECTORIES: &[&str] = &[
     ".git",
     "node_modules",
@@ -43,6 +44,15 @@ struct FileTreeScanResult {
     scanned_files: usize,
     skipped_entries: usize,
     files: Vec<IndexedFileFact>,
+}
+
+#[derive(Serialize)]
+struct FileContentPreview {
+    path: String,
+    status: String,
+    content: Option<String>,
+    size_bytes: u64,
+    max_size_bytes: u64,
 }
 
 fn git_output(repository_path: &str, args: &[&str]) -> Option<String> {
@@ -207,6 +217,118 @@ fn scan_repository_file_tree(repository_id: String, repository_path: String) -> 
     }
 }
 
+#[tauri::command]
+fn preview_repository_file(repository_path: String, file_path: String) -> FileContentPreview {
+    let repository_root = match fs::canonicalize(&repository_path) {
+        Ok(path) => path,
+        Err(_) => {
+            return FileContentPreview {
+                path: file_path,
+                status: "unavailable".to_string(),
+                content: None,
+                size_bytes: 0,
+                max_size_bytes: MAX_PREVIEW_BYTES,
+            };
+        }
+    };
+    let requested_path = repository_root.join(&file_path);
+    let canonical_file_path = match fs::canonicalize(&requested_path) {
+        Ok(path) => path,
+        Err(_) => {
+            return FileContentPreview {
+                path: file_path,
+                status: "unavailable".to_string(),
+                content: None,
+                size_bytes: 0,
+                max_size_bytes: MAX_PREVIEW_BYTES,
+            };
+        }
+    };
+
+    if !canonical_file_path.starts_with(&repository_root) {
+        return FileContentPreview {
+            path: file_path,
+            status: "outside_repository".to_string(),
+            content: None,
+            size_bytes: 0,
+            max_size_bytes: MAX_PREVIEW_BYTES,
+        };
+    }
+
+    let metadata = match fs::metadata(&canonical_file_path) {
+        Ok(metadata) => metadata,
+        Err(_) => {
+            return FileContentPreview {
+                path: file_path,
+                status: "unavailable".to_string(),
+                content: None,
+                size_bytes: 0,
+                max_size_bytes: MAX_PREVIEW_BYTES,
+            };
+        }
+    };
+
+    if !metadata.is_file() {
+        return FileContentPreview {
+            path: file_path,
+            status: "unavailable".to_string(),
+            content: None,
+            size_bytes: metadata.len(),
+            max_size_bytes: MAX_PREVIEW_BYTES,
+        };
+    }
+
+    if metadata.len() > MAX_PREVIEW_BYTES {
+        return FileContentPreview {
+            path: file_path,
+            status: "too_large".to_string(),
+            content: None,
+            size_bytes: metadata.len(),
+            max_size_bytes: MAX_PREVIEW_BYTES,
+        };
+    }
+
+    let bytes = match fs::read(&canonical_file_path) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return FileContentPreview {
+                path: file_path,
+                status: "unavailable".to_string(),
+                content: None,
+                size_bytes: metadata.len(),
+                max_size_bytes: MAX_PREVIEW_BYTES,
+            };
+        }
+    };
+
+    if bytes.contains(&0) {
+        return FileContentPreview {
+            path: file_path,
+            status: "binary".to_string(),
+            content: None,
+            size_bytes: metadata.len(),
+            max_size_bytes: MAX_PREVIEW_BYTES,
+        };
+    }
+
+    match String::from_utf8(bytes) {
+        Ok(content) => FileContentPreview {
+            path: file_path,
+            status: "ready".to_string(),
+            content: Some(content),
+            size_bytes: metadata.len(),
+            max_size_bytes: MAX_PREVIEW_BYTES,
+        },
+        Err(_) => FileContentPreview {
+            path: file_path,
+            status: "binary".to_string(),
+            content: None,
+            size_bytes: metadata.len(),
+            max_size_bytes: MAX_PREVIEW_BYTES,
+        },
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -216,6 +338,7 @@ pub fn run() {
         .plugin(tauri_plugin_sql::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
             load_repository_git_metadata,
+            preview_repository_file,
             scan_repository_file_tree
         ])
         .run(tauri::generate_context!())

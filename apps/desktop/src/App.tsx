@@ -18,6 +18,7 @@ import {
   createIndexingJob,
   createMockRepositories,
   createRepositorySummaryFromPath,
+  type FileContentPreview,
   type IndexedFileFact,
   type IndexingJob,
   summarizeScanTarget,
@@ -29,6 +30,7 @@ import {
   saveApprovalRequests,
   updateApprovalRequestStatus,
 } from "./storage/approvalRequestStore";
+import { previewRepositoryFile } from "./storage/filePreview";
 import { scanRepositoryFileTree } from "./storage/fileTreeScanner";
 import { loadRepositoriesGitMetadata } from "./storage/gitMetadata";
 import {
@@ -120,6 +122,10 @@ export function App() {
   const [fileSearch, setFileSearch] = useState("");
   const [extensionFilter, setExtensionFilter] = useState("all");
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
+  const [filePreview, setFilePreview] = useState<FileContentPreview | null>(
+    null,
+  );
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
 
   const activeRepository = repositories[0];
   const indexedRepositoryCount = useMemo(
@@ -168,6 +174,50 @@ export function App() {
     filteredIndexedFiles.find((file) => file.path === selectedFilePath) ??
     filteredIndexedFiles[0] ??
     null;
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadPreview() {
+      if (!selectedIndexedFile || !activeRepository) {
+        setFilePreview(null);
+        return;
+      }
+
+      setIsPreviewLoading(true);
+
+      try {
+        const preview = await previewRepositoryFile(
+          activeRepository.path,
+          selectedIndexedFile.path,
+        );
+
+        if (isMounted) {
+          setFilePreview(preview);
+        }
+      } catch {
+        if (isMounted) {
+          setFilePreview({
+            path: selectedIndexedFile.path,
+            status: "unavailable",
+            content: null,
+            sizeBytes: selectedIndexedFile.sizeBytes,
+            maxSizeBytes: 0,
+          });
+        }
+      } finally {
+        if (isMounted) {
+          setIsPreviewLoading(false);
+        }
+      }
+    }
+
+    void loadPreview();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [activeRepository, selectedIndexedFile]);
 
   useEffect(() => {
     let isMounted = true;
@@ -366,6 +416,46 @@ export function App() {
     return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
+  function renderFilePreview() {
+    if (isPreviewLoading) {
+      return <p className="preview-state">Loading preview...</p>;
+    }
+
+    if (!filePreview || !selectedIndexedFile) {
+      return <p className="preview-state">Select a file to load a preview.</p>;
+    }
+
+    if (filePreview.status === "ready") {
+      return <pre className="file-preview">{filePreview.content}</pre>;
+    }
+
+    if (filePreview.status === "too_large") {
+      return (
+        <p className="preview-state">
+          Preview skipped because this file is{" "}
+          {formatFileSize(filePreview.sizeBytes)}. The preview limit is{" "}
+          {formatFileSize(filePreview.maxSizeBytes)}.
+        </p>
+      );
+    }
+
+    if (filePreview.status === "binary") {
+      return (
+        <p className="preview-state">Preview skipped for binary content.</p>
+      );
+    }
+
+    if (filePreview.status === "outside_repository") {
+      return (
+        <p className="preview-state">
+          Preview blocked because the resolved path is outside the repository.
+        </p>
+      );
+    }
+
+    return <p className="preview-state">Preview unavailable for this file.</p>;
+  }
+
   function renderIndexedFileBrowser(variant: "compact" | "full") {
     const visibleFiles =
       variant === "compact"
@@ -465,6 +555,7 @@ export function App() {
                     <dd>{selectedIndexedFile.modifiedAt ?? "unknown"}</dd>
                   </div>
                 </dl>
+                {renderFilePreview()}
               </>
             ) : (
               <p>Select a file after running indexing.</p>

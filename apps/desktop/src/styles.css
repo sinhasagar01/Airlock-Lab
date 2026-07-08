@@ -460,6 +460,29 @@ dd {
   overflow-wrap: anywhere;
 }
 
+.file-preview {
+  background: #101820;
+  border-radius: 8px;
+  color: #edf0f4;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px;
+  white-space: pre-wrap;
+}
+
+.preview-state {
+  background: #f2f5f8;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  color: #4b5565;
+  font-size: 13px;
+  padding: 12px;
+}
+
 .progress-stack {
   display: grid;
   gap: 10px;

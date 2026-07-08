@@ -49,6 +49,17 @@ export type FileTreeScanResult = {
   files: IndexedFileFact[];
 };
 
+export type FilePreviewStatus =
+  "ready" | "binary" | "too_large" | "outside_repository" | "unavailable";
+
+export type FileContentPreview = {
+  path: string;
+  status: FilePreviewStatus;
+  content: string | null;
+  sizeBytes: number;
+  maxSizeBytes: number;
+};
+
 function repositoryNameFromPath(path: string): string {
   const normalizedPath = path.replace(/\/$/, "");
   const pathSegments = normalizedPath.split("/");
