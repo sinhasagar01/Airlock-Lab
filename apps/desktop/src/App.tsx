@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { createMockAgentRuns, createMockProvider } from "@ai-dev/ai";
+import {
+  createMockAgentRuns,
+  createMockApprovalRequests,
+  createMockProvider,
+  type ApprovalRisk,
+} from "@ai-dev/ai";
 import {
   createMockWorkspaceSnapshot,
   primaryNavigation,
@@ -27,6 +32,7 @@ const workspace = createMockWorkspaceSnapshot();
 const provider = createMockProvider();
 const mockRepositories = createMockRepositories();
 const agentRuns = createMockAgentRuns();
+const approvalRequests = createMockApprovalRequests();
 
 const statusTone: Record<
   DomainStatus,
@@ -53,6 +59,20 @@ function repositoryTone(
   }
 
   return "warning";
+}
+
+function approvalRiskTone(
+  risk: ApprovalRisk,
+): "neutral" | "success" | "warning" | "danger" {
+  if (risk === "high") {
+    return "danger";
+  }
+
+  if (risk === "medium") {
+    return "warning";
+  }
+
+  return "success";
 }
 
 export function App() {
@@ -430,13 +450,41 @@ export function App() {
         ) : null}
 
         {activeSection === "approvals" ? (
-          <EmptyState
-            action={<button type="button">Review pending plan</button>}
-            title="Human approval queue"
-          >
-            Approval cards will show proposed file edits, provider reasoning
-            summaries, and explicit accept or reject actions.
-          </EmptyState>
+          <section className="approval-queue">
+            {approvalRequests.map((approval) => (
+              <article className="panel approval-card" key={approval.id}>
+                <div className="panel-heading">
+                  <div>
+                    <p className="eyebrow">{approval.repository}</p>
+                    <h2>{approval.title}</h2>
+                  </div>
+                  <div className="status-row compact">
+                    <StatusBadge tone="warning">{approval.status}</StatusBadge>
+                    <StatusBadge tone={approvalRiskTone(approval.risk)}>
+                      {approval.risk} risk
+                    </StatusBadge>
+                  </div>
+                </div>
+
+                <p>{approval.summary}</p>
+
+                <div className="file-list" aria-label="Files requiring review">
+                  {approval.files.map((file) => (
+                    <span key={file}>{file}</span>
+                  ))}
+                </div>
+
+                <div className="approval-actions">
+                  <button className="secondary-action" type="button">
+                    Reject
+                  </button>
+                  <button className="primary-action" type="button">
+                    Approve
+                  </button>
+                </div>
+              </article>
+            ))}
+          </section>
         ) : null}
 
         {activeSection === "changes" ? (

@@ -158,6 +158,10 @@ p {
   min-width: 260px;
 }
 
+.status-row.compact {
+  min-width: 0;
+}
+
 .primary-action,
 .secondary-action,
 .empty-state button {
@@ -297,6 +301,39 @@ dd {
 
 .indexing-panel {
   min-height: 180px;
+}
+
+.approval-queue {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 980px;
+}
+
+.approval-card {
+  min-height: 0;
+}
+
+.file-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.file-list span {
+  background: #f2f5f8;
+  border: 1px solid #d8dee8;
+  border-radius: 6px;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 650;
+  padding: 6px 8px;
+}
+
+.approval-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .progress-stack {
