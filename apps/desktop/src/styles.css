@@ -1395,6 +1395,181 @@ dt {
   padding: 24px;
 }
 
+.changes-dashboard,
+.settings-dashboard {
+  display: grid;
+  gap: 18px;
+  max-width: var(--layout-page-max);
+  width: 100%;
+}
+
+.changes-hero-card {
+  align-items: center;
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  padding: 30px;
+}
+
+.changes-hero-card__content {
+  align-items: start;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: 58px minmax(0, 1fr);
+}
+
+.changes-hero-card__mark {
+  align-items: center;
+  background: var(--color-accent-soft);
+  border: 1px solid rgba(236, 120, 85, 0.22);
+  border-radius: 18px;
+  color: var(--color-accent-primary);
+  display: inline-flex;
+  height: 58px;
+  justify-content: center;
+  width: 58px;
+}
+
+.changes-hero-card h2,
+.settings-card h2,
+.maintenance-card h2 {
+  color: var(--color-text-primary);
+  font-size: 25px;
+  font-weight: 760;
+  line-height: 1.18;
+  margin-top: 14px;
+}
+
+.changes-hero-card p:not(.card-eyebrow) {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.55;
+  margin-top: 14px;
+  max-width: 690px;
+}
+
+.changes-feature-grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.changes-feature-card {
+  padding: 24px;
+}
+
+.changes-feature-card h3 {
+  color: var(--color-text-primary);
+  font-size: 17px;
+  font-weight: 750;
+  line-height: 1.25;
+  margin: 18px 0 9px;
+}
+
+.changes-feature-card p {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.changes-status-card {
+  padding: 26px;
+}
+
+.changes-status-card h3 {
+  color: var(--color-text-primary);
+  font-size: 21px;
+  font-weight: 760;
+  line-height: 1.25;
+  margin-top: 12px;
+}
+
+.changes-fact-grid {
+  margin-top: 22px;
+}
+
+.settings-card,
+.maintenance-card {
+  padding: 30px;
+}
+
+.settings-row-list,
+.maintenance-action-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.settings-row,
+.maintenance-action {
+  align-items: center;
+  background: #fbfdff;
+  border: 1px solid #e6edf4;
+  border-radius: 18px;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: 44px minmax(0, 1fr) minmax(148px, max-content) max-content;
+  min-height: 92px;
+  padding: 18px;
+}
+
+.settings-row__content h3,
+.maintenance-action h3 {
+  color: var(--color-text-primary);
+  font-size: 16px;
+  font-weight: 750;
+  line-height: 1.25;
+  margin-bottom: 6px;
+}
+
+.settings-row__content p,
+.maintenance-action p {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
+  max-width: 620px;
+}
+
+.settings-row__value {
+  background: var(--color-surface-muted);
+  border-radius: 999px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 720;
+  justify-self: end;
+  line-height: 1;
+  max-width: 230px;
+  overflow: hidden;
+  padding: 9px 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.maintenance-action {
+  grid-template-columns: 44px minmax(0, 1fr) max-content;
+}
+
+.maintenance-action--danger {
+  background: var(--color-danger-soft);
+  border-color: rgba(200, 62, 53, 0.16);
+}
+
+.maintenance-action--danger h3 {
+  color: #8f241d;
+}
+
+.maintenance-action--danger p {
+  color: #8b4a44;
+}
+
+.danger-action {
+  border-color: rgba(200, 62, 53, 0.22);
+  color: var(--color-danger);
+}
+
 .inline-notice {
   background: var(--color-warning-soft);
   border: 1px solid rgba(234, 124, 82, 0.42);
@@ -1985,6 +2160,7 @@ dd {
   .overview-grid,
   .overview-lower-grid,
   .tab-dashboard-grid,
+  .changes-feature-grid,
   .content-grid {
     grid-template-columns: 1fr;
   }
@@ -2054,8 +2230,14 @@ dd {
 
   .file-browser-controls,
   .file-browser-grid,
-  .approval-card-grid {
+  .approval-card-grid,
+  .settings-row,
+  .maintenance-action {
     grid-template-columns: 1fr;
+  }
+
+  .settings-row__value {
+    justify-self: start;
   }
 }
 
@@ -2099,9 +2281,22 @@ dd {
 
   .active-work-card,
   .recent-activity-card,
-  .quick-start-card {
+  .quick-start-card,
+  .changes-hero-card,
+  .changes-feature-card,
+  .settings-card,
+  .maintenance-card {
     border-radius: var(--radius-lg);
     padding: 24px;
+  }
+
+  .changes-hero-card {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .changes-hero-card__content {
+    grid-template-columns: 1fr;
   }
 
   .active-work-card__header,

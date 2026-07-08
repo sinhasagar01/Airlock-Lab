@@ -23,10 +23,14 @@ source of truth.
   dashboard components.
 - Overview now matches the final dashboard composition with Active Work, Recent
   Activity, and Quick Start cards.
-- Repositories, Agent Runs, and Approvals now use the same premium dashboard
-  card system while preserving repository picker, indexing, Git metadata, agent
-  run state, approval persistence, and approve/reject actions.
-- Changes and Settings still need their final tab-specific content migration.
+- Repositories, Agent Runs, Approvals, Changes, and Settings now use the same
+  premium dashboard card system while preserving repository picker, indexing,
+  Git metadata, agent run state, approval persistence, approve/reject actions,
+  indexed-file browsing, and safe file previews.
+- Changes now presents a polished no-local-changes review state, change-readiness
+  feature blocks, repository status facts, and the full indexed-file browser.
+- Settings now presents workspace settings rows and maintenance actions while
+  keeping unavailable destructive behavior disabled.
 
 ## Active Safety Boundary
 

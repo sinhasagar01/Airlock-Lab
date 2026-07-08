@@ -11,10 +11,11 @@ The desktop MVP uses Tauri, React, TypeScript, and Vite. Styling is plain CSS wi
   summary cards, dashboard cards, icon badges, primary/secondary buttons, icons,
   and empty states.
 - Storage and Tauri command wrappers remain under `apps/desktop/src/storage`.
-- Phase 1 of the final dashboard migration keeps desktop-specific shell
-  composition in `App.tsx` through `AppShell`, `Sidebar`, `SidebarNavItem`,
-  `AppHeader`, and `UpgradeCard` while the low-level primitives live in
-  `packages/ui`.
+- The final dashboard migration keeps desktop-specific shell composition in
+  `App.tsx` through `AppShell`, `Sidebar`, `SidebarNavItem`, `AppHeader`, and
+  `UpgradeCard` while the low-level primitives live in `packages/ui`.
+- All six top-level tabs use the shared header, summary cards, card surfaces,
+  status pills, icon badges, and primary/secondary button treatments.
 
 ## Design System Rules
 
@@ -28,6 +29,10 @@ The desktop MVP uses Tauri, React, TypeScript, and Vite. Styling is plain CSS wi
   direction for shell, cards, pills, typography, and spacing.
 - Preserve the state-driven six-tab navigation until a routing migration is
   intentionally scoped.
+- Changes must keep indexed-file browsing and safe preview access available
+  while presenting the change-review empty/readiness state.
+- Settings must not add destructive behavior unless it is implemented with an
+  explicit confirmation gate.
 
 ## File Preview Rules
 

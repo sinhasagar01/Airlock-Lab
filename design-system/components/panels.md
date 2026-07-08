@@ -16,7 +16,7 @@ Panels hold dashboard summaries, repository state, activity, approval requests, 
 ## Patterns
 
 - Use `DashboardCard` / `.dashboard-card` for new final-dashboard surfaces.
-- Use `.panel` for existing major screen sections while tabs migrate.
+- Use `.panel` for framed tools such as indexed-file browsing and file previews.
 - Use `SummaryCard` / `.summary-card` for dashboard metrics.
 - Use `.metadata-list` for repository and file facts.
 - Use `.preview-state` for loading, binary, too-large, outside-repository, and unavailable preview states.
@@ -26,9 +26,10 @@ Panels hold dashboard summaries, repository state, activity, approval requests, 
 
 The desktop app now has shared primitives for `StatusPill`, `SummaryCard`,
 `DashboardCard`, `IconBadge`, `PrimaryButton`, and `SecondaryButton`.
-Overview, Repositories, Agent Runs, and Approvals use the final dashboard card
-system. Changes and Settings can migrate onto the same primitives in later
-phases without changing storage, indexing, approval, or file-preview behavior.
+All six top-level desktop tabs use the final dashboard card system. Changes uses
+the same primitives for the change-review empty state, feature blocks,
+repository status facts, and indexed-file browser access. Settings uses the
+same primitives for workspace setting rows and maintenance actions.
 
 ## Recent Activity Timeline
 

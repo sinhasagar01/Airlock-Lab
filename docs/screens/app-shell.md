@@ -6,12 +6,17 @@ The app shell now follows a warm premium SaaS dashboard direction.
 
 ## Layout
 
-- Fixed 260px desktop sidebar with product mark, primary navigation, approval count, and upgrade card.
+- Fixed 304px desktop sidebar with product mark, primary navigation, approval
+  count, Pro Intelligence card, and user footer.
 - Main content scrolls independently from the sidebar.
 - Workspace content begins 50px from the main column edge at the 1512px design frame.
 - Hero header with workspace overview copy, provider and pending-approval pills, and choose-repository CTA.
 - Three dashboard metric cards.
-- Overview content grid for active repository, recent activity, indexing status, and indexed files.
+- Tab content below the shared metrics uses the final dashboard card system for
+  Overview, Repositories, Agent Runs, Approvals, Changes, and Settings.
+- Changes includes a no-local-changes review state, change-readiness feature
+  blocks, repository status facts, and indexed-file browsing/file preview access.
+- Settings includes workspace settings rows and workspace maintenance actions.
 
 ## Visual System
 
@@ -24,6 +29,8 @@ The app shell now follows a warm premium SaaS dashboard direction.
 - Clear typography hierarchy: display title, hero lead, panel headings, compact metadata, and dense file rows.
 - Repository summary uses a muted header band, one boxed local-path field, and unboxed branch/open-change metadata so real paths do not break the first-viewport composition.
 - Recent activity uses a compact timeline with a text action in the card header.
+- Changes and Settings reuse the same card padding, icon badges, status pills,
+  and button treatments as the migrated Overview surfaces.
 
 ## Required States
 

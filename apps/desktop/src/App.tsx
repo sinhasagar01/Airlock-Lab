@@ -25,8 +25,8 @@ import {
   type RepositorySummary,
 } from "@ai-dev/indexing";
 import {
-  EmptyState,
   Icon,
+  IconBadge,
   PrimaryButton,
   SecondaryButton,
   SummaryCard,
@@ -99,6 +99,76 @@ const quickStartItems = [
     icon: "approval" as IconName,
     tone: "agent",
     title: "Review approvals",
+  },
+];
+
+const changeFeatureBlocks = [
+  {
+    description:
+      "Current branch, Git cleanliness, and repository readiness are checked before review.",
+    icon: "repository" as IconName,
+    title: "Repository status",
+  },
+  {
+    description:
+      "Generated patches will be grouped into readable diffs with file-level context.",
+    icon: "changes" as IconName,
+    title: "Generated diffs",
+  },
+  {
+    description:
+      "Release checks summarize risk, approvals, and follow-up work before merge.",
+    icon: "approval" as IconName,
+    title: "Release readiness",
+  },
+];
+
+const settingsRows = [
+  {
+    action: "Manage",
+    description:
+      "Provider adapters route model calls through approved local contracts.",
+    icon: "agent" as IconName,
+    title: "Provider adapters",
+  },
+  {
+    action: "Inspect",
+    description:
+      "Workspace data stays local in SQLite-backed desktop storage.",
+    icon: "database" as IconName,
+    title: "Local storage",
+  },
+  {
+    action: "Reindex",
+    description:
+      "Repository facts include file trees, Git state, and documentation hints.",
+    icon: "index" as IconName,
+    title: "Indexing policy",
+  },
+  {
+    action: "Review",
+    description:
+      "Human approval remains required before agent-generated changes proceed.",
+    icon: "approval" as IconName,
+    title: "Approval defaults",
+  },
+];
+
+const maintenanceActions = [
+  {
+    description: "Refresh file facts and Git metadata for the active repository.",
+    icon: "index" as IconName,
+    title: "Reindex repositories",
+  },
+  {
+    description: "Remove temporary derived state without deleting workspace data.",
+    icon: "database" as IconName,
+    title: "Clear caches",
+  },
+  {
+    description: "Return local workspace preferences to their initial state.",
+    icon: "settings" as IconName,
+    title: "Reset workspace",
   },
 ];
 
@@ -1267,16 +1337,183 @@ export function App() {
         ) : null}
 
         {activeSection === "changes" ? (
-          <section className="file-browser-shell">
-            {renderIndexedFileBrowser("full")}
+          <section className="changes-dashboard">
+            <article className="overview-card changes-hero-card">
+              <div className="changes-hero-card__content">
+                <div className="changes-hero-card__mark">
+                  <Icon name="changes" />
+                </div>
+                <div>
+                  <p className="card-eyebrow">Change Review</p>
+                  <h2>
+                    {activeRepository.openChanges > 0
+                      ? `${activeRepository.openChanges} local changes waiting for review`
+                      : "No local changes waiting for review"}
+                  </h2>
+                  <p>
+                    Change review will compare repository status, generated
+                    diffs, and release readiness before work moves into human
+                    approval.
+                  </p>
+                </div>
+              </div>
+              <PrimaryButton
+                icon="play"
+                onClick={() => setActiveSection("agents")}
+              >
+                Start an agent run
+              </PrimaryButton>
+            </article>
+
+            <section className="changes-feature-grid" aria-label="Change review readiness">
+              {changeFeatureBlocks.map((block) => (
+                <article className="overview-card changes-feature-card" key={block.title}>
+                  <IconBadge icon={block.icon} tone="accent" size="md" />
+                  <h3>{block.title}</h3>
+                  <p>{block.description}</p>
+                </article>
+              ))}
+            </section>
+
+            <article className="overview-card changes-status-card">
+              <div className="overview-card__header">
+                <div>
+                  <p className="card-eyebrow">Repository Status</p>
+                  <h3>{activeRepository.name}</h3>
+                </div>
+                <StatusPill tone={repositoryTone(activeRepository.status)}>
+                  {activeRepository.status.replace("_", " ")}
+                </StatusPill>
+              </div>
+              <dl className="tab-fact-grid changes-fact-grid">
+                <div>
+                  <dt>Branch</dt>
+                  <dd>{activeRepository.branch}</dd>
+                </div>
+                <div>
+                  <dt>Open Changes</dt>
+                  <dd>{activeRepository.openChanges}</dd>
+                </div>
+                <div>
+                  <dt>Generated Diffs</dt>
+                  <dd>{activeRepository.openChanges > 0 ? "Ready" : "None"}</dd>
+                </div>
+                <div>
+                  <dt>Release Readiness</dt>
+                  <dd>
+                    {activeRepository.openChanges === 0
+                      ? "Clean"
+                      : "Review required"}
+                  </dd>
+                </div>
+              </dl>
+            </article>
+
+            <section className="file-browser-shell">
+              {renderIndexedFileBrowser("full")}
+            </section>
           </section>
         ) : null}
 
         {activeSection === "settings" ? (
-          <EmptyState title="Provider and workspace settings">
-            Settings will manage provider adapters, local storage, indexing
-            policy, and approval defaults.
-          </EmptyState>
+          <section className="settings-dashboard">
+            <article className="overview-card settings-card">
+              <div className="overview-card__header">
+                <div>
+                  <p className="card-eyebrow">Workspace Settings</p>
+                  <h2>Local-first workspace controls</h2>
+                </div>
+                <StatusPill
+                  tone={storageStatus === "ready" ? "success" : "warning"}
+                >
+                  storage {storageStatus}
+                </StatusPill>
+              </div>
+
+              <div className="settings-row-list">
+                {settingsRows.map((row) => {
+                  const value =
+                    row.title === "Provider adapters"
+                      ? provider.displayName
+                      : row.title === "Local storage"
+                        ? storageStatus
+                        : row.title === "Indexing policy"
+                          ? scanTarget.includes.join(", ")
+                          : `${pendingApprovalCount} pending`;
+                  const action =
+                    row.title === "Indexing policy"
+                      ? () => startIndexingJob(activeRepository)
+                      : row.title === "Approval defaults"
+                        ? () => setActiveSection("approvals")
+                        : undefined;
+
+                  return (
+                    <div className="settings-row" key={row.title}>
+                      <IconBadge icon={row.icon} tone="context" size="md" />
+                      <div className="settings-row__content">
+                        <h3>{row.title}</h3>
+                        <p>{row.description}</p>
+                      </div>
+                      <span className="settings-row__value">{value}</span>
+                      <SecondaryButton
+                        disabled={!action}
+                        onClick={action}
+                      >
+                        {row.action}
+                      </SecondaryButton>
+                    </div>
+                  );
+                })}
+              </div>
+            </article>
+
+            <article className="overview-card maintenance-card">
+              <div className="overview-card__header">
+                <div>
+                  <p className="card-eyebrow">Workspace Maintenance</p>
+                  <h2>Keep local intelligence current</h2>
+                </div>
+              </div>
+
+              <div className="maintenance-action-list">
+                {maintenanceActions.map((action) => {
+                  const isReindex = action.title === "Reindex repositories";
+                  const isDanger = action.title === "Reset workspace";
+
+                  return (
+                    <div
+                      className={`maintenance-action${
+                        isDanger ? " maintenance-action--danger" : ""
+                      }`}
+                      key={action.title}
+                    >
+                      <IconBadge
+                        icon={action.icon}
+                        tone={isDanger ? "danger" : "accent"}
+                        size="md"
+                      />
+                      <div>
+                        <h3>{action.title}</h3>
+                        <p>{action.description}</p>
+                      </div>
+                      <SecondaryButton
+                        className={isDanger ? "danger-action" : ""}
+                        disabled={!isReindex}
+                        icon={isReindex ? "index" : undefined}
+                        onClick={
+                          isReindex
+                            ? () => startIndexingJob(activeRepository)
+                            : undefined
+                        }
+                      >
+                        {isReindex ? "Run" : "Unavailable"}
+                      </SecondaryButton>
+                    </div>
+                  );
+                })}
+              </div>
+            </article>
+          </section>
         ) : null}
     </AppShell>
   );

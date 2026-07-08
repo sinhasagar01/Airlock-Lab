@@ -15,6 +15,15 @@
 - Migrated the Approvals tab to final-dashboard cards with queue summary,
   provider reasoning, risk/status pills, file summaries, and persisted
   approve/reject actions.
+- Migrated the Changes tab to a final-dashboard review surface with a polished
+  no-local-changes state, repository status facts, change-readiness feature
+  blocks, agent-run CTA, and preserved indexed-file browsing/file previews.
+- Migrated the Settings tab to final-dashboard workspace settings and
+  maintenance cards with icon rows, status values, enabled reindex/review
+  actions, and disabled unavailable/destructive maintenance controls.
+- Completed a cross-tab visual consistency QA pass across Overview,
+  Repositories, Agent Runs, Approvals, Changes, and Settings for shared header,
+  summary cards, card spacing, badges, icons, CTAs, and overflow behavior.
 - Began Phase 1 of the final dashboard design migration using
   `references/final-dashboard-design/final-dashboard-design.png` as the visual
   source of truth.
