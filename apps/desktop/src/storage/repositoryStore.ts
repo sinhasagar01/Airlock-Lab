@@ -7,6 +7,7 @@ type RepositoryRow = {
   id: string;
   name: string;
   path: string;
+  is_git_repository: number;
   branch: string;
   status: RepositorySummary["status"];
   open_changes: number;
@@ -26,12 +27,21 @@ async function ensureRepositoryTable(database: Database) {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       path TEXT NOT NULL UNIQUE,
+      is_git_repository INTEGER NOT NULL DEFAULT 0,
       branch TEXT NOT NULL,
       status TEXT NOT NULL,
       open_changes INTEGER NOT NULL,
       last_indexed_at TEXT
     )
   `);
+
+  try {
+    await database.execute(
+      "ALTER TABLE repositories ADD COLUMN is_git_repository INTEGER NOT NULL DEFAULT 0",
+    );
+  } catch {
+    // Existing databases already have this column.
+  }
 }
 
 function rowToRepository(row: RepositoryRow): RepositorySummary {
@@ -39,6 +49,7 @@ function rowToRepository(row: RepositoryRow): RepositorySummary {
     id: row.id,
     name: row.name,
     path: row.path,
+    isGitRepository: row.is_git_repository === 1,
     branch: row.branch,
     status: row.status,
     openChanges: row.open_changes,
@@ -51,7 +62,7 @@ export async function loadSavedRepositories(): Promise<RepositorySummary[]> {
   await ensureRepositoryTable(database);
 
   const rows = await database.select<RepositoryRow[]>(
-    "SELECT id, name, path, branch, status, open_changes, last_indexed_at FROM repositories ORDER BY name",
+    "SELECT id, name, path, is_git_repository, branch, status, open_changes, last_indexed_at FROM repositories ORDER BY name",
   );
 
   return rows.map(rowToRepository);
@@ -68,14 +79,16 @@ export async function saveRepositories(repositories: RepositorySummary[]) {
           id,
           name,
           path,
+          is_git_repository,
           branch,
           status,
           open_changes,
           last_indexed_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         ON CONFLICT(path) DO UPDATE SET
           name = excluded.name,
+          is_git_repository = excluded.is_git_repository,
           branch = excluded.branch,
           status = excluded.status,
           open_changes = excluded.open_changes,
@@ -85,6 +98,7 @@ export async function saveRepositories(repositories: RepositorySummary[]) {
         repository.id,
         repository.name,
         repository.path,
+        repository.isGitRepository ? 1 : 0,
         repository.branch,
         repository.status,
         repository.openChanges,

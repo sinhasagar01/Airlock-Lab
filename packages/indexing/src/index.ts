@@ -14,6 +14,7 @@ export type RepositorySummary = {
   id: string;
   name: string;
   path: string;
+  isGitRepository: boolean;
   branch: string;
   status: "indexed" | "indexing" | "not_indexed";
   openChanges: number;
@@ -33,6 +34,7 @@ export function createRepositorySummaryFromPath(
     id: `repo-${path}`,
     name: repositoryNameFromPath(path),
     path,
+    isGitRepository: false,
     branch: "unknown",
     status: "not_indexed",
     openChanges: 0,
@@ -64,6 +66,7 @@ export function createMockRepositories(): RepositorySummary[] {
       id: "repo-workspace",
       name: "AI-Developer-Workspace",
       path: "/Users/sagarakspuchu/Documents/AI Developer Workspace",
+      isGitRepository: true,
       branch: "main",
       status: "indexed",
       openChanges: 0,

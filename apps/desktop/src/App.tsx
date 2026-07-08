@@ -14,6 +14,7 @@ import {
   type RepositorySummary,
 } from "@ai-dev/indexing";
 import { EmptyState, StatTile, StatusBadge } from "@ai-dev/ui";
+import { loadRepositoriesGitMetadata } from "./storage/gitMetadata";
 import {
   loadSavedRepositories,
   saveRepositories,
@@ -88,9 +89,15 @@ export function App() {
         }
 
         if (savedRepositories.length > 0) {
-          setRepositories(savedRepositories);
+          const repositoriesWithGitMetadata =
+            await loadRepositoriesGitMetadata(savedRepositories);
+          setRepositories(repositoriesWithGitMetadata);
+          await saveRepositories(repositoriesWithGitMetadata);
         } else {
-          await saveRepositories(mockRepositories);
+          const repositoriesWithGitMetadata =
+            await loadRepositoriesGitMetadata(mockRepositories);
+          setRepositories(repositoriesWithGitMetadata);
+          await saveRepositories(repositoriesWithGitMetadata);
         }
 
         setStorageStatus("ready");
@@ -128,8 +135,8 @@ export function App() {
       }
 
       const selectedPaths = Array.isArray(selected) ? selected : [selected];
-      const selectedRepositories = selectedPaths.map((path) =>
-        createRepositorySummaryFromPath(path),
+      const selectedRepositories = await loadRepositoriesGitMetadata(
+        selectedPaths.map((path) => createRepositorySummaryFromPath(path)),
       );
 
       const nextRepositories = (() => {
@@ -243,6 +250,10 @@ export function App() {
                   <dd>{activeRepository.path}</dd>
                 </div>
                 <div>
+                  <dt>Git repository</dt>
+                  <dd>{activeRepository.isGitRepository ? "Yes" : "No"}</dd>
+                </div>
+                <div>
                   <dt>Branch</dt>
                   <dd>{activeRepository.branch}</dd>
                 </div>
@@ -298,6 +309,10 @@ export function App() {
                 </div>
                 <p>{repository.path}</p>
                 <dl className="metadata-list">
+                  <div>
+                    <dt>Git repository</dt>
+                    <dd>{repository.isGitRepository ? "Yes" : "No"}</dd>
+                  </div>
                   <div>
                     <dt>Branch</dt>
                     <dd>{repository.branch}</dd>
