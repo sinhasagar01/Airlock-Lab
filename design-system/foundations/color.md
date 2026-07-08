@@ -129,7 +129,30 @@ Required:
 - Success, warning, danger, info
 - AI, approval, validation, and risk roles
 
-Exact token values should be finalized during UI implementation and visual QA.
+## Implemented MVP Tokens
+
+The desktop app uses CSS custom properties in `apps/desktop/src/styles.css` as the active token source.
+
+- Background: warm off-white `--color-app-background` with
+  `--color-background` retained as the app alias
+- Sidebar: warm neutral `--color-sidebar-background` with
+  `--color-sidebar` retained as the sidebar alias
+- Surface: white `--color-surface`
+- Muted surface: pale blue-gray `--color-surface-muted`
+- Primary text: deep navy `--color-text-primary`
+- Secondary text: slate `--color-text-secondary`
+- Subtle text: quiet slate `--color-text-subtle`
+- Navy action: `--color-primary-action`
+- Primary accent: coral `--color-accent-primary`
+- Success: green `--color-success`
+- Warning: orange `--color-warning`
+- Agent accent: purple `--color-agent`
+- Context accent: blue `--color-context`
+- Danger: red `--color-danger`
+- Border: soft neutral `--color-border`
+- Focus: coral focus ring through `--color-focus`
+
+These tokens create the current warm, premium SaaS direction while keeping operational states readable.
 
 ## Success Criteria
 

@@ -2,6 +2,8 @@
 
 - [README](README.md)
 - [Master Index](MASTER-INDEX.md)
+- [Changelog](CHANGELOG.md)
+- [Project State](PROJECT-STATE.md)
 
 ## ADRs
 
@@ -61,6 +63,7 @@
 - [Components](design-system/components/README.md)
 - [Buttons](design-system/components/buttons.md)
 - [Editors](design-system/components/editors.md)
+- [Iconography](design-system/components/iconography.md)
 - [Navigation](design-system/components/navigation.md)
 - [Panels](design-system/components/panels.md)
 - [Timeline](design-system/components/timeline.md)
@@ -102,7 +105,11 @@
 - [Code Quality](docs/engineering/code-quality.md)
 - [Contribution Guide](docs/engineering/contribution-guide.md)
 - [Development Workflow](docs/engineering/development-workflow.md)
+- [Frontend Implementation](docs/engineering/frontend.md)
 - [Testing Strategy](docs/engineering/testing-strategy.md)
+- [Features](docs/features/README.md)
+- [File Preview](docs/features/file-preview.md)
+- [Repository Indexing Feature](docs/features/repository-indexing.md)
 - [Git](docs/git/README.md)
 - [Change Risk Analysis](docs/git/change-risk-analysis.md)
 - [Git Workflows](docs/git/git-workflows.md)
@@ -131,6 +138,8 @@
 - [Roadmap](docs/roadmap/README.md)
 - [Milestones](docs/roadmap/milestones.md)
 - [Risks](docs/roadmap/risks.md)
+- [Screens](docs/screens/README.md)
+- [App Shell Screen](docs/screens/app-shell.md)
 - [Security](docs/security/README.md)
 - [Destructive Actions](docs/security/destructive-actions.md)
 - [Permissions](docs/security/permissions.md)

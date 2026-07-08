@@ -40,6 +40,8 @@ The app shell must:
 - Shows current active item.
 - Remains stable across main workflows.
 - Supports compact density.
+- Uses the warm premium dashboard visual treatment: fixed 260px desktop sidebar, deep navy brand mark, coral active item, pill counters, and soft neutral background.
+- Stays fixed while main content scrolls independently.
 
 ### MVP Items
 
@@ -60,6 +62,8 @@ The app shell must:
 - Provides command palette trigger.
 - Shows pending approvals indicator.
 - Shows active run indicator when applicable.
+- Shows provider and pending-approval status as pill badges in the design handoff frame.
+- Provides a high-contrast choose-repository action.
 
 ### Main Content
 
@@ -90,6 +94,8 @@ Must show:
 - Active runs
 - Pending approvals
 - Recent changes
+- Indexing status
+- Indexed-file browser summary
 
 ### Repository Overview
 
@@ -210,3 +216,6 @@ Important AI workflow states must not be hidden in secondary panels only.
 - Command palette can launch MVP workflows.
 - Main product objects render in stable detail views.
 - Shell remains usable without network access.
+- File preview states remain visible and safe inside the indexed-file detail panel.
+- The desktop overview matches the design handoff frame: header, metric cards, repository summary, and recent activity align to a consistent dashboard grid.
+- Repository summary uses one boxed path field plus compact branch/open-change metadata, and recent activity uses the compact timeline/header action composition from the frame.

@@ -180,6 +180,10 @@ The product should avoid indexing or sending sensitive files unless explicitly a
 The MVP should support:
 
 - File tree indexing
+- Persisted indexed file facts in SQLite
+- Searchable indexed-file browsing
+- Extension counts and filters
+- Selected-file detail with safe preview states
 - Basic language detection
 - Package/script detection
 - Documentation discovery
@@ -206,3 +210,13 @@ Repository indexing is successful when:
 - Git and working tree state are visible
 - Users can distinguish facts from inference
 - Indexing feels fast enough for daily use
+
+## Implemented UI State
+
+The desktop shell currently exposes repository indexing through:
+
+- Overview metric cards.
+- Active repository metadata.
+- Indexing job progress and persisted status.
+- Indexed-file search and extension filters.
+- Selected-file metadata and safe file preview states.

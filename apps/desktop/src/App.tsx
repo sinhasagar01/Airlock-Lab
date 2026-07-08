@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   createMockAgentRuns,
@@ -24,7 +24,16 @@ import {
   summarizeScanTarget,
   type RepositorySummary,
 } from "@ai-dev/indexing";
-import { EmptyState, StatTile, StatusBadge } from "@ai-dev/ui";
+import {
+  EmptyState,
+  Icon,
+  PrimaryButton,
+  SecondaryButton,
+  SummaryCard,
+  StatusBadge,
+  StatusPill,
+  type IconName,
+} from "@ai-dev/ui";
 import {
   loadApprovalRequests,
   saveApprovalRequests,
@@ -48,6 +57,68 @@ const provider = createMockProvider();
 const mockRepositories = createMockRepositories();
 const agentRuns = createMockAgentRuns();
 const mockApprovalRequests = createMockApprovalRequests();
+const dashboardActivity = [
+  {
+    badge: "ready",
+    detail: "Source tree, docs map, and Git status available.",
+    status: "ready" as DomainStatus,
+    time: "2m ago",
+    title: "Intelligence Warmed",
+  },
+  {
+    badge: "pending",
+    detail: "Provider abstraction spike produced a patch plan.",
+    status: "pending_approval" as DomainStatus,
+    time: "5m ago",
+    title: "Agent run awaiting approval",
+  },
+  {
+    badge: "completed",
+    detail: "Shell wired through package contracts successfully.",
+    status: "completed" as DomainStatus,
+    time: "12m ago",
+    title: "Mock provider connected",
+  },
+];
+
+const quickStartItems = [
+  {
+    description: "Add a repository to begin",
+    icon: "repository" as IconName,
+    tone: "agent",
+    title: "Import repository",
+  },
+  {
+    description: "Execute a task with AI assistance",
+    icon: "play" as IconName,
+    tone: "context",
+    title: "Run agent",
+  },
+  {
+    description: "Review and approve pending changes",
+    icon: "approval" as IconName,
+    tone: "agent",
+    title: "Review approvals",
+  },
+];
+
+const navigationIcons: Record<NavigationSection, IconName> = {
+  overview: "grid",
+  repositories: "repository",
+  agents: "play",
+  approvals: "approval",
+  changes: "changes",
+  settings: "settings",
+};
+
+const sectionEyebrows: Record<NavigationSection, string> = {
+  overview: "Workspace overview",
+  repositories: "Repository intelligence",
+  agents: "Agent runs",
+  approvals: "Human approval",
+  changes: "Workspace changes",
+  settings: "Workspace settings",
+};
 
 const statusTone: Record<
   DomainStatus,
@@ -104,6 +175,144 @@ function approvalStatusTone(
   return "warning";
 }
 
+type AppShellProps = {
+  sidebar: ReactNode;
+  children: ReactNode;
+};
+
+function AppShell({ sidebar, children }: AppShellProps) {
+  return (
+    <main className="app-shell">
+      {sidebar}
+      <section className="workspace">{children}</section>
+    </main>
+  );
+}
+
+type SidebarProps = {
+  activeSection: NavigationSection;
+  pendingApprovalCount: number;
+  onSelectSection: (section: NavigationSection) => void;
+};
+
+function Sidebar({
+  activeSection,
+  pendingApprovalCount,
+  onSelectSection,
+}: SidebarProps) {
+  return (
+    <aside className="sidebar">
+      <div className="brand-lockup">
+        <span className="product-mark">ADW</span>
+        <div className="brand">AI Developer Workspace</div>
+      </div>
+
+      <nav aria-label="Primary navigation" className="sidebar-nav">
+        {primaryNavigation.map((item) => (
+          <SidebarNavItem
+            count={item.id === "approvals" ? pendingApprovalCount : 0}
+            icon={navigationIcons[item.id]}
+            isActive={activeSection === item.id}
+            key={item.id}
+            label={item.label}
+            onClick={() => onSelectSection(item.id)}
+          />
+        ))}
+      </nav>
+
+      <UpgradeCard />
+
+      <div className="sidebar-user" aria-label="Current user">
+        <span className="sidebar-user__avatar" aria-hidden="true">
+          S
+        </span>
+        <div>
+          <strong>Sagar</strong>
+          <span>Admin</span>
+        </div>
+        <Icon name="chevron" size="sm" />
+      </div>
+    </aside>
+  );
+}
+
+type SidebarNavItemProps = {
+  count?: number;
+  icon: IconName;
+  isActive: boolean;
+  label: string;
+  onClick: () => void;
+};
+
+function SidebarNavItem({
+  count = 0,
+  icon,
+  isActive,
+  label,
+  onClick,
+}: SidebarNavItemProps) {
+  return (
+    <button
+      aria-current={isActive ? "page" : undefined}
+      className="sidebar-nav-item"
+      onClick={onClick}
+      type="button"
+    >
+      <Icon name={icon} />
+      <span>{label}</span>
+      {count > 0 ? <span className="nav-count">{count}</span> : null}
+    </button>
+  );
+}
+
+function UpgradeCard() {
+  return (
+    <div className="sidebar-upgrade">
+      <div className="sidebar-upgrade__icon">
+        <Icon name="spark" />
+      </div>
+      <h2>Pro Intelligence</h2>
+      <p>Deeper local code insight for approved agent work.</p>
+      <SecondaryButton className="sidebar-upgrade__button">Upgrade Plan</SecondaryButton>
+    </div>
+  );
+}
+
+type AppHeaderProps = {
+  eyebrow: string;
+  pendingApprovalCount: number;
+  providerName: string;
+  onChooseRepository: () => void;
+};
+
+function AppHeader({
+  eyebrow,
+  pendingApprovalCount,
+  providerName,
+  onChooseRepository,
+}: AppHeaderProps) {
+  return (
+    <header className="app-header">
+      <div className="app-header__copy">
+        <p className="eyebrow">{eyebrow}</p>
+        <h1>{workspace.summary.name}</h1>
+        <p className="hero-copy">{workspace.summary.description}</p>
+      </div>
+      <div className="app-header__actions">
+        <div className="status-row">
+          <StatusPill tone="success">Provider: {providerName}</StatusPill>
+          <StatusPill tone="warning">
+            Pending approvals: {pendingApprovalCount}
+          </StatusPill>
+        </div>
+        <PrimaryButton icon="repository" onClick={onChooseRepository}>
+          Choose repository
+        </PrimaryButton>
+      </div>
+    </header>
+  );
+}
+
 export function App() {
   const [activeSection, setActiveSection] =
     useState<NavigationSection>("overview");
@@ -140,6 +349,7 @@ export function App() {
     includeDocumentation: true,
   });
   const activeIndexingJob = indexingJobs[0];
+  const activeAgentRun = agentRuns[0];
   const pendingApprovalCount = approvalRequests.filter(
     (approval) => approval.status === "pending",
   ).length;
@@ -567,97 +777,225 @@ export function App() {
   }
 
   return (
-    <main className="app-shell">
-      <aside className="sidebar">
-        <div>
-          <span className="product-mark">ADW</span>
-          <div className="brand">AI Developer Workspace</div>
-        </div>
-
-        <nav aria-label="Primary navigation">
-          {primaryNavigation.map((item) => (
-            <button
-              aria-current={activeSection === item.id ? "page" : undefined}
-              key={item.id}
-              onClick={() => setActiveSection(item.id)}
-              type="button"
-            >
-              {item.label}
-            </button>
-          ))}
-        </nav>
-      </aside>
-
-      <section className="workspace">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">Workspace</p>
-            <h1>{workspace.summary.name}</h1>
-            <p>{workspace.summary.description}</p>
-          </div>
-          <div className="status-row">
-            <StatusBadge tone="success">
-              Provider: {provider.displayName}
-            </StatusBadge>
-            <StatusBadge tone="warning">
-              Pending approvals: {pendingApprovalCount}
-            </StatusBadge>
-            <StatusBadge
-              tone={storageStatus === "ready" ? "success" : "warning"}
-            >
-              Storage: {storageStatus}
-            </StatusBadge>
-            <button
-              className="primary-action"
-              onClick={selectRepositories}
-              type="button"
-            >
-              Choose repository
-            </button>
-          </div>
-        </header>
+    <AppShell
+      sidebar={
+        <Sidebar
+          activeSection={activeSection}
+          onSelectSection={setActiveSection}
+          pendingApprovalCount={pendingApprovalCount}
+        />
+      }
+    >
+        <AppHeader
+          eyebrow={sectionEyebrows[activeSection]}
+          onChooseRepository={selectRepositories}
+          pendingApprovalCount={pendingApprovalCount}
+          providerName={provider.displayName}
+        />
 
         <section className="overview-grid" aria-label="Workspace metrics">
-          <StatTile
+          <SummaryCard
             detail={`Last indexed ${workspace.summary.lastIndexedAt}`}
+            icon="database"
             label="Repositories"
+            tone="accent"
             value={repositories.length}
           />
-          <StatTile
+          <SummaryCard
             detail="One run is waiting for human approval"
+            icon="agent"
             label="Agent runs"
+            tone="agent"
             value={workspace.summary.activeRuns}
           />
-          <StatTile
+          <SummaryCard
             detail={
               activeIndexingJob
                 ? activeIndexingJob.step
                 : `${indexedRepositoryCount} indexed, ${scanTarget.includes.join(", ")}`
             }
-            label="Indexing"
-            value={activeIndexingJob?.status ?? scanTarget.mode}
+            icon="index"
+            label="Context mode"
+            tone="context"
+            value={scanTarget.mode}
           />
         </section>
 
         {activeSection === "overview" ? (
-          <section className="content-grid">
-            <article className="panel">
-              <div className="panel-heading">
+          <section className="overview-lower-grid">
+            <article className="overview-card active-work-card">
+              <div className="active-work-card__header">
                 <div>
-                  <p className="eyebrow">Active repository</p>
+                  <p className="card-eyebrow card-eyebrow--dot">
+                    Active Work
+                  </p>
+                  <h2>Draft app shell implementation plan</h2>
+                </div>
+                <StatusPill tone="warning" size="sm">
+                  Waiting for approval
+                </StatusPill>
+              </div>
+
+              <p className="active-work-card__description">
+                Review proposed file edits before execution.
+              </p>
+
+              <div className="active-work-card__divider" />
+
+              <dl className="active-work-meta">
+                <div className="active-work-meta__item">
+                  <Icon name="repository" />
+                  <div>
+                    <dt>Repository</dt>
+                    <dd>{activeRepository.name}</dd>
+                  </div>
+                </div>
+
+                <div className="active-work-meta__item">
+                  <Icon name="branch" />
+                  <div>
+                    <dt>Branch</dt>
+                    <dd>{activeRepository.branch}</dd>
+                  </div>
+                </div>
+              </dl>
+
+              <div className="active-path-box">
+                <Icon name="folder" />
+                <div>
+                  <span>Local path</span>
+                  <strong>{activeRepository.path}</strong>
+                </div>
+                <button aria-label="Copy repository path" type="button">
+                  <Icon name="copy" size="sm" />
+                </button>
+              </div>
+
+              <dl className="active-work-stats">
+                <div>
+                  <dt>Open Changes</dt>
+                  <dd>{activeRepository.openChanges}</dd>
+                </div>
+                <div>
+                  <dt>Clean Working Directory</dt>
+                  <dd>
+                    <span className="check-marker" aria-hidden="true">
+                      ✓
+                    </span>
+                    {activeRepository.openChanges === 0 ? "Yes" : "No"}
+                  </dd>
+                </div>
+              </dl>
+            </article>
+
+            <div className="overview-side-column">
+              <article className="overview-card recent-activity-card">
+                <div className="overview-card__header">
+                  <p className="card-eyebrow">Recent Activity</p>
+                  <button className="text-action" type="button">
+                    View all
+                  </button>
+                </div>
+
+                <div className="reference-activity-list">
+                  {dashboardActivity.map((activity) => (
+                    <div
+                      className={`reference-activity-item reference-activity-item--${
+                        statusTone[activity.status]
+                      }`}
+                      key={activity.title}
+                    >
+                      <span className="reference-activity-marker">
+                        {activity.status === "pending_approval" ? "!" : "✓"}
+                      </span>
+                      <div>
+                        <h3>{activity.title}</h3>
+                        <p>{activity.detail}</p>
+                      </div>
+                      <time>{activity.time}</time>
+                    </div>
+                  ))}
+                </div>
+              </article>
+
+              <article className="overview-card quick-start-card">
+                <p className="card-eyebrow">Quick Start</p>
+                <div className="quick-start-list">
+                  {quickStartItems.map((item) => (
+                    <button
+                      className="quick-start-item"
+                      key={item.title}
+                      onClick={() => {
+                        if (item.title === "Import repository") {
+                          void selectRepositories();
+                          return;
+                        }
+
+                        if (item.title === "Run agent") {
+                          void startIndexingJob(activeRepository);
+                          return;
+                        }
+
+                        setActiveSection("approvals");
+                      }}
+                      type="button"
+                    >
+                      <span
+                        className={`quick-start-icon quick-start-icon--${item.tone}`}
+                      >
+                        <Icon name={item.icon} size="sm" />
+                      </span>
+                      <span>
+                        <strong>{item.title}</strong>
+                        <small>{item.description}</small>
+                      </span>
+                      <Icon name="chevron" size="sm" />
+                    </button>
+                  ))}
+                </div>
+              </article>
+            </div>
+          </section>
+        ) : null}
+
+        {activeSection === "repositories" ? (
+          <section className="tab-dashboard-grid repositories-dashboard">
+            {repositoryPickerError ? (
+              <div className="inline-notice" role="status">
+                {repositoryPickerError}
+              </div>
+            ) : null}
+
+            <article className="overview-card tab-primary-card repository-focus-card">
+              <div className="overview-card__header">
+                <div>
+                  <p className="card-eyebrow">Active Repository</p>
                   <h2>{activeRepository.name}</h2>
                 </div>
-                <StatusBadge tone={repositoryTone(activeRepository.status)}>
+                <StatusPill tone={repositoryTone(activeRepository.status)}>
                   {activeRepository.status.replace("_", " ")}
-                </StatusBadge>
+                </StatusPill>
               </div>
-              <dl className="metadata-list">
+
+              <p className="tab-card-copy">
+                Local repository state, Git metadata, and indexing readiness for
+                the current workspace.
+              </p>
+
+              <div className="active-path-box tab-path-box">
+                <Icon name="folder" />
                 <div>
-                  <dt>Path</dt>
-                  <dd>{activeRepository.path}</dd>
+                  <span>Local path</span>
+                  <strong>{activeRepository.path}</strong>
                 </div>
+                <button aria-label="Copy repository path" type="button">
+                  <Icon name="copy" size="sm" />
+                </button>
+              </div>
+
+              <dl className="tab-fact-grid">
                 <div>
-                  <dt>Git repository</dt>
+                  <dt>Git Repository</dt>
                   <dd>{activeRepository.isGitRepository ? "Yes" : "No"}</dd>
                 </div>
                 <div>
@@ -665,207 +1003,266 @@ export function App() {
                   <dd>{activeRepository.branch}</dd>
                 </div>
                 <div>
-                  <dt>Open changes</dt>
+                  <dt>Open Changes</dt>
                   <dd>{activeRepository.openChanges}</dd>
                 </div>
+                <div>
+                  <dt>Last Indexed</dt>
+                  <dd>{activeRepository.lastIndexedAt ?? "Not indexed yet"}</dd>
+                </div>
               </dl>
-              <button
-                className="secondary-action"
-                onClick={() => startIndexingJob(activeRepository)}
-                type="button"
-              >
-                Start indexing
-              </button>
-            </article>
 
-            <article className="panel">
-              <div className="panel-heading">
-                <div>
-                  <p className="eyebrow">Recent activity</p>
-                  <h2>Workspace pulse</h2>
-                </div>
-              </div>
-              <div className="activity-list">
-                {workspace.activity.map((activity) => (
-                  <div className="activity-item" key={activity.id}>
-                    <StatusBadge tone={statusTone[activity.status]}>
-                      {activity.status.replace("_", " ")}
-                    </StatusBadge>
-                    <div>
-                      <h3>{activity.title}</h3>
-                      <p>{activity.detail}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </article>
-
-            <article className="panel indexing-panel">
-              <div className="panel-heading">
-                <div>
-                  <p className="eyebrow">Indexing</p>
-                  <h2>{activeIndexingJob?.repositoryName ?? "No job yet"}</h2>
-                </div>
-                <StatusBadge tone={activeIndexingJob ? "neutral" : "warning"}>
-                  {activeIndexingJob?.status ?? "idle"}
-                </StatusBadge>
-              </div>
-              {activeIndexingJob ? (
-                <div className="progress-stack">
-                  <div
-                    aria-label="Indexing progress"
-                    aria-valuemax={100}
-                    aria-valuemin={0}
-                    aria-valuenow={activeIndexingJob.progress}
-                    className="progress-track"
-                    role="progressbar"
-                  >
-                    <span style={{ width: `${activeIndexingJob.progress}%` }} />
-                  </div>
-                  <p>{activeIndexingJob.step}</p>
-                </div>
-              ) : (
-                <p>
-                  Start an indexing job from the active repository to prepare
-                  the local context pipeline.
-                </p>
-              )}
-              <p className="supporting-note">
-                Persisted file facts: {indexedFiles.length}
-              </p>
-            </article>
-
-            {renderIndexedFileBrowser("compact")}
-          </section>
-        ) : null}
-
-        {activeSection === "repositories" ? (
-          <section className="content-grid">
-            {repositoryPickerError ? (
-              <div className="inline-notice" role="status">
-                {repositoryPickerError}
-              </div>
-            ) : null}
-
-            {repositories.map((repository) => (
-              <article className="panel repository-card" key={repository.id}>
-                <div className="panel-heading">
-                  <div>
-                    <p className="eyebrow">Repository</p>
-                    <h2>{repository.name}</h2>
-                  </div>
-                  <StatusBadge tone={repositoryTone(repository.status)}>
-                    {repository.status.replace("_", " ")}
-                  </StatusBadge>
-                </div>
-                <p>{repository.path}</p>
-                <dl className="metadata-list">
-                  <div>
-                    <dt>Git repository</dt>
-                    <dd>{repository.isGitRepository ? "Yes" : "No"}</dd>
-                  </div>
-                  <div>
-                    <dt>Branch</dt>
-                    <dd>{repository.branch}</dd>
-                  </div>
-                  <div>
-                    <dt>Open changes</dt>
-                    <dd>{repository.openChanges}</dd>
-                  </div>
-                </dl>
-              </article>
-            ))}
-
-            <EmptyState
-              action={
-                <button onClick={selectRepositories} type="button">
+              <div className="tab-action-row">
+                <PrimaryButton
+                  icon="repository"
+                  onClick={selectRepositories}
+                >
                   Choose repository
-                </button>
-              }
-              title="Connect another local repository"
-            >
-              The native app opens a local directory picker and adds selected
-              repositories to this workspace.
-            </EmptyState>
+                </PrimaryButton>
+                <SecondaryButton
+                  icon="index"
+                  onClick={() => startIndexingJob(activeRepository)}
+                >
+                  Start indexing
+                </SecondaryButton>
+              </div>
+            </article>
+
+            <aside className="tab-side-stack">
+              <article className="overview-card connect-repository-card">
+                <div className="small-card-icon">
+                  <Icon name="repository" />
+                </div>
+                <h3>Connect another local repository</h3>
+                <p>
+                  Open the native directory picker and add more repositories to
+                  the local-first workspace.
+                </p>
+                <PrimaryButton icon="repository" onClick={selectRepositories}>
+                  Choose repository
+                </PrimaryButton>
+              </article>
+
+              <article className="overview-card repository-list-card">
+                <div className="overview-card__header">
+                  <p className="card-eyebrow">Saved Repositories</p>
+                  <StatusPill tone="neutral" size="sm">
+                    {repositories.length} total
+                  </StatusPill>
+                </div>
+                <div className="repository-list">
+                  {repositories.map((repository) => (
+                    <div className="repository-list-item" key={repository.id}>
+                      <Icon name="repository" size="sm" />
+                      <div>
+                        <strong>{repository.name}</strong>
+                        <span>{repository.branch}</span>
+                      </div>
+                      <StatusPill
+                        tone={repositoryTone(repository.status)}
+                        size="sm"
+                        showDot={false}
+                      >
+                        {repository.status.replace("_", " ")}
+                      </StatusPill>
+                    </div>
+                  ))}
+                </div>
+              </article>
+            </aside>
           </section>
         ) : null}
 
         {activeSection === "agents" ? (
-          <section className="content-grid">
-            {agentRuns.map((run) => (
-              <article className="panel" key={run.id}>
-                <div className="panel-heading">
-                  <div>
-                    <p className="eyebrow">{run.repository}</p>
-                    <h2>{run.title}</h2>
-                  </div>
-                  <StatusBadge
-                    tone={
-                      run.status === "waiting_for_approval"
-                        ? "warning"
-                        : "neutral"
-                    }
-                  >
-                    {run.status.replaceAll("_", " ")}
-                  </StatusBadge>
+          <section className="tab-dashboard-grid agents-dashboard">
+            <article className="overview-card tab-primary-card agent-active-card">
+              <div className="overview-card__header">
+                <div>
+                  <p className="card-eyebrow card-eyebrow--dot">
+                    Active Run
+                  </p>
+                  <h2>{activeAgentRun.title}</h2>
                 </div>
-                <p>{run.nextStep}</p>
+                <StatusPill
+                  tone={
+                    activeAgentRun.status === "waiting_for_approval"
+                      ? "warning"
+                      : "agent"
+                  }
+                >
+                  {activeAgentRun.status.replaceAll("_", " ")}
+                </StatusPill>
+              </div>
+
+              <p className="tab-card-copy">{activeAgentRun.nextStep}</p>
+
+              <dl className="tab-fact-grid agent-fact-grid">
+                <div>
+                  <dt>Repository</dt>
+                  <dd>{activeAgentRun.repository}</dd>
+                </div>
+                <div>
+                  <dt>Provider</dt>
+                  <dd>{provider.displayName}</dd>
+                </div>
+                <div>
+                  <dt>Branch</dt>
+                  <dd>{activeRepository.branch}</dd>
+                </div>
+                <div>
+                  <dt>Approval State</dt>
+                  <dd>{pendingApprovalCount} pending</dd>
+                </div>
+              </dl>
+
+              <div className="agent-progress-card">
+                <div>
+                  <span>Elapsed</span>
+                  <strong>8m</strong>
+                </div>
+                <div>
+                  <span>Progress</span>
+                  <strong>Waiting for review</strong>
+                </div>
+              </div>
+            </article>
+
+            <aside className="tab-side-stack">
+              <article className="overview-card provider-context-card">
+                <div className="overview-card__header">
+                  <p className="card-eyebrow">Provider Context</p>
+                  <StatusPill tone="success" size="sm">
+                    connected
+                  </StatusPill>
+                </div>
+                <h3>{provider.displayName}</h3>
+                <p>
+                  Structured-output mock provider is connected for local
+                  planning, approval, and safe implementation dry-runs.
+                </p>
               </article>
-            ))}
+
+              <article className="overview-card recent-runs-card">
+                <p className="card-eyebrow">Recent Runs</p>
+                <div className="run-list">
+                  {agentRuns.map((run) => (
+                    <div className="run-list-item" key={run.id}>
+                      <Icon name="agent" size="sm" />
+                      <div>
+                        <strong>{run.title}</strong>
+                        <span>{run.nextStep}</span>
+                      </div>
+                      <StatusPill
+                        tone={
+                          run.status === "waiting_for_approval"
+                            ? "warning"
+                            : run.status === "running"
+                              ? "agent"
+                              : "success"
+                        }
+                        size="sm"
+                        showDot={false}
+                      >
+                        {run.status.replaceAll("_", " ")}
+                      </StatusPill>
+                    </div>
+                  ))}
+                </div>
+              </article>
+            </aside>
           </section>
         ) : null}
 
         {activeSection === "approvals" ? (
-          <section className="approval-queue">
-            {approvalRequests.map((approval) => (
-              <article className="panel approval-card" key={approval.id}>
-                <div className="panel-heading">
-                  <div>
-                    <p className="eyebrow">{approval.repository}</p>
-                    <h2>{approval.title}</h2>
+          <section className="approvals-dashboard">
+            <article className="overview-card approvals-hero-card">
+              <div className="overview-card__header">
+                <div>
+                  <p className="card-eyebrow">Human Approval Queue</p>
+                  <h2>{pendingApprovalCount} pending approvals</h2>
+                </div>
+                <StatusPill tone="warning">
+                  Provider reasoning required
+                </StatusPill>
+              </div>
+              <p>
+                Review proposed changes, risk level, provider reasoning, and
+                included files before approving or rejecting agent work.
+              </p>
+            </article>
+
+            <section className="approval-card-grid">
+              {approvalRequests.map((approval) => (
+                <article className="overview-card approval-review-card" key={approval.id}>
+                  <div className="overview-card__header">
+                    <div>
+                      <p className="card-eyebrow">{approval.repository}</p>
+                      <h3>{approval.title}</h3>
+                    </div>
+                    <div className="status-row compact">
+                      <StatusPill tone={approvalStatusTone(approval.status)}>
+                        {approval.status}
+                      </StatusPill>
+                      <StatusPill
+                        tone={approvalRiskTone(approval.risk)}
+                        showDot={false}
+                      >
+                        {approval.risk} risk
+                      </StatusPill>
+                    </div>
                   </div>
-                  <div className="status-row compact">
-                    <StatusBadge tone={approvalStatusTone(approval.status)}>
-                      {approval.status}
-                    </StatusBadge>
-                    <StatusBadge tone={approvalRiskTone(approval.risk)}>
-                      {approval.risk} risk
-                    </StatusBadge>
+
+                  <p>{approval.summary}</p>
+
+                  <div className="approval-actions">
+                    <button className="text-action" type="button">
+                      View plan details
+                    </button>
+                    <button
+                      className="secondary-action"
+                      disabled={approval.status !== "pending"}
+                      onClick={() =>
+                        updateApprovalStatus(approval.id, "rejected")
+                      }
+                      type="button"
+                    >
+                      Reject
+                    </button>
+                    <button
+                      className="primary-action"
+                      disabled={approval.status !== "pending"}
+                      onClick={() =>
+                        updateApprovalStatus(approval.id, "approved")
+                      }
+                      type="button"
+                    >
+                      Approve
+                    </button>
                   </div>
-                </div>
 
-                <p>{approval.summary}</p>
+                  <div className="provider-reasoning-box">
+                    <span>Provider reasoning</span>
+                    <strong>
+                      Patch plan affects shared contracts and should be reviewed
+                      before implementation.
+                    </strong>
+                  </div>
 
-                <div className="file-list" aria-label="Files requiring review">
-                  {approval.files.map((file) => (
-                    <span key={file}>{file}</span>
-                  ))}
-                </div>
+                  <div className="file-list" aria-label="Files requiring review">
+                    {approval.files.map((file) => (
+                      <span key={file}>{file}</span>
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </section>
 
-                <div className="approval-actions">
-                  <button
-                    className="secondary-action"
-                    disabled={approval.status !== "pending"}
-                    onClick={() =>
-                      updateApprovalStatus(approval.id, "rejected")
-                    }
-                    type="button"
-                  >
-                    Reject
-                  </button>
-                  <button
-                    className="primary-action"
-                    disabled={approval.status !== "pending"}
-                    onClick={() =>
-                      updateApprovalStatus(approval.id, "approved")
-                    }
-                    type="button"
-                  >
-                    Approve
-                  </button>
-                </div>
+            {pendingApprovalCount === 0 ? (
+              <article className="overview-card approvals-empty-card">
+                <h3>No approvals waiting</h3>
+                <p>Approved and rejected requests remain visible above.</p>
               </article>
-            ))}
+            ) : null}
           </section>
         ) : null}
 
@@ -881,7 +1278,6 @@ export function App() {
             policy, and approval defaults.
           </EmptyState>
         ) : null}
-      </section>
-    </main>
+    </AppShell>
   );
 }

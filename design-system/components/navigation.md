@@ -12,15 +12,28 @@ Navigation components should support fast expert movement through workspaces, re
 
 The primary sidebar should provide access to top-level product areas.
 
-Expected items:
+The implemented desktop sidebar is fixed/sticky on desktop and collapses into normal document flow on smaller screens.
 
-- Home
+Visual treatment:
+
+- Warm neutral sidebar background.
+- Fixed desktop width from `--layout-sidebar-width`.
+- Full-height behavior independent from main content scrolling.
+- Deep navy product mark.
+- Coral gradient active item.
+- Pill-like nav rows with stable height.
+- Pending approval count surfaced inline.
+- Promo/upgrade card anchored near the bottom without blocking core navigation.
+- User footer below the upgrade card for local workspace identity.
+- Shared `Icon` primitive for navigation glyphs instead of route-local icon CSS.
+
+Implemented MVP items:
+
+- Overview
 - Repositories
-- Tasks
 - Agent Runs
+- Approvals
 - Changes
-- Documents
-- Decisions
 - Settings
 
 The sidebar should show current selection and support compact density.
@@ -110,6 +123,7 @@ The MVP should include:
 - Breadcrumbs
 - Pending approval indicator
 - Active workflow return link
+- Independent main content scroll on desktop while sidebar remains fixed.
 
 The MVP can defer:
 
