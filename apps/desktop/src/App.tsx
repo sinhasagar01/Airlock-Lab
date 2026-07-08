@@ -4,6 +4,8 @@ import {
   createMockAgentRuns,
   createMockApprovalRequests,
   createMockProvider,
+  type ApprovalRequest,
+  type ApprovalRequestStatus,
   type ApprovalRisk,
 } from "@ai-dev/ai";
 import {
@@ -21,6 +23,11 @@ import {
   type RepositorySummary,
 } from "@ai-dev/indexing";
 import { EmptyState, StatTile, StatusBadge } from "@ai-dev/ui";
+import {
+  loadApprovalRequests,
+  saveApprovalRequests,
+  updateApprovalRequestStatus,
+} from "./storage/approvalRequestStore";
 import { loadRepositoriesGitMetadata } from "./storage/gitMetadata";
 import { loadIndexingJobs, saveIndexingJob } from "./storage/indexingJobStore";
 import {
@@ -32,7 +39,7 @@ const workspace = createMockWorkspaceSnapshot();
 const provider = createMockProvider();
 const mockRepositories = createMockRepositories();
 const agentRuns = createMockAgentRuns();
-const approvalRequests = createMockApprovalRequests();
+const mockApprovalRequests = createMockApprovalRequests();
 
 const statusTone: Record<
   DomainStatus,
@@ -75,6 +82,20 @@ function approvalRiskTone(
   return "success";
 }
 
+function approvalStatusTone(
+  status: ApprovalRequestStatus,
+): "neutral" | "success" | "warning" | "danger" {
+  if (status === "approved") {
+    return "success";
+  }
+
+  if (status === "rejected") {
+    return "danger";
+  }
+
+  return "warning";
+}
+
 export function App() {
   const [activeSection, setActiveSection] =
     useState<NavigationSection>("overview");
@@ -87,6 +108,8 @@ export function App() {
     "loading" | "ready" | "unavailable"
   >("loading");
   const [indexingJobs, setIndexingJobs] = useState<IndexingJob[]>([]);
+  const [approvalRequests, setApprovalRequests] =
+    useState<ApprovalRequest[]>(mockApprovalRequests);
 
   const activeRepository = repositories[0];
   const indexedRepositoryCount = useMemo(
@@ -101,6 +124,9 @@ export function App() {
     includeDocumentation: true,
   });
   const activeIndexingJob = indexingJobs[0];
+  const pendingApprovalCount = approvalRequests.filter(
+    (approval) => approval.status === "pending",
+  ).length;
 
   useEffect(() => {
     let isMounted = true;
@@ -109,12 +135,19 @@ export function App() {
       try {
         const savedRepositories = await loadSavedRepositories();
         const savedIndexingJobs = await loadIndexingJobs();
+        const savedApprovalRequests = await loadApprovalRequests();
 
         if (!isMounted) {
           return;
         }
 
         setIndexingJobs(savedIndexingJobs);
+        if (savedApprovalRequests.length > 0) {
+          setApprovalRequests(savedApprovalRequests);
+        } else {
+          setApprovalRequests(mockApprovalRequests);
+          await saveApprovalRequests(mockApprovalRequests);
+        }
 
         if (savedRepositories.length > 0) {
           const repositoriesWithGitMetadata =
@@ -205,6 +238,18 @@ export function App() {
     await saveIndexingJob(job);
   }
 
+  async function updateApprovalStatus(
+    approvalId: string,
+    status: ApprovalRequestStatus,
+  ) {
+    setApprovalRequests((currentRequests) =>
+      currentRequests.map((request) =>
+        request.id === approvalId ? { ...request, status } : request,
+      ),
+    );
+    await updateApprovalRequestStatus(approvalId, status);
+  }
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
@@ -239,7 +284,7 @@ export function App() {
               Provider: {provider.displayName}
             </StatusBadge>
             <StatusBadge tone="warning">
-              Pending approvals: {workspace.summary.pendingApprovals}
+              Pending approvals: {pendingApprovalCount}
             </StatusBadge>
             <StatusBadge
               tone={storageStatus === "ready" ? "success" : "warning"}
@@ -459,7 +504,9 @@ export function App() {
                     <h2>{approval.title}</h2>
                   </div>
                   <div className="status-row compact">
-                    <StatusBadge tone="warning">{approval.status}</StatusBadge>
+                    <StatusBadge tone={approvalStatusTone(approval.status)}>
+                      {approval.status}
+                    </StatusBadge>
                     <StatusBadge tone={approvalRiskTone(approval.risk)}>
                       {approval.risk} risk
                     </StatusBadge>
@@ -475,10 +522,24 @@ export function App() {
                 </div>
 
                 <div className="approval-actions">
-                  <button className="secondary-action" type="button">
+                  <button
+                    className="secondary-action"
+                    disabled={approval.status !== "pending"}
+                    onClick={() =>
+                      updateApprovalStatus(approval.id, "rejected")
+                    }
+                    type="button"
+                  >
                     Reject
                   </button>
-                  <button className="primary-action" type="button">
+                  <button
+                    className="primary-action"
+                    disabled={approval.status !== "pending"}
+                    onClick={() =>
+                      updateApprovalStatus(approval.id, "approved")
+                    }
+                    type="button"
+                  >
                     Approve
                   </button>
                 </div>
