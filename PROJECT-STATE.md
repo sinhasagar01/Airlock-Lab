@@ -4,6 +4,10 @@
 
 The desktop app supports local repository selection, persisted repositories, Git metadata, persisted indexing jobs, indexed file facts, approval request persistence, indexed-file browsing, and safe file content previews.
 
+The desktop app now has an initial Vitest/jsdom smoke suite covering six-tab
+rendering, sidebar navigation, approval actions, pending approval count updates,
+and visible safe file preview states.
+
 ## Current UI Direction
 
 The product is in the final dashboard design migration, using

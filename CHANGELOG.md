@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added the first desktop smoke tests with Vitest, jsdom, React Testing
+  Library, and user-event.
+- Covered six-tab rendering, sidebar navigation, approval approve/reject
+  controls, pending-count updates, and safe file preview states for no file,
+  loading, text, binary, too-large, and preview-error fallback.
+- Configured workspace tests to pass cleanly when packages do not yet contain
+  test files.
 - Completed the 10-task design migration loop for Overview, Repositories, Agent
   Runs, and Approvals with visual verifier passes against the final dashboard
   reference.

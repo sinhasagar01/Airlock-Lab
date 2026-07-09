@@ -324,6 +324,7 @@ function SidebarNavItem({
   return (
     <button
       aria-current={isActive ? "page" : undefined}
+      aria-label={label}
       className="sidebar-nav-item"
       onClick={onClick}
       type="button"

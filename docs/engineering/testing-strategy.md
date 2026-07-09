@@ -126,6 +126,22 @@ The MVP should prioritize tests for:
 - Basic validation records
 - Core UI workflow smoke tests
 
+## Current Test Harness
+
+The desktop app uses Vitest with jsdom and React Testing Library for MVP smoke
+coverage. Tests should prefer visible behavior over component internals.
+
+Current desktop smoke coverage includes:
+
+- Six-tab rendering and sidebar navigation.
+- Approval queue actions and pending-count updates.
+- Safe file preview panel states for no file selected, loading, text preview,
+  binary content, too-large files, and preview errors.
+
+Tauri filesystem, SQL, dialog, Git, and scan calls should be mocked at the
+desktop storage-wrapper boundary in UI tests. Tests must not mock broader
+filesystem access or weaken the native safe-preview command contract.
+
 The MVP can defer:
 
 - Large browser matrix
