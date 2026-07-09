@@ -2,11 +2,12 @@
 
 ## Current MVP State
 
-The desktop app supports local repository selection, persisted repositories, Git metadata, persisted indexing jobs, indexed file facts, approval request persistence, indexed-file browsing, and safe file content previews.
+The desktop app supports local repository selection, persisted repositories, Git metadata, persisted indexing jobs, indexed file facts, repository intelligence summaries, approval request persistence, indexed-file browsing, and safe file content previews.
 
 The desktop app now has an initial Vitest/jsdom smoke suite covering six-tab
 rendering, sidebar navigation, approval actions, pending approval count updates,
-and visible safe file preview states.
+visible safe file preview states, outside-repository blocking, and selected-file
+preview updates.
 
 ## Current UI Direction
 
@@ -31,11 +32,18 @@ source of truth.
   premium dashboard card system while preserving repository picker, indexing,
   Git metadata, agent run state, approval persistence, approve/reject actions,
   indexed-file browsing, and safe file previews.
+- Repositories now includes a Repository Intelligence view that derives
+  repository overview, Git/index state, top file extensions, important folders,
+  key files, and path-based framework hints from safe repository metadata and
+  indexed file facts.
 - Changes now presents a polished no-local-changes review state, change-readiness
   feature blocks, repository status facts, and the full indexed-file browser.
+- The indexed-file browser and preview panel now use the dashboard design system
+  with premium file rows, selected-file metadata, designed state panels, and a
+  polished code preview frame.
 - Settings now presents workspace settings rows and maintenance actions while
   keeping unavailable destructive behavior disabled.
 
 ## Active Safety Boundary
 
-Safe file preview remains local-first and path-bounded to the selected repository. Visual changes do not weaken size limits, binary handling, or outside-repository blocking.
+Safe file preview remains local-first and path-bounded to the selected repository. Repository Intelligence prefers persisted/indexed facts over new filesystem reads. Visual changes do not weaken size limits, binary handling, or outside-repository blocking.

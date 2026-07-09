@@ -32,6 +32,97 @@ const mockState = vi.hoisted(() => {
       extension: "tsx",
       modifiedAt: "Today, 11:00",
     },
+    {
+      repositoryId: repository.id,
+      path: "apps/desktop/src/main.tsx",
+      sizeBytes: 620,
+      extension: "tsx",
+      modifiedAt: "Today, 11:03",
+    },
+    {
+      repositoryId: repository.id,
+      path: "packages/indexing/src/index.ts",
+      sizeBytes: 2048,
+      extension: "ts",
+      modifiedAt: "Today, 11:04",
+    },
+    {
+      repositoryId: repository.id,
+      path: "docs/features/file-preview.md",
+      sizeBytes: 980,
+      extension: "md",
+      modifiedAt: "Today, 11:05",
+    },
+    {
+      repositoryId: repository.id,
+      path: "README.md",
+      sizeBytes: 512,
+      extension: "md",
+      modifiedAt: "Today, 11:06",
+    },
+    {
+      repositoryId: repository.id,
+      path: "package.json",
+      sizeBytes: 640,
+      extension: "json",
+      modifiedAt: "Today, 11:07",
+    },
+    {
+      repositoryId: repository.id,
+      path: "tsconfig.json",
+      sizeBytes: 520,
+      extension: "json",
+      modifiedAt: "Today, 11:08",
+    },
+    {
+      repositoryId: repository.id,
+      path: "vite.config.ts",
+      sizeBytes: 440,
+      extension: "ts",
+      modifiedAt: "Today, 11:09",
+    },
+    {
+      repositoryId: repository.id,
+      path: "apps/desktop/src-tauri/tauri.conf.json",
+      sizeBytes: 760,
+      extension: "json",
+      modifiedAt: "Today, 11:10",
+    },
+    {
+      repositoryId: repository.id,
+      path: "Cargo.toml",
+      sizeBytes: 410,
+      extension: "toml",
+      modifiedAt: "Today, 11:11",
+    },
+    {
+      repositoryId: repository.id,
+      path: "CHANGELOG.md",
+      sizeBytes: 820,
+      extension: "md",
+      modifiedAt: "Today, 11:12",
+    },
+    {
+      repositoryId: repository.id,
+      path: "PROJECT-STATE.md",
+      sizeBytes: 780,
+      extension: "md",
+      modifiedAt: "Today, 11:13",
+    },
+    {
+      repositoryId: repository.id,
+      path: "scripts/run-index.sh",
+      sizeBytes: 300,
+      extension: "sh",
+      modifiedAt: "Today, 11:14",
+    },
+    {
+      repositoryId: repository.id,
+      path: "config/workspace.json",
+      sizeBytes: 360,
+      extension: "json",
+      modifiedAt: "Today, 11:15",
+    },
   ];
 
   const approvals: ApprovalRequest[] = [
@@ -123,9 +214,11 @@ vi.mock("./storage/filePreview", () => ({
 function renderApp(options?: {
   files?: IndexedFileFact[];
   preview?: FileContentPreview | Promise<FileContentPreview>;
+  repositories?: RepositorySummary[];
 }) {
   mockState.files = options?.files ?? [...defaultFiles];
   mockState.preview = options?.preview ?? defaultPreview;
+  mockState.repositories = options?.repositories ?? [...defaultRepositories];
 
   return {
     user: userEvent.setup(),
@@ -140,6 +233,7 @@ async function goToTab(name: string) {
 
 const defaultFiles = [...mockState.files];
 const defaultPreview = mockState.preview;
+const defaultRepositories = [...mockState.repositories];
 
 afterEach(() => {
   cleanup();
@@ -147,9 +241,12 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  vi.mocked(previewRepositoryFile).mockImplementation(() =>
+    Promise.resolve(mockState.preview),
+  );
   mockState.files = [...defaultFiles];
   mockState.preview = defaultPreview;
-  mockState.repositories = mockState.repositories.map((repository) => ({
+  mockState.repositories = defaultRepositories.map((repository) => ({
     ...repository,
     openChanges: 0,
     status: "indexed",
@@ -169,7 +266,7 @@ describe("App smoke tests", () => {
     await user.click(screen.getByRole("button", { name: "Repositories" }));
     expect(
       await screen.findByText(
-        "Local repository state, Git metadata, and indexing readiness for the current workspace.",
+        "Workspace context derived from saved repository metadata, Git state, and indexed file facts.",
       ),
     ).toBeInTheDocument();
 
@@ -193,6 +290,42 @@ describe("App smoke tests", () => {
       await screen.findByRole("heading", {
         name: "Local-first workspace controls",
       }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders repository intelligence from indexed file facts", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Repositories" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "AI-Developer-Workspace" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Indexed facts")).toBeInTheDocument();
+    expect(screen.getByText(String(defaultFiles.length))).toBeInTheDocument();
+    expect(screen.getByText("tsx 2")).toBeInTheDocument();
+    expect(screen.getByText("apps")).toBeInTheDocument();
+    expect(screen.getByText("packages")).toBeInTheDocument();
+    expect(screen.getByText("docs")).toBeInTheDocument();
+    expect(screen.getAllByText("package.json").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("README.md").length).toBeGreaterThan(0);
+    expect(screen.getByText("TypeScript")).toBeInTheDocument();
+    expect(screen.getByText("Tauri")).toBeInTheDocument();
+    expect(screen.getByText("Package scripts unavailable")).toBeInTheDocument();
+  });
+
+  it("shows an empty repository intelligence state when no repository is saved", async () => {
+    const { user } = renderApp({ files: [], repositories: [] });
+
+    await user.click(screen.getByRole("button", { name: "Repositories" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "No repository selected" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Choose a local repository to build indexed facts, Git state, project structure, and safe file preview context.",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -242,6 +375,7 @@ describe("App smoke tests", () => {
       await screen.findByText("Select a file after running indexing."),
     ).toBeInTheDocument();
     expect(screen.queryByText("Loading preview...")).not.toBeInTheDocument();
+    expect(previewRepositoryFile).not.toHaveBeenCalled();
   });
 
   it("shows the loading preview state while safe preview data is pending", async () => {
@@ -313,6 +447,26 @@ describe("App smoke tests", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows outside-repository preview state", async () => {
+    renderApp({
+      preview: {
+        path: "src/App.tsx",
+        status: "outside_repository",
+        content: null,
+        sizeBytes: 24,
+        maxSizeBytes: 65536,
+      },
+    });
+
+    await goToTab("Changes");
+
+    expect(
+      await screen.findByText(
+        "Preview blocked because the resolved path is outside the repository.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("shows the preview error fallback when the safe preview wrapper rejects", async () => {
     vi.mocked(previewRepositoryFile).mockRejectedValueOnce(
       new Error("preview failed"),
@@ -324,5 +478,43 @@ describe("App smoke tests", () => {
     expect(
       await screen.findByText("Preview unavailable for this file."),
     ).toBeInTheDocument();
+  });
+
+  it("updates the preview panel when selecting a different indexed file", async () => {
+    const files: IndexedFileFact[] = [
+      ...defaultFiles,
+      {
+        repositoryId: "repo-workspace",
+        path: "docs/guide.md",
+        sizeBytes: 512,
+        extension: "md",
+        modifiedAt: "Today, 11:15",
+      },
+    ];
+
+    vi.mocked(previewRepositoryFile).mockImplementation(
+      async (_repositoryPath, filePath) => ({
+        path: filePath,
+        status: "ready",
+        content: `Preview for ${filePath}`,
+        sizeBytes: filePath === "docs/guide.md" ? 512 : 1280,
+        maxSizeBytes: 65536,
+      }),
+    );
+
+    const { user } = renderApp({ files });
+
+    await user.click(screen.getByRole("button", { name: "Changes" }));
+    expect(await screen.findByText("Preview for src/App.tsx")).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "docs/guide.md, md, 512 B" }),
+    );
+
+    expect(await screen.findByText("Preview for docs/guide.md")).toBeInTheDocument();
+    expect(previewRepositoryFile).toHaveBeenLastCalledWith(
+      "/workspace",
+      "docs/guide.md",
+    );
   });
 });

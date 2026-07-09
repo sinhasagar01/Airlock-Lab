@@ -18,6 +18,7 @@ import {
   createIndexingJob,
   createMockRepositories,
   createRepositorySummaryFromPath,
+  deriveRepositoryIntelligence,
   type FileContentPreview,
   type IndexedFileFact,
   type IndexingJob,
@@ -55,6 +56,16 @@ import {
 const workspace = createMockWorkspaceSnapshot();
 const provider = createMockProvider();
 const mockRepositories = createMockRepositories();
+const emptyRepository: RepositorySummary = {
+  id: "no-repository",
+  name: "No repository selected",
+  path: "Choose a local repository to begin",
+  isGitRepository: false,
+  branch: "Not available yet",
+  status: "not_indexed",
+  openChanges: 0,
+  lastIndexedAt: null,
+};
 const agentRuns = createMockAgentRuns();
 const mockApprovalRequests = createMockApprovalRequests();
 const dashboardActivity = [
@@ -245,6 +256,10 @@ function approvalStatusTone(
   return "warning";
 }
 
+function fileNameFromPath(path: string): string {
+  return path.split("/").at(-1) ?? path;
+}
+
 type AppShellProps = {
   sidebar: ReactNode;
   children: ReactNode;
@@ -407,7 +422,8 @@ export function App() {
   );
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
 
-  const activeRepository = repositories[0];
+  const hasActiveRepository = repositories.length > 0;
+  const activeRepository = repositories[0] ?? emptyRepository;
   const indexedRepositoryCount = useMemo(
     () =>
       repositories.filter((repository) => repository.status === "indexed")
@@ -455,6 +471,10 @@ export function App() {
     filteredIndexedFiles.find((file) => file.path === selectedFilePath) ??
     filteredIndexedFiles[0] ??
     null;
+  const repositoryIntelligence = useMemo(
+    () => deriveRepositoryIntelligence(indexedFiles),
+    [indexedFiles],
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -532,15 +552,9 @@ export function App() {
           setIndexedFiles(savedFiles);
           setSelectedFilePath(savedFiles[0]?.path ?? null);
         } else {
-          const repositoriesWithGitMetadata =
-            await loadRepositoriesGitMetadata(mockRepositories);
-          setRepositories(repositoriesWithGitMetadata);
-          await saveRepositories(repositoriesWithGitMetadata);
-          const savedFiles = await loadIndexedFileFacts(
-            repositoriesWithGitMetadata[0].id,
-          );
-          setIndexedFiles(savedFiles);
-          setSelectedFilePath(savedFiles[0]?.path ?? null);
+          setRepositories([]);
+          setIndexedFiles([]);
+          setSelectedFilePath(null);
         }
 
         setStorageStatus("ready");
@@ -699,42 +713,95 @@ export function App() {
 
   function renderFilePreview() {
     if (isPreviewLoading) {
-      return <p className="preview-state">Loading preview...</p>;
+      return (
+        <div className="preview-state preview-state--loading">
+          <IconBadge icon="search" tone="context" size="md" />
+          <div>
+            <h4>Loading preview...</h4>
+            <p>Reading this file through the safe local preview boundary.</p>
+          </div>
+        </div>
+      );
     }
 
     if (!filePreview || !selectedIndexedFile) {
-      return <p className="preview-state">Select a file to load a preview.</p>;
+      return (
+        <div className="preview-state">
+          <IconBadge icon="file" tone="neutral" size="md" />
+          <div>
+            <h4>Select a file to load a preview.</h4>
+            <p>Choose an indexed file to inspect its safe preview state.</p>
+          </div>
+        </div>
+      );
     }
 
     if (filePreview.status === "ready") {
-      return <pre className="file-preview">{filePreview.content}</pre>;
+      return (
+        <div className="file-preview-frame">
+          <div className="file-preview-toolbar">
+            <span>Text preview</span>
+            <StatusPill tone="success" size="sm">
+              safe read
+            </StatusPill>
+          </div>
+          <pre className="file-preview">{filePreview.content}</pre>
+        </div>
+      );
     }
 
     if (filePreview.status === "too_large") {
       return (
-        <p className="preview-state">
-          Preview skipped because this file is{" "}
-          {formatFileSize(filePreview.sizeBytes)}. The preview limit is{" "}
-          {formatFileSize(filePreview.maxSizeBytes)}.
-        </p>
+        <div className="preview-state preview-state--warning">
+          <IconBadge icon="file" tone="warning" size="md" />
+          <div>
+            <h4>Preview skipped</h4>
+            <p>
+              Preview skipped because this file is{" "}
+              {formatFileSize(filePreview.sizeBytes)}. The preview limit is{" "}
+              {formatFileSize(filePreview.maxSizeBytes)}.
+            </p>
+          </div>
+        </div>
       );
     }
 
     if (filePreview.status === "binary") {
       return (
-        <p className="preview-state">Preview skipped for binary content.</p>
+        <div className="preview-state preview-state--neutral">
+          <IconBadge icon="file" tone="neutral" size="md" />
+          <div>
+            <h4>Binary file</h4>
+            <p>Preview skipped for binary content.</p>
+          </div>
+        </div>
       );
     }
 
     if (filePreview.status === "outside_repository") {
       return (
-        <p className="preview-state">
-          Preview blocked because the resolved path is outside the repository.
-        </p>
+        <div className="preview-state preview-state--danger">
+          <IconBadge icon="approval" tone="danger" size="md" />
+          <div>
+            <h4>Preview blocked</h4>
+            <p>
+              Preview blocked because the resolved path is outside the
+              repository.
+            </p>
+          </div>
+        </div>
       );
     }
 
-    return <p className="preview-state">Preview unavailable for this file.</p>;
+    return (
+      <div className="preview-state preview-state--danger">
+        <IconBadge icon="file" tone="danger" size="md" />
+        <div>
+          <h4>Preview unavailable</h4>
+          <p>Preview unavailable for this file.</p>
+        </div>
+      </div>
+    );
   }
 
   function renderIndexedFileBrowser(variant: "compact" | "full") {
@@ -745,10 +812,14 @@ export function App() {
 
     return (
       <article className={`panel file-browser ${variant}`}>
-        <div className="panel-heading">
+        <div className="file-browser-heading">
           <div>
-            <p className="eyebrow">Indexed files</p>
+            <p className="card-eyebrow">Indexed files</p>
             <h2>{activeRepository.name}</h2>
+            <p>
+              Browse indexed repository facts and inspect files through the safe
+              preview boundary.
+            </p>
           </div>
           <StatusBadge tone={indexedFiles.length > 0 ? "success" : "warning"}>
             {indexedFiles.length} files
@@ -798,50 +869,107 @@ export function App() {
         </div>
 
         <div className="file-browser-grid">
-          <div className="file-results" aria-label="Indexed file results">
+          <section className="file-results-panel" aria-label="Indexed file browser">
+            <div className="file-results-heading">
+              <div>
+                <p className="card-eyebrow">Files</p>
+                <h3>{visibleFiles.length} visible</h3>
+              </div>
+              <IconBadge icon="folder" tone="context" size="md" />
+            </div>
+            <div className="file-results" aria-label="Indexed file results">
             {visibleFiles.length > 0 ? (
               visibleFiles.map((file) => (
                 <button
+                  aria-label={`${file.path}, ${file.extension ?? "no extension"}, ${formatFileSize(file.sizeBytes)}`}
                   aria-current={
                     selectedIndexedFile?.path === file.path ? "true" : undefined
                   }
+                  className="file-list-item"
                   key={file.path}
                   onClick={() => setSelectedFilePath(file.path)}
                   type="button"
                 >
-                  <span>{file.path}</span>
-                  <small>{formatFileSize(file.sizeBytes)}</small>
+                  <span className="file-list-item__icon">
+                    <Icon name="file" size="sm" />
+                  </span>
+                  <span className="file-list-item__body">
+                    <strong>{fileNameFromPath(file.path)}</strong>
+                    <span>{file.path}</span>
+                  </span>
+                  <span className="file-list-item__meta">
+                    <small>{file.extension ?? "none"}</small>
+                    <small>{formatFileSize(file.sizeBytes)}</small>
+                  </span>
                 </button>
               ))
             ) : (
-              <p>No files match the current filter.</p>
+              <div className="file-empty-state">
+                <IconBadge icon="search" tone="neutral" size="md" />
+                <div>
+                  <h3>No files match the current filter.</h3>
+                  <p>
+                    Search results will appear here after indexing finds files
+                    that match the current query.
+                  </p>
+                </div>
+              </div>
             )}
-          </div>
+            </div>
+          </section>
 
-          <div className="file-detail" aria-label="Selected file details">
+          <section className="file-detail" aria-label="Selected file details">
             {selectedIndexedFile ? (
               <>
-                <h3>{selectedIndexedFile.path}</h3>
-                <dl className="metadata-list">
+                <div className="file-detail-header">
+                  <div>
+                    <p className="card-eyebrow">Selected file</p>
+                    <h3>{fileNameFromPath(selectedIndexedFile.path)}</h3>
+                    <p>{selectedIndexedFile.path}</p>
+                  </div>
+                  <StatusPill
+                    tone={filePreview?.status === "ready" ? "success" : "neutral"}
+                    size="sm"
+                  >
+                    {isPreviewLoading
+                      ? "loading"
+                      : filePreview?.status?.replace("_", " ") ?? "selected"}
+                  </StatusPill>
+                </div>
+
+                <dl className="file-metadata-grid">
                   <div>
                     <dt>Size</dt>
                     <dd>{formatFileSize(selectedIndexedFile.sizeBytes)}</dd>
                   </div>
                   <div>
-                    <dt>Extension</dt>
+                    <dt>Type</dt>
                     <dd>{selectedIndexedFile.extension ?? "none"}</dd>
+                  </div>
+                  <div>
+                    <dt>Repository</dt>
+                    <dd>{activeRepository.name}</dd>
                   </div>
                   <div>
                     <dt>Modified</dt>
                     <dd>{selectedIndexedFile.modifiedAt ?? "unknown"}</dd>
                   </div>
                 </dl>
-                {renderFilePreview()}
+
+                <div className="preview-content-area">
+                  {renderFilePreview()}
+                </div>
               </>
             ) : (
-              <p>Select a file after running indexing.</p>
+              <div className="file-empty-state file-empty-state--detail">
+                <IconBadge icon="file" tone="neutral" size="lg" />
+                <div>
+                  <h3>No file selected</h3>
+                  <p>Select a file after running indexing.</p>
+                </div>
+              </div>
             )}
-          </div>
+          </section>
         </div>
       </article>
     );
@@ -1030,117 +1158,300 @@ export function App() {
         ) : null}
 
         {activeSection === "repositories" ? (
-          <section className="tab-dashboard-grid repositories-dashboard">
+          <section className="repository-intelligence-dashboard">
             {repositoryPickerError ? (
               <div className="inline-notice" role="status">
                 {repositoryPickerError}
               </div>
             ) : null}
 
-            <article className="overview-card tab-primary-card repository-focus-card">
-              <div className="overview-card__header">
+            {!hasActiveRepository ? (
+              <article className="overview-card repository-empty-card">
+                <IconBadge icon="repository" tone="accent" size="lg" />
                 <div>
-                  <p className="card-eyebrow">Active Repository</p>
-                  <h2>{activeRepository.name}</h2>
+                  <p className="card-eyebrow">Repository Intelligence</p>
+                  <h2>No repository selected</h2>
+                  <p>
+                    Choose a local repository to build indexed facts, Git state,
+                    project structure, and safe file preview context.
+                  </p>
                 </div>
-                <StatusPill tone={repositoryTone(activeRepository.status)}>
-                  {activeRepository.status.replace("_", " ")}
-                </StatusPill>
-              </div>
-
-              <p className="tab-card-copy">
-                Local repository state, Git metadata, and indexing readiness for
-                the current workspace.
-              </p>
-
-              <div className="active-path-box tab-path-box">
-                <Icon name="folder" />
-                <div>
-                  <span>Local path</span>
-                  <strong>{activeRepository.path}</strong>
-                </div>
-                <button aria-label="Copy repository path" type="button">
-                  <Icon name="copy" size="sm" />
-                </button>
-              </div>
-
-              <dl className="tab-fact-grid">
-                <div>
-                  <dt>Git Repository</dt>
-                  <dd>{activeRepository.isGitRepository ? "Yes" : "No"}</dd>
-                </div>
-                <div>
-                  <dt>Branch</dt>
-                  <dd>{activeRepository.branch}</dd>
-                </div>
-                <div>
-                  <dt>Open Changes</dt>
-                  <dd>{activeRepository.openChanges}</dd>
-                </div>
-                <div>
-                  <dt>Last Indexed</dt>
-                  <dd>{activeRepository.lastIndexedAt ?? "Not indexed yet"}</dd>
-                </div>
-              </dl>
-
-              <div className="tab-action-row">
-                <PrimaryButton
-                  icon="repository"
-                  onClick={selectRepositories}
-                >
-                  Choose repository
-                </PrimaryButton>
-                <SecondaryButton
-                  icon="index"
-                  onClick={() => startIndexingJob(activeRepository)}
-                >
-                  Start indexing
-                </SecondaryButton>
-              </div>
-            </article>
-
-            <aside className="tab-side-stack">
-              <article className="overview-card connect-repository-card">
-                <div className="small-card-icon">
-                  <Icon name="repository" />
-                </div>
-                <h3>Connect another local repository</h3>
-                <p>
-                  Open the native directory picker and add more repositories to
-                  the local-first workspace.
-                </p>
                 <PrimaryButton icon="repository" onClick={selectRepositories}>
                   Choose repository
                 </PrimaryButton>
               </article>
+            ) : (
+              <>
+                <article className="overview-card repository-intelligence-hero">
+                  <div className="overview-card__header">
+                    <div>
+                      <p className="card-eyebrow">Repository Intelligence</p>
+                      <h2>{activeRepository.name}</h2>
+                    </div>
+                    <StatusPill tone={repositoryTone(activeRepository.status)}>
+                      {activeRepository.status.replace("_", " ")}
+                    </StatusPill>
+                  </div>
 
-              <article className="overview-card repository-list-card">
-                <div className="overview-card__header">
-                  <p className="card-eyebrow">Saved Repositories</p>
-                  <StatusPill tone="neutral" size="sm">
-                    {repositories.length} total
-                  </StatusPill>
-                </div>
-                <div className="repository-list">
-                  {repositories.map((repository) => (
-                    <div className="repository-list-item" key={repository.id}>
-                      <Icon name="repository" size="sm" />
+                  <p className="tab-card-copy">
+                    Workspace context derived from saved repository metadata,
+                    Git state, and indexed file facts.
+                  </p>
+
+                  <div className="active-path-box tab-path-box">
+                    <Icon name="folder" />
+                    <div>
+                      <span>Local path</span>
+                      <strong>{activeRepository.path}</strong>
+                    </div>
+                    <button aria-label="Copy repository path" type="button">
+                      <Icon name="copy" size="sm" />
+                    </button>
+                  </div>
+
+                  <dl className="tab-fact-grid repository-overview-facts">
+                    <div>
+                      <dt>Git Repository</dt>
+                      <dd>{activeRepository.isGitRepository ? "Yes" : "No"}</dd>
+                    </div>
+                    <div>
+                      <dt>Branch</dt>
+                      <dd>{activeRepository.branch}</dd>
+                    </div>
+                    <div>
+                      <dt>Open Changes</dt>
+                      <dd>{activeRepository.openChanges}</dd>
+                    </div>
+                    <div>
+                      <dt>Last Indexed</dt>
+                      <dd>{activeRepository.lastIndexedAt ?? "Not indexed yet"}</dd>
+                    </div>
+                  </dl>
+                </article>
+
+                <section className="repository-intelligence-grid">
+                  <article className="overview-card repository-index-summary-card">
+                    <div className="overview-card__header">
                       <div>
-                        <strong>{repository.name}</strong>
-                        <span>{repository.branch}</span>
+                        <p className="card-eyebrow">Index Summary</p>
+                        <h3>Indexed facts</h3>
                       </div>
-                      <StatusPill
-                        tone={repositoryTone(repository.status)}
-                        size="sm"
-                        showDot={false}
+                      <IconBadge icon="index" tone="context" size="md" />
+                    </div>
+
+                    <dl className="intelligence-metric-grid">
+                      <div>
+                        <dt>Indexed Files</dt>
+                        <dd>{repositoryIntelligence.totalIndexedFiles}</dd>
+                      </div>
+                      <div>
+                        <dt>Directories</dt>
+                        <dd>
+                          {repositoryIntelligence.totalIndexedDirectories ??
+                            "Not available yet"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Index Status</dt>
+                        <dd>{activeIndexingJob?.status ?? activeRepository.status}</dd>
+                      </div>
+                      <div>
+                        <dt>Progress</dt>
+                        <dd>
+                          {activeIndexingJob
+                            ? `${activeIndexingJob.progress}%`
+                            : "Not running"}
+                        </dd>
+                      </div>
+                    </dl>
+
+                    <div
+                      className="intelligence-chip-group"
+                      aria-label="Top file extensions"
+                    >
+                      {repositoryIntelligence.topExtensions.length > 0 ? (
+                        repositoryIntelligence.topExtensions.map((extension) => (
+                          <span key={extension.extension}>
+                            {extension.extension} {extension.count}
+                          </span>
+                        ))
+                      ) : (
+                        <span>Not available yet</span>
+                      )}
+                    </div>
+                  </article>
+
+                  <article className="overview-card project-structure-card">
+                    <div className="overview-card__header">
+                      <div>
+                        <p className="card-eyebrow">Project Structure</p>
+                        <h3>Important folders</h3>
+                      </div>
+                      <IconBadge icon="folder" tone="agent" size="md" />
+                    </div>
+
+                    {repositoryIntelligence.projectFolders.length > 0 ? (
+                      <div className="project-folder-list">
+                        {repositoryIntelligence.projectFolders.map((folder) => (
+                          <div className="project-folder-item" key={folder.name}>
+                            <Icon name="folder" size="sm" />
+                            <strong>{folder.name}</strong>
+                            <span>{folder.fileCount} files</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="intelligence-empty-copy">
+                        Not available yet. Run indexing to discover important
+                        project folders.
+                      </p>
+                    )}
+                  </article>
+
+                  <article className="overview-card key-files-card">
+                    <div className="overview-card__header">
+                      <div>
+                        <p className="card-eyebrow">Key Files</p>
+                        <h3>Docs and config</h3>
+                      </div>
+                      <IconBadge icon="file" tone="accent" size="md" />
+                    </div>
+
+                    {repositoryIntelligence.keyFiles.length > 0 ? (
+                      <div className="key-file-list">
+                        {repositoryIntelligence.keyFiles.map((file) => (
+                          <div className="key-file-item" key={file.path}>
+                            <Icon name="file" size="sm" />
+                            <div>
+                              <strong>{file.name}</strong>
+                              <span>{file.path}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="intelligence-empty-copy">
+                        Not available yet. Key files appear after indexing.
+                      </p>
+                    )}
+                  </article>
+
+                  <article className="overview-card framework-hints-card">
+                    <div className="overview-card__header">
+                      <div>
+                        <p className="card-eyebrow">Package / Framework Hints</p>
+                        <h3>Path-derived hints</h3>
+                      </div>
+                      <IconBadge icon="spark" tone="context" size="md" />
+                    </div>
+
+                    {repositoryIntelligence.frameworkHints.length > 0 ? (
+                      <div className="framework-hint-list">
+                        {repositoryIntelligence.frameworkHints.map((hint) => (
+                          <div className="framework-hint-item" key={hint.name}>
+                            <strong>{hint.name}</strong>
+                            <span>{hint.evidence}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="intelligence-empty-copy">
+                        Not available yet. Hints are derived from indexed file
+                        paths and known config files.
+                      </p>
+                    )}
+
+                    <div className="package-metadata-note">
+                      <StatusPill tone="neutral" size="sm" showDot={false}>
+                        Package scripts unavailable
+                      </StatusPill>
+                      <p>
+                        Package.json contents are not parsed until a safe,
+                        explicit package metadata reader is added.
+                      </p>
+                    </div>
+                  </article>
+
+                  <article className="overview-card repository-entry-card">
+                    <div className="overview-card__header">
+                      <div>
+                        <p className="card-eyebrow">Entry Points</p>
+                        <h3>Next actions</h3>
+                      </div>
+                    </div>
+                    <div className="repository-entry-actions">
+                      <PrimaryButton
+                        icon="file"
+                        onClick={() => setActiveSection("changes")}
                       >
-                        {repository.status.replace("_", " ")}
+                        Browse indexed files
+                      </PrimaryButton>
+                      <SecondaryButton
+                        icon="index"
+                        onClick={() => startIndexingJob(activeRepository)}
+                      >
+                        Reindex repository
+                      </SecondaryButton>
+                      <SecondaryButton
+                        icon="play"
+                        onClick={() => setActiveSection("agents")}
+                      >
+                        Start agent run
+                      </SecondaryButton>
+                      <SecondaryButton
+                        icon="changes"
+                        onClick={() => setActiveSection("changes")}
+                      >
+                        View changes
+                      </SecondaryButton>
+                    </div>
+                  </article>
+                </section>
+
+                <aside className="repository-support-grid">
+                  <article className="overview-card connect-repository-card">
+                    <div className="small-card-icon">
+                      <Icon name="repository" />
+                    </div>
+                    <h3>Connect another local repository</h3>
+                    <p>
+                      Open the native directory picker and add more repositories
+                      to the local-first workspace.
+                    </p>
+                    <PrimaryButton icon="repository" onClick={selectRepositories}>
+                      Choose repository
+                    </PrimaryButton>
+                  </article>
+
+                  <article className="overview-card repository-list-card">
+                    <div className="overview-card__header">
+                      <p className="card-eyebrow">Saved Repositories</p>
+                      <StatusPill tone="neutral" size="sm">
+                        {repositories.length} total
                       </StatusPill>
                     </div>
-                  ))}
-                </div>
-              </article>
-            </aside>
+                    <div className="repository-list">
+                      {repositories.map((repository) => (
+                        <div className="repository-list-item" key={repository.id}>
+                          <Icon name="repository" size="sm" />
+                          <div>
+                            <strong>{repository.name}</strong>
+                            <span>{repository.branch}</span>
+                          </div>
+                          <StatusPill
+                            tone={repositoryTone(repository.status)}
+                            size="sm"
+                            showDot={false}
+                          >
+                            {repository.status.replace("_", " ")}
+                          </StatusPill>
+                        </div>
+                      ))}
+                    </div>
+                  </article>
+                </aside>
+              </>
+            )}
           </section>
         ) : null}
 

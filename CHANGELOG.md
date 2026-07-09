@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Added a Repository Intelligence view on the Repositories tab with repository
+  overview, Git/index state, extension summary, important folders, key files,
+  path-derived framework hints, and clear entry points into file browsing,
+  reindexing, agent runs, and changes.
+- Added safe indexing helpers that derive repository intelligence from indexed
+  file facts without adding arbitrary filesystem reads.
+- Expanded desktop smoke coverage for repository intelligence with selected and
+  empty repository states.
+- Upgraded the indexed-file browser and file preview panel to the final
+  dashboard design system with premium file rows, selected-file metadata,
+  designed preview states, and a polished safe-read code preview frame.
+- Expanded desktop smoke coverage for outside-repository preview blocking and
+  selecting a different indexed file.
 - Added the first desktop smoke tests with Vitest, jsdom, React Testing
   Library, and user-event.
 - Covered six-tab rendering, sidebar navigation, approval approve/reject

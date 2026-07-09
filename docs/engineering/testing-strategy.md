@@ -136,7 +136,8 @@ Current desktop smoke coverage includes:
 - Six-tab rendering and sidebar navigation.
 - Approval queue actions and pending-count updates.
 - Safe file preview panel states for no file selected, loading, text preview,
-  binary content, too-large files, and preview errors.
+  binary content, too-large files, outside-repository blocking, preview errors,
+  and selected-file changes.
 
 Tauri filesystem, SQL, dialog, Git, and scan calls should be mocked at the
 desktop storage-wrapper boundary in UI tests. Tests must not mock broader

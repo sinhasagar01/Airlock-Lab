@@ -14,6 +14,10 @@ The app shell now follows a warm premium SaaS dashboard direction.
 - Three dashboard metric cards.
 - Tab content below the shared metrics uses the final dashboard card system for
   Overview, Repositories, Agent Runs, Approvals, Changes, and Settings.
+- Repositories now presents Repository Intelligence: repository overview, Git
+  state, index summary, important folders, key files, package/framework hints,
+  saved repositories, and entry points into file browsing, reindexing, agent
+  runs, and changes.
 - Changes includes a no-local-changes review state, change-readiness feature
   blocks, repository status facts, and indexed-file browsing/file preview access.
 - Settings includes workspace settings rows and workspace maintenance actions.
@@ -31,11 +35,16 @@ The app shell now follows a warm premium SaaS dashboard direction.
 - Recent activity uses a compact timeline with a text action in the card header.
 - Changes and Settings reuse the same card padding, icon badges, status pills,
   and button treatments as the migrated Overview surfaces.
+- Repository Intelligence uses fact grids, calm chips, key-file rows, folder
+  rows, and disabled/unavailable states when data cannot be safely derived yet.
 
 ## Required States
 
 - Empty repository selection.
 - Storage unavailable warning.
 - Indexing idle, running, completed, and failed.
+- Repository Intelligence empty state when no repository is selected.
+- Repository Intelligence unavailable states for package metadata that has not
+  been read through a safe bounded path.
 - Approval pending, approved, and rejected.
 - File preview loading, ready, binary, too-large, outside-repository, and unavailable.

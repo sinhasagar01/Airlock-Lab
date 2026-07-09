@@ -60,10 +60,174 @@ export type FileContentPreview = {
   maxSizeBytes: number;
 };
 
+export type FileExtensionSummary = {
+  extension: string;
+  count: number;
+};
+
+export type ProjectFolderSummary = {
+  name: string;
+  fileCount: number;
+};
+
+export type KeyFileSummary = {
+  name: string;
+  path: string;
+};
+
+export type FrameworkHintSummary = {
+  name: string;
+  evidence: string;
+};
+
+export type RepositoryIntelligenceSummary = {
+  totalIndexedFiles: number;
+  totalIndexedDirectories: number | null;
+  topExtensions: FileExtensionSummary[];
+  projectFolders: ProjectFolderSummary[];
+  keyFiles: KeyFileSummary[];
+  frameworkHints: FrameworkHintSummary[];
+  packageMetadataAvailable: boolean;
+};
+
+const importantProjectFolders = [
+  "apps",
+  "packages",
+  "src",
+  "components",
+  "docs",
+  "tests",
+  "scripts",
+  "config",
+];
+
+const importantKeyFiles = [
+  "package.json",
+  "README.md",
+  "tsconfig.json",
+  "vite.config.ts",
+  "tauri.conf.json",
+  "Cargo.toml",
+  "CHANGELOG.md",
+  "PROJECT-STATE.md",
+];
+
 function repositoryNameFromPath(path: string): string {
   const normalizedPath = path.replace(/\/$/, "");
   const pathSegments = normalizedPath.split("/");
   return pathSegments.at(-1) || normalizedPath;
+}
+
+function pathSegments(path: string): string[] {
+  return path.split("/").filter(Boolean);
+}
+
+export function deriveRepositoryIntelligence(
+  files: IndexedFileFact[],
+): RepositoryIntelligenceSummary {
+  const extensionCounts = new Map<string, number>();
+  const directoryPaths = new Set<string>();
+  const folderCounts = new Map<string, number>();
+  const keyFiles = new Map<string, KeyFileSummary>();
+
+  for (const file of files) {
+    const extension = file.extension ?? "none";
+    extensionCounts.set(extension, (extensionCounts.get(extension) ?? 0) + 1);
+
+    const segments = pathSegments(file.path);
+    const fileName = segments.at(-1) ?? file.path;
+    const directories = segments.slice(0, -1);
+
+    for (let index = 0; index < directories.length; index += 1) {
+      directoryPaths.add(directories.slice(0, index + 1).join("/"));
+    }
+
+    for (const folderName of importantProjectFolders) {
+      if (directories.includes(folderName)) {
+        folderCounts.set(folderName, (folderCounts.get(folderName) ?? 0) + 1);
+      }
+    }
+
+    if (importantKeyFiles.includes(fileName) && !keyFiles.has(fileName)) {
+      keyFiles.set(fileName, {
+        name: fileName,
+        path: file.path,
+      });
+    }
+  }
+
+  const topExtensions = [...extensionCounts.entries()]
+    .map(([extension, count]) => ({ extension, count }))
+    .sort((left, right) => right.count - left.count || left.extension.localeCompare(right.extension))
+    .slice(0, 8);
+
+  const projectFolders = importantProjectFolders
+    .filter((folderName) => folderCounts.has(folderName))
+    .map((folderName) => ({
+      name: folderName,
+      fileCount: folderCounts.get(folderName) ?? 0,
+    }));
+
+  const orderedKeyFiles = importantKeyFiles
+    .map((fileName) => keyFiles.get(fileName))
+    .filter((file): file is KeyFileSummary => Boolean(file));
+
+  const keyFileNames = new Set(orderedKeyFiles.map((file) => file.name));
+  const extensionNames = new Set(topExtensions.map((item) => item.extension));
+  const frameworkHints: FrameworkHintSummary[] = [];
+
+  if (
+    keyFileNames.has("tsconfig.json") ||
+    extensionNames.has("ts") ||
+    extensionNames.has("tsx")
+  ) {
+    frameworkHints.push({
+      name: "TypeScript",
+      evidence: keyFileNames.has("tsconfig.json")
+        ? "tsconfig.json indexed"
+        : "TypeScript file extensions indexed",
+    });
+  }
+
+  if (extensionNames.has("tsx")) {
+    frameworkHints.push({
+      name: "React",
+      evidence: "TSX files indexed",
+    });
+  }
+
+  if (keyFileNames.has("vite.config.ts")) {
+    frameworkHints.push({
+      name: "Vite",
+      evidence: "vite.config.ts indexed",
+    });
+  }
+
+  if (keyFileNames.has("tauri.conf.json") || keyFileNames.has("Cargo.toml")) {
+    frameworkHints.push({
+      name: "Tauri",
+      evidence: keyFileNames.has("tauri.conf.json")
+        ? "tauri.conf.json indexed"
+        : "Cargo.toml indexed",
+    });
+  }
+
+  if (keyFileNames.has("README.md") || folderCounts.has("docs")) {
+    frameworkHints.push({
+      name: "Documentation",
+      evidence: keyFileNames.has("README.md") ? "README.md indexed" : "docs folder indexed",
+    });
+  }
+
+  return {
+    totalIndexedFiles: files.length,
+    totalIndexedDirectories: files.length > 0 ? directoryPaths.size : null,
+    topExtensions,
+    projectFolders,
+    keyFiles: orderedKeyFiles,
+    frameworkHints,
+    packageMetadataAvailable: false,
+  };
 }
 
 export function createRepositorySummaryFromPath(

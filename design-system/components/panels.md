@@ -19,7 +19,12 @@ Panels hold dashboard summaries, repository state, activity, approval requests, 
 - Use `.panel` for framed tools such as indexed-file browsing and file previews.
 - Use `SummaryCard` / `.summary-card` for dashboard metrics.
 - Use `.metadata-list` for repository and file facts.
-- Use `.preview-state` for loading, binary, too-large, outside-repository, and unavailable preview states.
+- Use `.file-browser`, `.file-results-panel`, `.file-detail`, and
+  `.preview-content-area` for first-class indexed-file browsing and preview
+  workflows.
+- Use `.preview-state` for loading, binary, too-large, outside-repository, and
+  unavailable preview states.
+- Use `.file-preview-frame` and `.file-preview` for readable text previews.
 - Use `.activity-list`, `.activity-item`, `.activity-title-row`, and `.micro-badge` for the compact recent-activity timeline.
 
 ## Dashboard Migration
@@ -48,3 +53,5 @@ The overview `Workspace Pulse` card follows the design frame:
 - Do not weaken file preview safety states for visual polish.
 - Avoid nesting decorative cards inside decorative cards.
 - Keep dense indexed-file rows compact and stable.
+- Preserve search, extension filtering, selected-file keyboard focus, and safe
+  wrapper boundaries when polishing file preview visuals.

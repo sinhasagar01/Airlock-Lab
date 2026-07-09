@@ -16,6 +16,9 @@ The desktop MVP uses Tauri, React, TypeScript, and Vite. Styling is plain CSS wi
   `UpgradeCard` while the low-level primitives live in `packages/ui`.
 - All six top-level tabs use the shared header, summary cards, card surfaces,
   status pills, icon badges, and primary/secondary button treatments.
+- Repository Intelligence data is derived in `packages/indexing` from indexed
+  file facts, then rendered by the desktop Repositories tab. Keep this boundary
+  fact-based and avoid UI-local ad hoc filesystem reads.
 
 ## Design System Rules
 
@@ -31,6 +34,10 @@ The desktop MVP uses Tauri, React, TypeScript, and Vite. Styling is plain CSS wi
   intentionally scoped.
 - Changes must keep indexed-file browsing and safe preview access available
   while presenting the change-review empty/readiness state.
+- Repositories must use safe indexed metadata for intelligence summaries:
+  extension counts, important folders, key files, and path-derived framework
+  hints. If package scripts or dependencies are not available through a bounded
+  safe reader, show an unavailable state.
 - Settings must not add destructive behavior unless it is implemented with an
   explicit confirmation gate.
 
