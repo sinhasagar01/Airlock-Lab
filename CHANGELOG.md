@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added an Approval detail review workflow with selectable approval requests,
+  linked agent run metadata, proposed plan review, affected files, risk and
+  validation sections, repository context, decision controls, and an honest
+  diff placeholder.
+- Kept approval decisions bounded to persisted approve/reject status updates;
+  no file writes, patch execution, Git commands, or generated diffs were added.
 - Added an Agent Run detail workflow with selectable runs, provider/model
   metadata, repository context, structured proposed plan, expected affected
   files, risk summary, validation strategy, and approval handoff.

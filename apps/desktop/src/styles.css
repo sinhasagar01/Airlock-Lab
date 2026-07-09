@@ -1897,6 +1897,176 @@ dt {
   line-height: 1.5;
 }
 
+.approval-review-workspace {
+  align-items: start;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(280px, 0.72fr) minmax(0, 1.35fr) minmax(340px, 0.9fr);
+}
+
+.approval-queue-list-card,
+.approval-detail-card,
+.approval-plan-review-card,
+.approval-repository-context-card,
+.diff-placeholder-card {
+  padding: 26px;
+}
+
+.approval-queue-list-card h2,
+.approval-detail-card h2,
+.approval-plan-review-card h2 {
+  color: var(--color-text-primary);
+  font-size: 24px;
+  font-weight: 760;
+  line-height: 1.18;
+  margin-top: 12px;
+}
+
+.approval-queue-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.approval-queue-item {
+  align-items: start;
+  background: #fbfdff;
+  border: 1px solid #e4eaf1;
+  border-radius: var(--radius-lg);
+  color: var(--color-text-primary);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 36px minmax(0, 1fr);
+  min-height: 132px;
+  padding: 16px;
+  text-align: left;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.approval-queue-item:hover {
+  background: #fffaf6;
+  border-color: rgba(236, 120, 85, 0.3);
+  transform: translateY(-1px);
+}
+
+.approval-queue-item:focus-visible {
+  outline: 3px solid rgba(236, 120, 85, 0.32);
+  outline-offset: 3px;
+}
+
+.approval-queue-item[aria-current="true"] {
+  background: var(--color-accent-soft);
+  border-color: rgba(236, 120, 85, 0.46);
+  box-shadow: 0 16px 32px rgba(236, 120, 85, 0.12);
+}
+
+.approval-queue-item > span:nth-child(2) {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.approval-queue-item strong,
+.approval-queue-item small {
+  display: block;
+}
+
+.approval-queue-item strong {
+  color: var(--color-text-primary);
+  font-size: 14px;
+  font-weight: 760;
+  line-height: 1.25;
+}
+
+.approval-queue-item small {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 560;
+  line-height: 1.4;
+}
+
+.approval-queue-item__status {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  grid-column: 2;
+}
+
+.approval-detail-fact-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 24px;
+}
+
+.approval-review-section,
+.approval-decision-card {
+  background: #fbfdff;
+  border: 1px solid #e4eaf1;
+  border-radius: var(--radius-lg);
+  margin-top: 22px;
+  padding: 20px;
+}
+
+.approval-decision-card {
+  align-items: center;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) max-content;
+}
+
+.approval-decision-card h3,
+.approval-repository-context-card h3,
+.diff-placeholder-card h3 {
+  color: var(--color-text-primary);
+  font-size: 19px;
+  font-weight: 760;
+  line-height: 1.25;
+  margin-top: 8px;
+}
+
+.approval-decision-card p,
+.diff-placeholder-card p {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 520;
+  line-height: 1.55;
+  margin-top: 10px;
+}
+
+.approval-decision-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.approval-plan-review-card {
+  grid-column: 1 / 3;
+}
+
+.approval-plan-grid {
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+}
+
+.approval-side-column {
+  display: grid;
+  gap: 18px;
+}
+
+.diff-placeholder-card {
+  display: grid;
+  gap: 18px;
+}
+
+.diff-placeholder-card .secondary-action {
+  justify-content: center;
+  width: 100%;
+}
+
 .provider-reasoning-box {
   background: var(--color-surface-muted);
   border: 1px solid #e2eaf2;
@@ -2912,6 +3082,7 @@ dd {
   .overview-lower-grid,
   .tab-dashboard-grid,
   .agent-run-workspace,
+  .approval-review-workspace,
   .repository-intelligence-grid,
   .repository-support-grid,
   .changes-feature-grid,
@@ -2923,7 +3094,15 @@ dd {
     grid-column: auto;
   }
 
+  .approval-plan-review-card {
+    grid-column: auto;
+  }
+
   .agent-run-side-column {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .approval-side-column {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -2995,6 +3174,9 @@ dd {
   .proposed-plan-grid,
   .agent-detail-fact-grid,
   .agent-run-side-column,
+  .approval-detail-fact-grid,
+  .approval-side-column,
+  .approval-decision-card,
   .approval-card-grid,
   .settings-row,
   .maintenance-action {
@@ -3092,6 +3274,7 @@ dd {
   }
 
   .agent-run-list-item,
+  .approval-queue-item,
   .plan-step-list li,
   .plan-file-item,
   .plan-risk-item,
@@ -3101,6 +3284,7 @@ dd {
 
   .agent-run-list-item > .status-pill,
   .agent-run-list-item > small,
+  .approval-queue-item__status,
   .plan-step-list .status-pill,
   .plan-step-list li > div {
     grid-column: auto;

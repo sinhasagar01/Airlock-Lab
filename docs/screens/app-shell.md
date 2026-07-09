@@ -22,6 +22,10 @@ The app shell now follows a warm premium SaaS dashboard direction.
   and model metadata, repository context, a structured proposed plan surface,
   expected affected files, risk summary, validation strategy, and approval
   handoff.
+- Approvals now uses a master/detail review workflow with selectable approval
+  requests, linked agent run metadata, proposed plan review, affected files,
+  risk and validation sections, repository context, decision controls, and an
+  honest diff placeholder.
 - Changes includes a no-local-changes review state, change-readiness feature
   blocks, repository status facts, and indexed-file browsing/file preview access.
 - Settings includes workspace settings rows and workspace maintenance actions.
@@ -52,5 +56,7 @@ The app shell now follows a warm premium SaaS dashboard direction.
   been read through a safe bounded path.
 - Agent run detail selected state, structured proposed plan state, linked
   approval handoff, and disabled diff action until generated diffs exist.
+- Approval queue selected state, approval detail, proposed plan review, disabled
+  diff placeholder, and approve/reject decision states.
 - Approval pending, approved, and rejected.
 - File preview loading, ready, binary, too-large, outside-repository, and unavailable.

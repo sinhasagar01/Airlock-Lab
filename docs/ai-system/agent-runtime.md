@@ -86,6 +86,10 @@ A proposed change plan should include:
 The plan is not a diff. It must not claim that changes have been generated until
 the Git diff and proposed patch model exist.
 
+Approval review should consume the same proposed change plan rather than
+duplicating separate plan text. This keeps agent-run inspection and human
+approval review aligned while diff attachment is still pending.
+
 ## Run Lifecycle
 
 ### 1. Created

@@ -393,10 +393,35 @@ describe("App smoke tests", () => {
     expect(
       await screen.findByRole("heading", { name: "2 pending approvals" }),
     ).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Approve" })).toHaveLength(2);
-    expect(screen.getAllByRole("button", { name: "Reject" })).toHaveLength(2);
+    expect(
+      screen.getByRole("button", {
+        name: "Review approval Approve provider abstraction patch plan",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", {
+        name: "Approve provider abstraction patch plan",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Draft app shell implementation plan"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Mock Provider.*mock-planner-v1/)).toBeInTheDocument();
+    expect(screen.getByText("Plan attached to approval")).toBeInTheDocument();
+    expect(screen.getByText("Ordered plan")).toBeInTheDocument();
+    expect(screen.getByText("Review risks")).toBeInTheDocument();
+    expect(screen.getByText("Check strategy")).toBeInTheDocument();
+    expect(screen.getByText("Diff review planned")).toBeInTheDocument();
+    expect(screen.getByText("Diffs not generated yet")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Generated and local diffs will appear here once the diff model is implemented.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled();
 
-    await user.click(screen.getAllByRole("button", { name: "Approve" })[0]);
+    await user.click(screen.getByRole("button", { name: "Approve" }));
 
     expect(updateApprovalRequestStatus).toHaveBeenCalledWith(
       "approval-provider-rfc",
@@ -405,13 +430,16 @@ describe("App smoke tests", () => {
     expect(
       await screen.findByRole("heading", { name: "1 pending approvals" }),
     ).toBeInTheDocument();
+    expect(screen.getByText("Request approved")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeDisabled();
 
-    const enabledRejectButton = screen
-      .getAllByRole("button", { name: "Reject" })
-      .find((button) => !button.hasAttribute("disabled"));
-
-    expect(enabledRejectButton).toBeDefined();
-    await user.click(enabledRejectButton as HTMLButtonElement);
+    await user.click(
+      screen.getByRole("button", {
+        name: "Review approval Approve indexing job persistence follow-up",
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Reject" }));
 
     expect(updateApprovalRequestStatus).toHaveBeenCalledWith(
       "approval-indexing-job",

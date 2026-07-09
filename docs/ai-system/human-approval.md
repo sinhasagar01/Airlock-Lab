@@ -88,6 +88,31 @@ Before approval, the user should see:
 
 Approval prompts should be specific, not generic.
 
+## Approval Review Screen
+
+The MVP approval review screen is a durable product surface, not a transient
+confirmation dialog.
+
+The review screen should show:
+
+- Approval request title, reason, status, risk, and creation time
+- Linked agent run when available
+- Provider and model metadata when available
+- Repository and branch context
+- Proposed change plan summary
+- Ordered implementation steps
+- Expected affected files
+- Risk summary
+- Validation/check strategy
+- Decision controls for approve or reject
+
+Approval review may show a diff placeholder before diff support exists, but it
+must be honest. It should say that generated and local diffs are not available
+until the diff model is implemented.
+
+Approving or rejecting in the MVP updates approval state only. It must not write
+files, execute patches, run Git commands, or perform external side effects.
+
 ## Permission Scope
 
 Approvals should be scoped.
