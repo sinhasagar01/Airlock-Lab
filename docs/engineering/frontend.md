@@ -19,6 +19,9 @@ The desktop MVP uses Tauri, React, TypeScript, and Vite. Styling is plain CSS wi
 - Repository Intelligence data is derived in `packages/indexing` from indexed
   file facts, then rendered by the desktop Repositories tab. Keep this boundary
   fact-based and avoid UI-local ad hoc filesystem reads.
+- Agent run detail uses `packages/ai` contracts for `AgentRun` and
+  `ProposedChangePlan`. Keep proposed plans separate from real Git diffs until
+  the diff model and approval review attachment are explicitly implemented.
 
 ## Design System Rules
 
@@ -38,6 +41,9 @@ The desktop MVP uses Tauri, React, TypeScript, and Vite. Styling is plain CSS wi
   extension counts, important folders, key files, and path-derived framework
   hints. If package scripts or dependencies are not available through a bounded
   safe reader, show an unavailable state.
+- Agent Runs may show expected affected files, plan steps, risks, validation,
+  and approval handoff from seeded/structured run data. It must not imply real
+  generated diffs or file writes before those systems exist.
 - Settings must not add destructive behavior unless it is implemented with an
   explicit confirmation gate.
 

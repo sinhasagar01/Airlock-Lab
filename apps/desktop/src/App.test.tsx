@@ -329,6 +329,62 @@ describe("App smoke tests", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders selected agent run detail with structured proposed plan and approval handoff", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Draft app shell implementation plan",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Structured implementation plan")).toBeInTheDocument();
+    expect(screen.getByText("Ordered plan")).toBeInTheDocument();
+    expect(screen.getByText("Affected files")).toBeInTheDocument();
+    expect(screen.getByText("Known risks")).toBeInTheDocument();
+    expect(screen.getByText("Check strategy")).toBeInTheDocument();
+    expect(screen.getByText("apps/desktop/src/App.tsx")).toBeInTheDocument();
+    expect(screen.getByText(/real Git diffs yet/)).toBeInTheDocument();
+    expect(screen.getByText(String(defaultFiles.length))).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Review approval" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Diffs not generated yet" }),
+    ).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "2 pending approvals" }),
+    ).toBeInTheDocument();
+  });
+
+  it("switches the selected agent run from the run list", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Open agent run Refresh repository context index",
+      }),
+    );
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Refresh repository context index",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText(/mock-context-v1/).length).toBeGreaterThan(0);
+    expect(
+      screen.getByText("packages/indexing/src/index.ts"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Approve indexing job persistence follow-up"),
+    ).toBeInTheDocument();
+  });
+
   it("keeps approval actions visible, wired, and reflected in pending count", async () => {
     const { user } = renderApp();
 

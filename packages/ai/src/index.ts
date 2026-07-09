@@ -15,10 +15,57 @@ export type ProviderAdapter = {
 export type AgentRun = {
   id: string;
   title: string;
+  taskSummary: string;
   repository: string;
   providerId: string;
+  model: string;
   status: "queued" | "running" | "waiting_for_approval" | "completed";
   nextStep: string;
+  startedAt: string;
+  elapsed: string;
+  confidence: "low" | "medium" | "high";
+  approvalRequired: boolean;
+};
+
+export type ProposedChangeStepStatus =
+  | "planned"
+  | "in_progress"
+  | "completed"
+  | "blocked";
+
+export type ProposedChangeStep = {
+  id: string;
+  title: string;
+  description: string;
+  status: ProposedChangeStepStatus;
+};
+
+export type ProposedAffectedFile = {
+  path: string;
+  reason: string;
+  changeType: "create" | "modify" | "delete" | "unknown";
+};
+
+export type ProposedRisk = {
+  level: "low" | "medium" | "high";
+  title: string;
+  description: string;
+};
+
+export type ProposedValidationCheck = {
+  label: string;
+  status: "planned" | "passed" | "failed" | "not_run";
+};
+
+export type ProposedChangePlan = {
+  id: string;
+  runId: string;
+  summary: string;
+  steps: ProposedChangeStep[];
+  affectedFiles: ProposedAffectedFile[];
+  risks: ProposedRisk[];
+  validation: ProposedValidationCheck[];
+  approvalRequired: boolean;
 };
 
 export type ApprovalRequestStatus = "pending" | "approved" | "rejected";
@@ -94,18 +141,158 @@ export function createMockAgentRuns(): AgentRun[] {
     {
       id: "run-mvp-shell",
       title: "Draft app shell implementation plan",
+      taskSummary:
+        "Prepare the desktop app shell plan for repository-aware navigation, approval surfaces, and local-first implementation boundaries.",
       repository: "AI-Developer-Workspace",
       providerId: "mock",
+      model: "mock-planner-v1",
       status: "waiting_for_approval",
       nextStep: "Review proposed file edits before execution.",
+      startedAt: "Today, 10:34",
+      elapsed: "8m",
+      confidence: "medium",
+      approvalRequired: true,
     },
     {
       id: "run-index-refresh",
       title: "Refresh repository context index",
+      taskSummary:
+        "Refresh repository facts so future agent runs can use indexed file paths, documentation, and package boundaries.",
       repository: "AI-Developer-Workspace",
       providerId: "mock",
+      model: "mock-context-v1",
       status: "running",
       nextStep: "Collect package boundaries and document references.",
+      startedAt: "Today, 10:46",
+      elapsed: "3m",
+      confidence: "high",
+      approvalRequired: true,
+    },
+  ];
+}
+
+export function createMockProposedChangePlans(): ProposedChangePlan[] {
+  return [
+    {
+      id: "plan-mvp-shell",
+      runId: "run-mvp-shell",
+      summary:
+        "Refine the desktop shell contract, keep implementation bounded to UI/data wiring, and require human review before any file edits are applied.",
+      approvalRequired: true,
+      steps: [
+        {
+          id: "step-review-shell",
+          title: "Review current shell structure",
+          description:
+            "Inspect navigation, repository context, approval queue, and file-preview surfaces before changing shared UI behavior.",
+          status: "completed",
+        },
+        {
+          id: "step-compose-plan",
+          title: "Compose implementation plan",
+          description:
+            "Prepare a scoped plan that identifies UI contracts, affected modules, safety boundaries, and verification checks.",
+          status: "completed",
+        },
+        {
+          id: "step-await-approval",
+          title: "Wait for human approval",
+          description:
+            "Pause before executing edits so the proposed plan can be reviewed against repository state and risk.",
+          status: "planned",
+        },
+      ],
+      affectedFiles: [
+        {
+          path: "apps/desktop/src/App.tsx",
+          reason: "Primary shell and run-detail composition lives here today.",
+          changeType: "modify",
+        },
+        {
+          path: "packages/ai/src/index.ts",
+          reason:
+            "Agent run and proposed plan contracts need reusable typed shapes.",
+          changeType: "modify",
+        },
+        {
+          path: "apps/desktop/src/App.test.tsx",
+          reason:
+            "Smoke coverage should confirm run detail, proposed plan, and approval handoff are visible.",
+          changeType: "modify",
+        },
+      ],
+      risks: [
+        {
+          level: "medium",
+          title: "Shared shell regression",
+          description:
+            "Agent run detail touches the existing six-tab shell and must preserve navigation, approvals, indexing, and preview state.",
+        },
+        {
+          level: "low",
+          title: "Mock plan overreach",
+          description:
+            "The plan must stay honest about missing real diffs and avoid implying that file edits have been generated.",
+        },
+      ],
+      validation: [
+        {
+          label: "Typecheck workspace packages",
+          status: "planned",
+        },
+        {
+          label: "Run desktop smoke tests",
+          status: "planned",
+        },
+        {
+          label: "Build desktop bundle",
+          status: "planned",
+        },
+      ],
+    },
+    {
+      id: "plan-index-refresh",
+      runId: "run-index-refresh",
+      summary:
+        "Refresh repository context from indexed facts and report what package boundaries, docs, and file categories are available.",
+      approvalRequired: true,
+      steps: [
+        {
+          id: "step-load-index",
+          title: "Load indexed facts",
+          description:
+            "Read persisted file facts for the selected repository without scanning outside the repository boundary.",
+          status: "completed",
+        },
+        {
+          id: "step-derive-context",
+          title: "Derive context summary",
+          description:
+            "Summarize folders, key files, and extension counts for future agent context.",
+          status: "in_progress",
+        },
+      ],
+      affectedFiles: [
+        {
+          path: "packages/indexing/src/index.ts",
+          reason: "Repository intelligence helpers derive context from facts.",
+          changeType: "modify",
+        },
+      ],
+      risks: [
+        {
+          level: "low",
+          title: "Incomplete context",
+          description:
+            "Index facts may not include package metadata until a safe reader exists.",
+        },
+      ],
+      validation: [
+        {
+          label: "Confirm indexed facts render",
+          status: "planned",
+        },
+      ],
     },
   ];
 }

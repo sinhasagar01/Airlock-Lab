@@ -2,7 +2,7 @@
 
 ## Current MVP State
 
-The desktop app supports local repository selection, persisted repositories, Git metadata, persisted indexing jobs, indexed file facts, repository intelligence summaries, approval request persistence, indexed-file browsing, and safe file content previews.
+The desktop app supports local repository selection, persisted repositories, Git metadata, persisted indexing jobs, indexed file facts, repository intelligence summaries, inspectable agent run detail with structured proposed plans, approval request persistence, indexed-file browsing, and safe file content previews.
 
 The desktop app now has an initial Vitest/jsdom smoke suite covering six-tab
 rendering, sidebar navigation, approval actions, pending approval count updates,
@@ -36,6 +36,10 @@ source of truth.
   repository overview, Git/index state, top file extensions, important folders,
   key files, and path-based framework hints from safe repository metadata and
   indexed file facts.
+- Agent Runs now includes a master/detail workflow with selectable runs,
+  provider/model metadata, repository context, structured proposed plans,
+  expected affected files, risk summaries, validation strategy, and approval
+  handoff while clearly marking that real Git diffs are not generated yet.
 - Changes now presents a polished no-local-changes review state, change-readiness
   feature blocks, repository status facts, and the full indexed-file browser.
 - The indexed-file browser and preview panel now use the dashboard design system
@@ -46,4 +50,4 @@ source of truth.
 
 ## Active Safety Boundary
 
-Safe file preview remains local-first and path-bounded to the selected repository. Repository Intelligence prefers persisted/indexed facts over new filesystem reads. Visual changes do not weaken size limits, binary handling, or outside-repository blocking.
+Safe file preview remains local-first and path-bounded to the selected repository. Repository Intelligence prefers persisted/indexed facts over new filesystem reads. Agent run detail is inspectable mock/structured plan state only and does not write files or generate diffs. Visual changes do not weaken size limits, binary handling, or outside-repository blocking.

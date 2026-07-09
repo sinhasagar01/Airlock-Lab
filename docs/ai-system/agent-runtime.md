@@ -51,18 +51,40 @@ Every run should record:
 - Goal
 - Triggering user or workflow
 - Task or plan being executed
+- Provider and model used
 - Repository context
 - Documents used
 - Tools available
 - Tools used
 - Permissions granted
 - Outputs produced
+- Proposed plan
 - Files touched
+- Files expected to be touched
+- Approval requirement
 - Validation attempted
 - Warnings
 - Final status
 
 The run should remain inspectable after completion.
+
+## Proposed Change Plan
+
+The MVP models a proposed change plan before it models real file edits or Git
+diffs. This creates a safe bridge between repository intelligence, agent runs,
+approval review, and future diff review.
+
+A proposed change plan should include:
+
+- Summary
+- Ordered implementation steps
+- Expected affected files
+- Risk summary
+- Validation/check strategy
+- Whether human approval is required
+
+The plan is not a diff. It must not claim that changes have been generated until
+the Git diff and proposed patch model exist.
 
 ## Run Lifecycle
 

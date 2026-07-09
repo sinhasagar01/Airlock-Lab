@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added an Agent Run detail workflow with selectable runs, provider/model
+  metadata, repository context, structured proposed plan, expected affected
+  files, risk summary, validation strategy, and approval handoff.
+- Added proposed change plan types and seeded mock plans in `packages/ai` to
+  prepare for future approval and diff attachment work without generating real
+  file edits.
+- Expanded desktop smoke coverage for agent run detail, proposed plan
+  rendering, run selection, disabled diff action, and approval handoff.
 - Added a Repository Intelligence view on the Repositories tab with repository
   overview, Git/index state, extension summary, important folders, key files,
   path-derived framework hints, and clear entry points into file browsing,

@@ -18,6 +18,10 @@ The app shell now follows a warm premium SaaS dashboard direction.
   state, index summary, important folders, key files, package/framework hints,
   saved repositories, and entry points into file browsing, reindexing, agent
   runs, and changes.
+- Agent Runs now uses a master/detail workflow with selectable runs, provider
+  and model metadata, repository context, a structured proposed plan surface,
+  expected affected files, risk summary, validation strategy, and approval
+  handoff.
 - Changes includes a no-local-changes review state, change-readiness feature
   blocks, repository status facts, and indexed-file browsing/file preview access.
 - Settings includes workspace settings rows and workspace maintenance actions.
@@ -46,5 +50,7 @@ The app shell now follows a warm premium SaaS dashboard direction.
 - Repository Intelligence empty state when no repository is selected.
 - Repository Intelligence unavailable states for package metadata that has not
   been read through a safe bounded path.
+- Agent run detail selected state, structured proposed plan state, linked
+  approval handoff, and disabled diff action until generated diffs exist.
 - Approval pending, approved, and rejected.
 - File preview loading, ready, binary, too-large, outside-repository, and unavailable.

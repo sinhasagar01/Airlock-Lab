@@ -16,6 +16,7 @@ It must keep product workflows independent from OMP or any specific provider.
 - Context package types
 - Agent definition types
 - Agent run orchestration primitives
+- Proposed change plan contracts
 - Tool call normalization
 - Provider error normalization
 
@@ -54,6 +55,8 @@ Expected exports:
 - `ContextPackage`
 - `AgentDefinition`
 - `AgentRunEvent`
+- `AgentRun`
+- `ProposedChangePlan`
 - Provider error categories
 
 ## Acceptance Criteria

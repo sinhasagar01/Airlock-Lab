@@ -3,10 +3,14 @@ import { open } from "@tauri-apps/plugin-dialog";
 import {
   createMockAgentRuns,
   createMockApprovalRequests,
+  createMockProposedChangePlans,
   createMockProvider,
   type ApprovalRequest,
   type ApprovalRequestStatus,
   type ApprovalRisk,
+  type AgentRun,
+  type ProposedChangeStepStatus,
+  type ProposedRisk,
 } from "@ai-dev/ai";
 import {
   createMockWorkspaceSnapshot,
@@ -67,6 +71,7 @@ const emptyRepository: RepositorySummary = {
   lastIndexedAt: null,
 };
 const agentRuns = createMockAgentRuns();
+const proposedChangePlans = createMockProposedChangePlans();
 const mockApprovalRequests = createMockApprovalRequests();
 const dashboardActivity = [
   {
@@ -260,6 +265,46 @@ function fileNameFromPath(path: string): string {
   return path.split("/").at(-1) ?? path;
 }
 
+function agentRunTone(status: AgentRun["status"]) {
+  if (status === "waiting_for_approval") {
+    return "warning";
+  }
+
+  if (status === "running" || status === "queued") {
+    return "agent";
+  }
+
+  return "success";
+}
+
+function stepStatusTone(status: ProposedChangeStepStatus) {
+  if (status === "completed") {
+    return "success";
+  }
+
+  if (status === "in_progress") {
+    return "agent";
+  }
+
+  if (status === "blocked") {
+    return "danger";
+  }
+
+  return "neutral";
+}
+
+function riskTone(level: ProposedRisk["level"]) {
+  if (level === "high") {
+    return "danger";
+  }
+
+  if (level === "medium") {
+    return "warning";
+  }
+
+  return "success";
+}
+
 type AppShellProps = {
   sidebar: ReactNode;
   children: ReactNode;
@@ -417,6 +462,7 @@ export function App() {
   const [fileSearch, setFileSearch] = useState("");
   const [extensionFilter, setExtensionFilter] = useState("all");
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
+  const [selectedAgentRunId, setSelectedAgentRunId] = useState(agentRuns[0].id);
   const [filePreview, setFilePreview] = useState<FileContentPreview | null>(
     null,
   );
@@ -436,7 +482,15 @@ export function App() {
     includeDocumentation: true,
   });
   const activeIndexingJob = indexingJobs[0];
-  const activeAgentRun = agentRuns[0];
+  const activeAgentRun =
+    agentRuns.find((run) => run.id === selectedAgentRunId) ?? agentRuns[0];
+  const activeProposedPlan =
+    proposedChangePlans.find((plan) => plan.runId === activeAgentRun.id) ??
+    null;
+  const activeRunApproval =
+    approvalRequests.find(
+      (approval) => approval.agentRunId === activeAgentRun.id,
+    ) ?? null;
   const pendingApprovalCount = approvalRequests.filter(
     (approval) => approval.status === "pending",
   ).length;
@@ -1456,99 +1510,325 @@ export function App() {
         ) : null}
 
         {activeSection === "agents" ? (
-          <section className="tab-dashboard-grid agents-dashboard">
-            <article className="overview-card tab-primary-card agent-active-card">
+          <section className="agent-run-workspace">
+            <aside className="overview-card agent-run-list-card">
+              <div className="overview-card__header">
+                <div>
+                  <p className="card-eyebrow">Run List</p>
+                  <h2>Recent agent runs</h2>
+                </div>
+                <StatusPill tone="agent" size="sm">
+                  {agentRuns.length} runs
+                </StatusPill>
+              </div>
+
+              <div className="agent-run-list">
+                {agentRuns.map((run) => {
+                  const runApproval = approvalRequests.find(
+                    (approval) => approval.agentRunId === run.id,
+                  );
+
+                  return (
+                    <button
+                      aria-current={
+                        activeAgentRun.id === run.id ? "true" : undefined
+                      }
+                      aria-label={`Open agent run ${run.title}`}
+                      className="agent-run-list-item"
+                      key={run.id}
+                      onClick={() => setSelectedAgentRunId(run.id)}
+                      type="button"
+                    >
+                      <IconBadge icon="agent" tone="agent" size="sm" />
+                      <span>
+                        <strong>{run.title}</strong>
+                        <small>
+                          {run.repository} · {provider.displayName} · {run.model}
+                        </small>
+                      </span>
+                      <StatusPill
+                        tone={agentRunTone(run.status)}
+                        size="sm"
+                        showDot={false}
+                      >
+                        {run.status.replaceAll("_", " ")}
+                      </StatusPill>
+                      <small>
+                        {run.startedAt} ·{" "}
+                        {runApproval ? "approval required" : "no approval"}
+                      </small>
+                    </button>
+                  );
+                })}
+              </div>
+            </aside>
+
+            <article className="overview-card agent-run-detail-card">
               <div className="overview-card__header">
                 <div>
                   <p className="card-eyebrow card-eyebrow--dot">
-                    Active Run
+                    Selected Agent Run
                   </p>
                   <h2>{activeAgentRun.title}</h2>
                 </div>
-                <StatusPill
-                  tone={
-                    activeAgentRun.status === "waiting_for_approval"
-                      ? "warning"
-                      : "agent"
-                  }
-                >
+                <StatusPill tone={agentRunTone(activeAgentRun.status)}>
                   {activeAgentRun.status.replaceAll("_", " ")}
                 </StatusPill>
               </div>
 
-              <p className="tab-card-copy">{activeAgentRun.nextStep}</p>
+              <p className="tab-card-copy">{activeAgentRun.taskSummary}</p>
 
-              <dl className="tab-fact-grid agent-fact-grid">
+              <dl className="tab-fact-grid agent-detail-fact-grid">
+                <div>
+                  <dt>Provider / Model</dt>
+                  <dd>
+                    {provider.displayName} · {activeAgentRun.model}
+                  </dd>
+                </div>
                 <div>
                   <dt>Repository</dt>
                   <dd>{activeAgentRun.repository}</dd>
-                </div>
-                <div>
-                  <dt>Provider</dt>
-                  <dd>{provider.displayName}</dd>
                 </div>
                 <div>
                   <dt>Branch</dt>
                   <dd>{activeRepository.branch}</dd>
                 </div>
                 <div>
-                  <dt>Approval State</dt>
-                  <dd>{pendingApprovalCount} pending</dd>
+                  <dt>Started / Elapsed</dt>
+                  <dd>
+                    {activeAgentRun.startedAt} · {activeAgentRun.elapsed}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Confidence</dt>
+                  <dd>{activeAgentRun.confidence}</dd>
+                </div>
+                <div>
+                  <dt>Approval Requirement</dt>
+                  <dd>
+                    {activeAgentRun.approvalRequired
+                      ? "Human approval required"
+                      : "No approval required"}
+                  </dd>
                 </div>
               </dl>
 
-              <div className="agent-progress-card">
-                <div>
-                  <span>Elapsed</span>
-                  <strong>8m</strong>
-                </div>
-                <div>
-                  <span>Progress</span>
-                  <strong>Waiting for review</strong>
-                </div>
-              </div>
-            </article>
-
-            <aside className="tab-side-stack">
-              <article className="overview-card provider-context-card">
+              <div className="agent-detail-section provider-context-card">
                 <div className="overview-card__header">
                   <p className="card-eyebrow">Provider Context</p>
                   <StatusPill tone="success" size="sm">
-                    connected
+                    {provider.status}
                   </StatusPill>
                 </div>
-                <h3>{provider.displayName}</h3>
                 <p>
                   Structured-output mock provider is connected for local
-                  planning, approval, and safe implementation dry-runs.
+                  planning, approval, and safe implementation dry-runs. This run
+                  has not produced real Git diffs yet.
                 </p>
+              </div>
+            </article>
+
+            <article className="overview-card proposed-plan-card">
+              <div className="overview-card__header">
+                <div>
+                  <p className="card-eyebrow">Proposed Plan</p>
+                  <h2>Structured implementation plan</h2>
+                </div>
+                <StatusPill
+                  tone={activeProposedPlan?.approvalRequired ? "warning" : "success"}
+                >
+                  {activeProposedPlan?.approvalRequired
+                    ? "approval required"
+                    : "approval not required"}
+                </StatusPill>
+              </div>
+
+              <p className="tab-card-copy">
+                {activeProposedPlan?.summary ??
+                  "No structured proposed plan is available for this run yet."}
+              </p>
+
+              {activeProposedPlan ? (
+                <div className="proposed-plan-grid">
+                  <section className="plan-section plan-steps-section">
+                    <div className="plan-section__header">
+                      <IconBadge icon="index" tone="context" size="md" />
+                      <div>
+                        <p className="card-eyebrow">Implementation Steps</p>
+                        <h3>Ordered plan</h3>
+                      </div>
+                    </div>
+                    <ol className="plan-step-list">
+                      {activeProposedPlan.steps.map((step) => (
+                        <li key={step.id}>
+                          <StatusPill
+                            tone={stepStatusTone(step.status)}
+                            size="sm"
+                            showDot={false}
+                          >
+                            {step.status.replaceAll("_", " ")}
+                          </StatusPill>
+                          <div>
+                            <strong>{step.title}</strong>
+                            <p>{step.description}</p>
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                  </section>
+
+                  <section className="plan-section">
+                    <div className="plan-section__header">
+                      <IconBadge icon="file" tone="accent" size="md" />
+                      <div>
+                        <p className="card-eyebrow">Expected Files</p>
+                        <h3>Affected files</h3>
+                      </div>
+                    </div>
+                    <div className="plan-file-list">
+                      {activeProposedPlan.affectedFiles.map((file) => (
+                        <div className="plan-file-item" key={file.path}>
+                          <StatusPill tone="neutral" size="sm" showDot={false}>
+                            {file.changeType}
+                          </StatusPill>
+                          <div>
+                            <strong>{file.path}</strong>
+                            <span>{file.reason}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="plan-section">
+                    <div className="plan-section__header">
+                      <IconBadge icon="approval" tone="warning" size="md" />
+                      <div>
+                        <p className="card-eyebrow">Risk Summary</p>
+                        <h3>Known risks</h3>
+                      </div>
+                    </div>
+                    <div className="plan-risk-list">
+                      {activeProposedPlan.risks.map((risk) => (
+                        <div className="plan-risk-item" key={risk.title}>
+                          <StatusPill
+                            tone={riskTone(risk.level)}
+                            size="sm"
+                            showDot={false}
+                          >
+                            {risk.level}
+                          </StatusPill>
+                          <div>
+                            <strong>{risk.title}</strong>
+                            <span>{risk.description}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="plan-section">
+                    <div className="plan-section__header">
+                      <IconBadge icon="search" tone="agent" size="md" />
+                      <div>
+                        <p className="card-eyebrow">Validation</p>
+                        <h3>Check strategy</h3>
+                      </div>
+                    </div>
+                    <div className="plan-validation-list">
+                      {activeProposedPlan.validation.map((check) => (
+                        <div className="plan-validation-item" key={check.label}>
+                          <Icon name="approval" size="sm" />
+                          <span>{check.label}</span>
+                          <StatusPill tone="neutral" size="sm" showDot={false}>
+                            {check.status.replaceAll("_", " ")}
+                          </StatusPill>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                </div>
+              ) : null}
+            </article>
+
+            <aside className="agent-run-side-column">
+              <article className="overview-card run-repository-context-card">
+                <div className="overview-card__header">
+                  <div>
+                    <p className="card-eyebrow">Repository Context</p>
+                    <h3>{activeRepository.name}</h3>
+                  </div>
+                  <StatusPill tone={repositoryTone(activeRepository.status)} size="sm">
+                    {activeRepository.status.replace("_", " ")}
+                  </StatusPill>
+                </div>
+                <dl className="agent-context-facts">
+                  <div>
+                    <dt>Indexed files</dt>
+                    <dd>{repositoryIntelligence.totalIndexedFiles}</dd>
+                  </div>
+                  <div>
+                    <dt>Open changes</dt>
+                    <dd>{activeRepository.openChanges}</dd>
+                  </div>
+                  <div>
+                    <dt>Key folders</dt>
+                    <dd>
+                      {repositoryIntelligence.projectFolders
+                        .slice(0, 3)
+                        .map((folder) => folder.name)
+                        .join(", ") || "Not available yet"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Key files</dt>
+                    <dd>
+                      {repositoryIntelligence.keyFiles
+                        .slice(0, 3)
+                        .map((file) => file.name)
+                        .join(", ") || "Not available yet"}
+                    </dd>
+                  </div>
+                </dl>
               </article>
 
-              <article className="overview-card recent-runs-card">
-                <p className="card-eyebrow">Recent Runs</p>
-                <div className="run-list">
-                  {agentRuns.map((run) => (
-                    <div className="run-list-item" key={run.id}>
-                      <Icon name="agent" size="sm" />
-                      <div>
-                        <strong>{run.title}</strong>
-                        <span>{run.nextStep}</span>
-                      </div>
-                      <StatusPill
-                        tone={
-                          run.status === "waiting_for_approval"
-                            ? "warning"
-                            : run.status === "running"
-                              ? "agent"
-                              : "success"
-                        }
-                        size="sm"
-                        showDot={false}
-                      >
-                        {run.status.replaceAll("_", " ")}
-                      </StatusPill>
-                    </div>
-                  ))}
+              <article className="overview-card approval-handoff-card">
+                <div className="overview-card__header">
+                  <div>
+                    <p className="card-eyebrow">Approval Handoff</p>
+                    <h3>
+                      {activeRunApproval
+                        ? activeRunApproval.title
+                        : "No linked approval yet"}
+                    </h3>
+                  </div>
+                  <StatusPill
+                    tone={
+                      activeRunApproval
+                        ? approvalStatusTone(activeRunApproval.status)
+                        : "neutral"
+                    }
+                    size="sm"
+                  >
+                    {activeRunApproval?.status ?? "planned"}
+                  </StatusPill>
+                </div>
+                <p>
+                  {activeRunApproval
+                    ? activeRunApproval.summary
+                    : "Approval review will attach here when the run produces a reviewable request."}
+                </p>
+                <div className="approval-handoff-actions">
+                  <PrimaryButton
+                    disabled={!activeRunApproval}
+                    icon="approval"
+                    onClick={() => setActiveSection("approvals")}
+                  >
+                    Review approval
+                  </PrimaryButton>
+                  <SecondaryButton disabled icon="changes">
+                    Diffs not generated yet
+                  </SecondaryButton>
                 </div>
               </article>
             </aside>
