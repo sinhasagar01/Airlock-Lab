@@ -5,3 +5,4 @@ Feature docs describe implemented product behavior, user-visible states, and saf
 - [File Preview](file-preview.md)
 - [Repository Indexing Feature](repository-indexing.md)
 - [Git Status Feature](git-status.md)
+- [Proposed Changes Feature](proposed-changes.md)

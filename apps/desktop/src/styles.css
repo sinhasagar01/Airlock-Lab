@@ -1919,6 +1919,7 @@ dt {
 .approval-plan-review-card,
 .approval-repository-context-card,
 .approval-diff-review-card,
+.patch-artifact-card,
 .diff-placeholder-card {
   padding: 26px;
 }
@@ -2032,6 +2033,7 @@ dt {
 .approval-decision-card h3,
 .approval-repository-context-card h3,
 .approval-diff-review-card h3,
+.patch-artifact-card h3,
 .diff-placeholder-card h3 {
   color: var(--color-text-primary);
   font-size: 19px;
@@ -2042,6 +2044,7 @@ dt {
 
 .approval-decision-card p,
 .approval-diff-review-card > p,
+.patch-artifact-card > p,
 .diff-placeholder-card p {
   color: var(--color-text-secondary);
   font-size: 13px;
@@ -2078,6 +2081,86 @@ dt {
 .approval-diff-review-card {
   display: grid;
   gap: 18px;
+}
+
+.patch-artifact-card {
+  display: grid;
+  gap: 18px;
+}
+
+.patch-artifact-copy {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 520;
+  line-height: 1.55;
+  margin: -4px 0 0;
+}
+
+.patch-artifact-list {
+  display: grid;
+  gap: 10px;
+}
+
+.patch-artifact-item {
+  align-items: center;
+  background: #fbfdff;
+  border: 1px solid #e4eaf1;
+  border-radius: var(--radius-lg);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: max-content minmax(0, 1fr);
+  min-height: 72px;
+  padding: 14px;
+}
+
+.patch-artifact-item strong,
+.patch-artifact-item span {
+  display: block;
+  min-width: 0;
+}
+
+.patch-artifact-item strong {
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 740;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.patch-artifact-item span {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 540;
+  line-height: 1.45;
+  margin-top: 5px;
+}
+
+.patch-artifact-empty {
+  align-items: center;
+  background: #fbfdff;
+  border: 1px dashed #dfe7ef;
+  border-radius: var(--radius-lg);
+  display: grid;
+  gap: 14px;
+  grid-template-columns: max-content minmax(0, 1fr);
+  min-height: 128px;
+  padding: 18px;
+}
+
+.patch-artifact-empty h4 {
+  color: var(--color-text-primary);
+  font-size: 15px;
+  font-weight: 760;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.patch-artifact-empty p {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 520;
+  line-height: 1.55;
+  margin-top: 7px;
 }
 
 .diff-review-summary {

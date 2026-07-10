@@ -126,6 +126,52 @@ export type PersistedProposedChange = {
   updatedAt: string;
 };
 
+export function createProposedPatchArtifactPlaceholder(
+  proposedChangeId: string,
+  file: ProposedChangeFile,
+): ProposedPatchArtifact {
+  return {
+    id: `${file.id}-patch-artifact`,
+    proposedChangeId,
+    filePath: file.path,
+    status: file.patchArtifactStatus,
+    isBinary: false,
+    isTooLarge: false,
+  };
+}
+
+export function ensureProposedPatchArtifacts(
+  change: PersistedProposedChange,
+): PersistedProposedChange {
+  const existingArtifactsByPath = new Map(
+    change.patchArtifacts.map((artifact) => [artifact.filePath, artifact]),
+  );
+  const patchArtifacts = change.files.map((file) => {
+    const existingArtifact = existingArtifactsByPath.get(file.path);
+
+    if (existingArtifact) {
+      return existingArtifact;
+    }
+
+    return createProposedPatchArtifactPlaceholder(change.id, file);
+  });
+
+  return {
+    ...change,
+    files: change.files.map((file) => {
+      const artifact = patchArtifacts.find(
+        (candidate) => candidate.filePath === file.path,
+      );
+
+      return {
+        ...file,
+        patchArtifactStatus: artifact?.status ?? file.patchArtifactStatus,
+      };
+    }),
+    patchArtifacts,
+  };
+}
+
 export type ApprovalRequestStatus = "pending" | "approved" | "rejected";
 
 export type ApprovalRisk = "low" | "medium" | "high";
@@ -356,7 +402,7 @@ export function createMockProposedChangePlans(): ProposedChangePlan[] {
 }
 
 export function createMockPersistedProposedChanges(): PersistedProposedChange[] {
-  return [
+  const changes: PersistedProposedChange[] = [
     {
       id: "proposal-mvp-shell",
       runId: "run-mvp-shell",
@@ -422,4 +468,6 @@ export function createMockPersistedProposedChanges(): PersistedProposedChange[] 
       updatedAt: "Today, 10:46",
     },
   ];
+
+  return changes.map(ensureProposedPatchArtifacts);
 }

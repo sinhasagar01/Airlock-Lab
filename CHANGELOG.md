@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added generated patch artifact placeholder records for persisted proposed
+  changes, with normalization so every proposed file has a `not_generated`
+  artifact slot.
+- Added Agent Runs and Approval Review UI sections that render generated patch
+  artifact placeholders separately from matching local Git diffs.
+- Updated tests and docs to preserve the distinction between proposed files,
+  generated patch artifacts, local Git diffs, and approval decisions.
 - Added a persisted proposed-change model that links agent runs, approval
   requests, repositories, proposed files, and future patch artifact records.
 - Added SQLite storage for proposed changes and seed-on-empty hydration in the

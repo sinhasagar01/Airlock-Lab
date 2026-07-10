@@ -3,6 +3,7 @@ import type {
   PersistedProposedChange,
   ProposedChangeStatus,
 } from "@ai-dev/ai";
+import { ensureProposedPatchArtifacts } from "@ai-dev/ai";
 
 const DATABASE_URL = "sqlite:workspace.db";
 
@@ -46,7 +47,7 @@ async function ensureProposedChangesTable(database: Database) {
 }
 
 function rowToProposedChange(row: ProposedChangeRow): PersistedProposedChange {
-  return {
+  return ensureProposedPatchArtifacts({
     id: row.id,
     runId: row.run_id,
     approvalRequestId: row.approval_request_id ?? undefined,
@@ -60,7 +61,7 @@ function rowToProposedChange(row: ProposedChangeRow): PersistedProposedChange {
     ) as PersistedProposedChange["patchArtifacts"],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-  };
+  });
 }
 
 export async function loadProposedChanges(): Promise<PersistedProposedChange[]> {
@@ -77,6 +78,7 @@ export async function loadProposedChanges(): Promise<PersistedProposedChange[]> 
 export async function saveProposedChange(change: PersistedProposedChange) {
   const database = await getDatabase();
   await ensureProposedChangesTable(database);
+  const normalizedChange = ensureProposedPatchArtifacts(change);
 
   await database.execute(
     `
@@ -106,17 +108,17 @@ export async function saveProposedChange(change: PersistedProposedChange) {
         updated_at = excluded.updated_at
     `,
     [
-      change.id,
-      change.runId,
-      change.approvalRequestId ?? null,
-      change.repositoryId,
-      change.title,
-      change.summary,
-      change.status,
-      JSON.stringify(change.files),
-      JSON.stringify(change.patchArtifacts),
-      change.createdAt,
-      change.updatedAt,
+      normalizedChange.id,
+      normalizedChange.runId,
+      normalizedChange.approvalRequestId ?? null,
+      normalizedChange.repositoryId,
+      normalizedChange.title,
+      normalizedChange.summary,
+      normalizedChange.status,
+      JSON.stringify(normalizedChange.files),
+      JSON.stringify(normalizedChange.patchArtifacts),
+      normalizedChange.createdAt,
+      normalizedChange.updatedAt,
     ],
   );
 }

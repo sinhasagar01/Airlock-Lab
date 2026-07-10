@@ -6,6 +6,7 @@ import {
   createMockPersistedProposedChanges,
   createMockProposedChangePlans,
   createMockProvider,
+  ensureProposedPatchArtifacts,
   type ApprovalRequest,
   type ApprovalRequestStatus,
   type ApprovalRisk,
@@ -13,6 +14,7 @@ import {
   type PersistedProposedChange,
   type ProposedChangeFile,
   type ProposedChangeFileOperation,
+  type ProposedPatchArtifact,
   type ProposedChangeStepStatus,
   type ProposedRisk,
 } from "@ai-dev/ai";
@@ -350,7 +352,7 @@ function proposedChangeStatusTone(status: PersistedProposedChange["status"]) {
   return "neutral";
 }
 
-function patchArtifactTone(status: ProposedChangeFile["patchArtifactStatus"]) {
+function patchArtifactTone(status: ProposedPatchArtifact["status"]) {
   if (status === "generated") {
     return "success";
   }
@@ -552,6 +554,53 @@ function GitDiffPreviewPanel({
         </pre>
       )}
     </section>
+  );
+}
+
+type PatchArtifactListProps = {
+  artifacts: ProposedPatchArtifact[];
+};
+
+function PatchArtifactList({ artifacts }: PatchArtifactListProps) {
+  if (artifacts.length === 0) {
+    return (
+      <div className="patch-artifact-empty">
+        <IconBadge icon="changes" tone="neutral" size="md" />
+        <div>
+          <h4>No patch artifact records yet</h4>
+          <p>
+            Placeholder artifacts will appear here before any generated patch
+            content is available.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="patch-artifact-list" aria-label="Generated patch artifacts">
+      {artifacts.map((artifact) => (
+        <div className="patch-artifact-item" key={artifact.id}>
+          <StatusPill
+            tone={patchArtifactTone(artifact.status)}
+            size="sm"
+            showDot={false}
+          >
+            {artifact.status.replaceAll("_", " ")}
+          </StatusPill>
+          <div>
+            <strong>{artifact.filePath}</strong>
+            <span>
+              {artifact.status === "generated"
+                ? `${artifact.additions ?? 0} additions · ${
+                    artifact.deletions ?? 0
+                  } deletions`
+                : "Generated patch artifact placeholder only"}
+            </span>
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -1110,7 +1159,11 @@ export function App() {
           await saveApprovalRequests(mockApprovalRequests);
         }
         if (savedProposedChanges.length > 0) {
-          setPersistedProposedChanges(savedProposedChanges);
+          const normalizedProposedChanges = savedProposedChanges.map(
+            ensureProposedPatchArtifacts,
+          );
+          setPersistedProposedChanges(normalizedProposedChanges);
+          await saveProposedChanges(normalizedProposedChanges);
         } else {
           setPersistedProposedChanges(mockProposedChanges);
           await saveProposedChanges(mockProposedChanges);
@@ -2295,6 +2348,26 @@ export function App() {
 
                   <section className="plan-section">
                     <div className="plan-section__header">
+                      <IconBadge icon="changes" tone="agent" size="md" />
+                      <div>
+                        <p className="card-eyebrow">Generated Patch Artifacts</p>
+                        <h3>Artifact placeholders</h3>
+                      </div>
+                    </div>
+                    <p className="patch-artifact-copy">
+                      These records reserve generated patch slots for each
+                      proposed file. No patch content has been generated or
+                      applied.
+                    </p>
+                    <PatchArtifactList
+                      artifacts={
+                        activePersistedProposedChange?.patchArtifacts ?? []
+                      }
+                    />
+                  </section>
+
+                  <section className="plan-section">
+                    <div className="plan-section__header">
                       <IconBadge icon="approval" tone="warning" size="md" />
                       <div>
                         <p className="card-eyebrow">Risk Summary</p>
@@ -2774,6 +2847,29 @@ export function App() {
                       <dd>{activeRepository.branch}</dd>
                     </div>
                   </dl>
+                </article>
+
+                <article className="overview-card patch-artifact-card">
+                  <div className="overview-card__header">
+                    <div>
+                      <p className="card-eyebrow">Generated Patch Artifacts</p>
+                      <h3>Patch artifact placeholders</h3>
+                    </div>
+                    <StatusPill tone="neutral" size="sm" showDot={false}>
+                      {selectedApprovalProposedChange?.patchArtifacts.length ?? 0}{" "}
+                      records
+                    </StatusPill>
+                  </div>
+                  <p>
+                    These records are reserved for future generated diffs. They
+                    are not local Git diffs and no patch has been written or
+                    applied.
+                  </p>
+                  <PatchArtifactList
+                    artifacts={
+                      selectedApprovalProposedChange?.patchArtifacts ?? []
+                    }
+                  />
                 </article>
 
                 <article className="overview-card approval-diff-review-card">

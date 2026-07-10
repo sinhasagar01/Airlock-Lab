@@ -20,12 +20,14 @@ The app shell now follows a warm premium SaaS dashboard direction.
   runs, and changes.
 - Agent Runs now uses a master/detail workflow with selectable runs, provider
   and model metadata, repository context, a structured proposed plan surface,
-  expected affected files, risk summary, validation strategy, and approval
-  handoff.
+  persisted proposal status, expected affected files, patch artifact state, risk
+  summary, validation strategy, generated patch artifact placeholders, and
+  approval handoff.
 - Approvals now uses a master/detail review workflow with selectable approval
   requests, linked agent run metadata, proposed plan review, affected files,
-  risk and validation sections, repository context, matching local Git diff
-  review, and decision controls.
+  persisted proposal status, risk and validation sections, repository context,
+  generated patch artifact placeholders, matching local Git diff review, patch
+  artifact state, and decision controls.
 - Changes includes read-only Git status, clean/dirty state,
   staged/unstaged/untracked counts, selectable changed-file rows, local Git diff
   preview, manual refresh, and indexed-file browsing/file preview access.
@@ -56,10 +58,13 @@ The app shell now follows a warm premium SaaS dashboard direction.
 - Repository Intelligence unavailable states for package metadata that has not
   been read through a safe bounded path.
 - Agent run detail selected state, structured proposed plan state, linked
-  approval handoff, and disabled diff action until generated diffs exist.
+  persisted proposed-change state, approval handoff, and disabled diff action
+  until generated diffs exist.
+- Generated patch artifact placeholder states separate from local Git diff
+  states.
 - Approval queue selected state, approval detail, proposed plan review, matching
   local-diff availability, selected approval diff, missing local diff, and
-  approve/reject decision states.
+  approve/reject decision states that update the linked proposed-change status.
 - Git status loading, clean, changed, not-a-Git-repository, and unavailable
   states.
 - Local diff loading, text diff, untracked, binary, too-large, unavailable, and

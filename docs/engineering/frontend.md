@@ -22,11 +22,19 @@ The desktop MVP uses Tauri, React, TypeScript, and Vite. Styling is plain CSS wi
 - Agent run detail uses `packages/ai` contracts for `AgentRun` and
   `ProposedChangePlan`. Keep proposed plans separate from real Git diffs until
   the diff model and approval review attachment are explicitly implemented.
+- Persisted proposed changes use `PersistedProposedChange` from `packages/ai`
+  and `apps/desktop/src/storage/proposedChangeStore.ts` for SQLite storage.
+  This is durable review metadata only; it does not generate, apply, or write
+  patches.
+- Proposed changes are normalized through `ensureProposedPatchArtifacts` so
+  every proposed file has a placeholder patch artifact record, usually
+  `not_generated`, before any generated diff content exists.
 - Approval review reuses the linked `AgentRun`, `ApprovalRequest`, and
-  `ProposedChangePlan` state. It may match proposed affected files to local Git
-  status paths and render read-only local diffs through `loadGitFileDiff`.
-  Decision buttons may update approval status, but they must not execute
-  patches, write files, or run Git commands.
+  `ProposedChangePlan` state plus the linked `PersistedProposedChange` record.
+  It may match proposed affected files to local Git status paths and render
+  read-only local diffs through `loadGitFileDiff`. Decision buttons may update
+  approval status and the linked proposed-change status, but they must not
+  execute patches, write files, or run Git commands.
 - Git status uses the shared `GitStatusSummary` model in `packages/core` and the
   `loadGitStatusSummary` Tauri wrapper. It must remain read-only and bounded to
   the selected repository.
@@ -56,6 +64,10 @@ The desktop MVP uses Tauri, React, TypeScript, and Vite. Styling is plain CSS wi
 - Agent Runs may show expected affected files, plan steps, risks, validation,
   and approval handoff from seeded/structured run data. It must not imply real
   generated diffs or file writes before those systems exist.
+- Agent Runs should prefer persisted proposed-change status and file artifact
+  state when present, while continuing to render the structured plan for
+  explanation. Generated patch artifacts must be rendered separately from
+  matching local Git diffs.
 - Approvals may present matching local repository diffs for affected files, but
   generated patch diffs remain planned until approval-specific diff attachment
   exists. Do not label local Git diffs as agent-generated diffs.

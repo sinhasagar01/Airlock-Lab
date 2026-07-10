@@ -575,10 +575,15 @@ describe("App smoke tests", () => {
     expect(screen.getByText("Affected files")).toBeInTheDocument();
     expect(screen.getByText("Known risks")).toBeInTheDocument();
     expect(screen.getByText("Check strategy")).toBeInTheDocument();
-    expect(screen.getByText("apps/desktop/src/App.tsx")).toBeInTheDocument();
+    expect(screen.getAllByText("apps/desktop/src/App.tsx").length).toBeGreaterThan(0);
     expect(screen.getByText("Proposal Record")).toBeInTheDocument();
     expect(screen.getByText("proposal-mvp-shell")).toBeInTheDocument();
     expect(screen.getAllByText("ready for review").length).toBeGreaterThan(0);
+    expect(screen.getByText("Generated Patch Artifacts")).toBeInTheDocument();
+    expect(screen.getByText("Artifact placeholders")).toBeInTheDocument();
+    expect(
+      screen.getByText(/No patch content has been generated or applied/),
+    ).toBeInTheDocument();
     expect(screen.getAllByText("not generated").length).toBeGreaterThan(0);
     expect(screen.getByText(/real Git diffs yet/)).toBeInTheDocument();
     expect(screen.getByText(String(defaultFiles.length))).toBeInTheDocument();
@@ -613,8 +618,8 @@ describe("App smoke tests", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByText(/mock-context-v1/).length).toBeGreaterThan(0);
     expect(
-      screen.getByText("packages/indexing/src/index.ts"),
-    ).toBeInTheDocument();
+      screen.getAllByText("packages/indexing/src/index.ts").length,
+    ).toBeGreaterThan(0);
     expect(
       screen.getByText("Approve indexing job persistence follow-up"),
     ).toBeInTheDocument();
@@ -645,6 +650,10 @@ describe("App smoke tests", () => {
     expect(screen.getByText("Plan attached to approval")).toBeInTheDocument();
     expect(screen.getByText("Proposal Status")).toBeInTheDocument();
     expect(screen.getByText("Patch Artifacts")).toBeInTheDocument();
+    expect(screen.getByText("Patch artifact placeholders")).toBeInTheDocument();
+    expect(
+      screen.getByText(/They are not local Git diffs and no patch has been written/),
+    ).toBeInTheDocument();
     expect(screen.getAllByText("ready for review").length).toBeGreaterThan(0);
     expect(screen.getAllByText("not generated").length).toBeGreaterThan(0);
     expect(screen.getByText("Ordered plan")).toBeInTheDocument();

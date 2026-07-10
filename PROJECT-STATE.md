@@ -2,7 +2,7 @@
 
 ## Current MVP State
 
-The desktop app supports local repository selection, persisted repositories, Git metadata, read-only Git status and local diff preview, approval-attached matching local diffs, persisted indexing jobs, persisted proposed changes, indexed file facts, repository intelligence summaries, inspectable agent run detail with structured proposed plans, approval detail review, approval request persistence, indexed-file browsing, and safe file content previews.
+The desktop app supports local repository selection, persisted repositories, Git metadata, read-only Git status and local diff preview, approval-attached matching local diffs, persisted indexing jobs, persisted proposed changes with generated patch artifact placeholders, indexed file facts, repository intelligence summaries, inspectable agent run detail with structured proposed plans, approval detail review, approval request persistence, indexed-file browsing, and safe file content previews.
 
 The desktop app now has an initial Vitest/jsdom smoke suite covering six-tab
 rendering, sidebar navigation, approval actions, pending approval count updates,
@@ -39,14 +39,16 @@ source of truth.
 - Agent Runs now includes a master/detail workflow with selectable runs,
   provider/model metadata, repository context, structured proposed plans,
   persisted proposed-change status, expected affected files, patch artifact
-  state, risk summaries, validation strategy, and approval handoff while clearly
-  marking that generated patch diffs are not available yet.
+  state, generated patch artifact placeholders, risk summaries, validation
+  strategy, and approval handoff while clearly marking that generated patch
+  diffs are not available yet.
 - Approvals now includes a master/detail review workflow with selectable
   approval requests, linked agent run metadata, proposed plan review, affected
   files, persisted proposed-change status, risk and validation sections,
-  repository context, decision controls, persisted approve/reject updates that
-  also update linked proposed-change status, and matching local Git diff review
-  for affected files that appear in Git status.
+  repository context, generated patch artifact placeholders, decision controls,
+  persisted approve/reject updates that also update linked proposed-change
+  status, and matching local Git diff review for affected files that appear in
+  Git status.
 - Changes now presents real read-only Git status with clean/dirty state,
   staged/unstaged/untracked counts, changed-file rows, manual refresh,
   repository status facts, selectable file rows, local Git diff preview, and the
@@ -59,4 +61,4 @@ source of truth.
 
 ## Active Safety Boundary
 
-Safe file preview remains local-first and path-bounded to the selected repository. Repository Intelligence prefers persisted/indexed facts over new filesystem reads. Git status, local diff preview, and approval-attached matching local diffs are read-only, use fixed native Git arguments, validate repository-relative paths, and do not expose arbitrary Git execution. Persisted proposed changes are durable review metadata only. Agent run and approval detail do not write files, execute patches, stage, reset, checkout, commit, or generate patch diffs. Visual changes do not weaken size limits, binary handling, or outside-repository blocking.
+Safe file preview remains local-first and path-bounded to the selected repository. Repository Intelligence prefers persisted/indexed facts over new filesystem reads. Git status, local diff preview, and approval-attached matching local diffs are read-only, use fixed native Git arguments, validate repository-relative paths, and do not expose arbitrary Git execution. Persisted proposed changes and generated patch artifact placeholders are durable review metadata only. Agent run and approval detail do not write files, execute patches, stage, reset, checkout, commit, or generate patch diffs. Visual changes do not weaken size limits, binary handling, or outside-repository blocking.
