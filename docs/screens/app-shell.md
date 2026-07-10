@@ -18,6 +18,8 @@ The app shell now follows a warm premium SaaS dashboard direction.
   state, index summary, important folders, key files, package/framework hints,
   saved repositories, and entry points into file browsing, reindexing, agent
   runs, and changes.
+- Repositories also exposes a `Demo workflow` card that continues the seeded
+  MVP review path into the connected agent run and approval request.
 - Agent Runs now uses a master/detail workflow with selectable runs, provider
   and model metadata, repository context, a structured proposed plan surface,
   persisted proposal status, expected affected files, patch artifact state, risk
@@ -30,7 +32,8 @@ The app shell now follows a warm premium SaaS dashboard direction.
   artifact state, and decision controls.
 - Changes includes read-only Git status, clean/dirty state,
   staged/unstaged/untracked counts, selectable changed-file rows, local Git diff
-  preview, manual refresh, and indexed-file browsing/file preview access.
+  preview, manual refresh, approval-match indicators for exact proposed-file
+  path matches, and indexed-file browsing/file preview access.
 - Settings includes workspace settings rows and workspace maintenance actions.
 
 ## Visual System
@@ -71,3 +74,5 @@ The app shell now follows a warm premium SaaS dashboard direction.
   no-diff-content states.
 - Approval pending, approved, and rejected.
 - File preview loading, ready, binary, too-large, outside-repository, and unavailable.
+- Demo workflow available, connected-agent-run selected, connected approval
+  selected, matching local diff available, and no matching local diff yet.

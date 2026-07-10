@@ -128,6 +128,11 @@ Approving or rejecting in the MVP updates approval state and the linked
 persisted proposed-change status only. It must not write files, execute patches,
 run Git commands, or perform external side effects.
 
+The seeded demo approval, `approval-provider-rfc`, is linked to the seeded
+agent run and proposed change so the user can traverse the MVP review path. It
+still follows the same boundary: approval changes durable review status only and
+does not apply or generate code.
+
 ## Permission Scope
 
 Approvals should be scoped.

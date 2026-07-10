@@ -2,12 +2,13 @@
 
 ## Current MVP State
 
-The desktop app supports local repository selection, persisted repositories, Git metadata, read-only Git status and local diff preview, approval-attached matching local diffs, persisted indexing jobs, persisted proposed changes with generated patch artifact records and detail states, indexed file facts, repository intelligence summaries, inspectable agent run detail with structured proposed plans, approval detail review, approval request persistence, indexed-file browsing, and safe file content previews.
+The desktop app supports local repository selection, persisted repositories, Git metadata, read-only Git status and local diff preview, approval-attached matching local diffs, persisted indexing jobs, persisted proposed changes with generated patch artifact records and detail states, indexed file facts, repository intelligence summaries, inspectable agent run detail with structured proposed plans, approval detail review, approval request persistence, a connected safe demo workflow seed, indexed-file browsing, and safe file content previews.
 
 The desktop app now has an initial Vitest/jsdom smoke suite covering six-tab
 rendering, sidebar navigation, approval actions, pending approval count updates,
 visible safe file preview states, outside-repository blocking, and selected-file
-preview updates.
+preview updates. It also covers the seeded demo workflow path from Repository
+Intelligence to Agent Runs, Approval Review, and Changes.
 
 ## Current UI Direction
 
@@ -36,6 +37,8 @@ source of truth.
   repository overview, Git/index state, top file extensions, important folders,
   key files, and path-based framework hints from safe repository metadata and
   indexed file facts.
+- Repository Intelligence now includes a `Demo workflow` card that opens the
+  seeded connected agent run and approval review path.
 - Agent Runs now includes a master/detail workflow with selectable runs,
   provider/model metadata, repository context, structured proposed plans,
   persisted proposed-change status, expected affected files, patch artifact
@@ -51,8 +54,9 @@ source of truth.
   Git status.
 - Changes now presents real read-only Git status with clean/dirty state,
   staged/unstaged/untracked counts, changed-file rows, manual refresh,
-  repository status facts, selectable file rows, local Git diff preview, and the
-  full indexed-file browser.
+  repository status facts, selectable file rows, approval-match indicators for
+  exact proposed-file path matches, local Git diff preview, and the full
+  indexed-file browser.
 - The indexed-file browser and preview panel now use the dashboard design system
   with premium file rows, selected-file metadata, designed state panels, and a
   polished code preview frame.
@@ -61,4 +65,4 @@ source of truth.
 
 ## Active Safety Boundary
 
-Safe file preview remains local-first and path-bounded to the selected repository. Repository Intelligence prefers persisted/indexed facts over new filesystem reads. Git status, local diff preview, and approval-attached matching local diffs are read-only, use fixed native Git arguments, validate repository-relative paths, and do not expose arbitrary Git execution. Persisted proposed changes and generated patch artifact records are durable review metadata only. Agent run and approval detail do not write files, execute patches, stage, reset, checkout, commit, or generate patch diffs. Generated artifact previews render stored `rawDiff` only and failed/unavailable/not-generated states do not fake diff content. Visual changes do not weaken size limits, binary handling, or outside-repository blocking.
+Safe file preview remains local-first and path-bounded to the selected repository. Repository Intelligence prefers persisted/indexed facts over new filesystem reads. Git status, local diff preview, and approval-attached matching local diffs are read-only, use fixed native Git arguments, validate repository-relative paths, and do not expose arbitrary Git execution. Persisted proposed changes and generated patch artifact records are durable review metadata only. Agent run and approval detail do not write files, execute patches, stage, reset, checkout, commit, or generate patch diffs. The demo workflow is seeded review state plus real read-only repository state; it does not claim real agent execution happened. Generated artifact previews render stored `rawDiff` only and failed/unavailable/not-generated states do not fake diff content. Visual changes do not weaken size limits, binary handling, or outside-repository blocking.

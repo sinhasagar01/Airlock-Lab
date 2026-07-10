@@ -540,6 +540,65 @@ describe("App smoke tests", () => {
     expect(screen.getByText("Package scripts unavailable")).toBeInTheDocument();
   });
 
+  it("connects the seeded demo workflow across repository intelligence, agent run, approval, and changes", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Repositories" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Continue review workflow" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("safe demo")).toBeInTheDocument();
+    expect(screen.getByText(/proposal-mvp-shell/)).toBeInTheDocument();
+    expect(screen.getByText("1 generated · 4 total")).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Continue review workflow" }),
+    );
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Draft app shell implementation plan",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("demo workflow").length).toBeGreaterThan(0);
+    expect(screen.getByText("seeded path")).toBeInTheDocument();
+    expect(screen.getAllByText(/approval-provider-rfc/).length).toBeGreaterThan(0);
+    expect(
+      screen.getByRole("button", { name: "Inspect local diffs" }),
+    ).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Approve provider abstraction patch plan",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Connected MVP review path")).toBeInTheDocument();
+    expect(screen.getByText(/generated patch artifact states/)).toBeInTheDocument();
+    expect(screen.getByText("Generated Patch Artifacts")).toBeInTheDocument();
+    expect(screen.getByText("Local repository diffs")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /This shows matching local Git diffs. Generated patch diffs/,
+      ),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Inspect local diffs" }));
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "3 local changes waiting for review",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Approval-linked local change review"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Local Git diffs remain repository state/)).toBeInTheDocument();
+    expect(screen.getAllByText("matches approval").length).toBeGreaterThan(0);
+  });
+
   it("shows an empty repository intelligence state when no repository is saved", async () => {
     const { user } = renderApp({ files: [], repositories: [] });
 
@@ -632,7 +691,7 @@ describe("App smoke tests", () => {
     expect(screen.getByText("Check strategy")).toBeInTheDocument();
     expect(screen.getAllByText("apps/desktop/src/App.tsx").length).toBeGreaterThan(0);
     expect(screen.getByText("Proposal Record")).toBeInTheDocument();
-    expect(screen.getByText("proposal-mvp-shell")).toBeInTheDocument();
+    expect(screen.getAllByText("proposal-mvp-shell").length).toBeGreaterThan(0);
     expect(screen.getAllByText("ready for review").length).toBeGreaterThan(0);
     expect(screen.getByText("Generated Patch Artifacts")).toBeInTheDocument();
     expect(screen.getByText("Artifact placeholders")).toBeInTheDocument();

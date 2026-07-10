@@ -428,7 +428,7 @@ export function createMockPersistedProposedChanges(): PersistedProposedChange[] 
           reason:
             "Agent run and proposed plan contracts need reusable typed shapes.",
           riskLevel: "medium",
-          patchArtifactStatus: "not_generated",
+          patchArtifactStatus: "generated",
         },
         {
           id: "proposal-mvp-shell-test",
@@ -439,8 +439,57 @@ export function createMockPersistedProposedChanges(): PersistedProposedChange[] 
           riskLevel: "low",
           patchArtifactStatus: "not_generated",
         },
+        {
+          id: "proposal-mvp-shell-provider-docs",
+          path: "docs/specs/provider-api.md",
+          operation: "modify",
+          reason:
+            "Provider API docs need review before adapter sequence work begins.",
+          riskLevel: "low",
+          patchArtifactStatus: "failed",
+        },
+        {
+          id: "proposal-mvp-shell-provider-rfc",
+          path: "docs/rfcs/provider-abstraction.md",
+          operation: "modify",
+          reason:
+            "Provider abstraction RFC should remain linked to the approval review.",
+          riskLevel: "low",
+          patchArtifactStatus: "unavailable",
+        },
       ],
-      patchArtifacts: [],
+      patchArtifacts: [
+        {
+          id: "proposal-mvp-shell-ai-patch-artifact",
+          proposedChangeId: "proposal-mvp-shell",
+          filePath: "packages/ai/src/index.ts",
+          status: "generated",
+          isBinary: false,
+          isTooLarge: false,
+          additions: 2,
+          deletions: 1,
+          rawDiff:
+            "diff --git a/packages/ai/src/index.ts b/packages/ai/src/index.ts\n@@ -1,2 +1,3 @@\n-export type OldPlan = string;\n+export type NewPlan = string;\n+export type PatchArtifact = string;",
+          createdAt: "Today, 10:44",
+        },
+        {
+          id: "proposal-mvp-shell-provider-docs-patch-artifact",
+          proposedChangeId: "proposal-mvp-shell",
+          filePath: "docs/specs/provider-api.md",
+          status: "failed",
+          isBinary: false,
+          isTooLarge: false,
+          createdAt: "Today, 10:45",
+        },
+        {
+          id: "proposal-mvp-shell-provider-rfc-patch-artifact",
+          proposedChangeId: "proposal-mvp-shell",
+          filePath: "docs/rfcs/provider-abstraction.md",
+          status: "unavailable",
+          isBinary: false,
+          isTooLarge: false,
+        },
+      ],
       createdAt: "Today, 10:42",
       updatedAt: "Today, 10:42",
     },

@@ -96,6 +96,11 @@ The runtime may expose artifact records with `not_generated`, `generated`,
 only render stored artifact diff content; placeholder and error states must not
 borrow local Git diffs or fabricate patch output.
 
+The current desktop MVP includes a seeded demo run, `run-mvp-shell`, to connect
+Repository Intelligence, proposed change review, approval review, generated
+artifact states, and matching local Git diffs. This seed is not real agent
+execution and must stay labeled as demo workflow state.
+
 ## Run Lifecycle
 
 ### 1. Created

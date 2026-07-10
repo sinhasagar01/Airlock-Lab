@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added the first connected safe demo workflow seed across Repository
+  Intelligence, Agent Runs, persisted proposed changes, Approval Review,
+  generated patch artifact states, and matching local Git diff indicators.
+- Added cross-tab demo workflow navigation and smoke coverage for the connected
+  review path without adding real agent execution, patch generation, or file
+  writes.
 - Added generated patch artifact detail panels in Agent Runs and Approval
   Review, including not-generated, generated preview, failed, unavailable,
   binary, and too-large states.

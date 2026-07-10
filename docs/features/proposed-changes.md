@@ -33,6 +33,9 @@ effects exist.
   `rejected`.
 - Agent Runs and Approval Review consume persisted proposed-change records while
   keeping the existing structured plan steps, risks, and validation strategy.
+- The MVP seed includes one connected demo proposed change,
+  `proposal-mvp-shell`, linked to `run-mvp-shell` and
+  `approval-provider-rfc`.
 
 ## Boundaries
 
@@ -47,6 +50,9 @@ This feature does not:
 Generated patch artifacts are represented as data contracts only. Local Git
 diffs remain separate read-only repository state and must not be labeled as
 agent-generated patch diffs.
+
+The demo workflow may show sample generated artifact content, but that content
+is seeded review data. It is not produced by real agent execution.
 
 ## Artifact Separation
 

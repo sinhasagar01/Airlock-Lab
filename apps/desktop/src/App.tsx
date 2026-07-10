@@ -88,6 +88,11 @@ const agentRuns = createMockAgentRuns();
 const proposedChangePlans = createMockProposedChangePlans();
 const mockApprovalRequests = createMockApprovalRequests();
 const mockProposedChanges = createMockPersistedProposedChanges();
+const demoWorkflow = {
+  approvalRequestId: "approval-provider-rfc",
+  proposedChangeId: "proposal-mvp-shell",
+  runId: "run-mvp-shell",
+};
 const dashboardActivity = [
   {
     badge: "ready",
@@ -366,6 +371,34 @@ function patchArtifactTone(status: ProposedPatchArtifact["status"]) {
   }
 
   return "neutral";
+}
+
+function mergeSeedApprovalRequests(
+  savedRequests: ApprovalRequest[],
+): ApprovalRequest[] {
+  const savedById = new Map(savedRequests.map((request) => [request.id, request]));
+  const seededIds = new Set(mockApprovalRequests.map((request) => request.id));
+  const seededOrSaved = mockApprovalRequests.map(
+    (request) => savedById.get(request.id) ?? request,
+  );
+  const savedExtras = savedRequests.filter((request) => !seededIds.has(request.id));
+
+  return [...seededOrSaved, ...savedExtras];
+}
+
+function mergeSeedProposedChanges(
+  savedChanges: PersistedProposedChange[],
+): PersistedProposedChange[] {
+  const savedById = new Map(savedChanges.map((change) => [change.id, change]));
+  const seededIds = new Set(mockProposedChanges.map((change) => change.id));
+  const seededOrSaved = mockProposedChanges.map((change) =>
+    ensureProposedPatchArtifacts(savedById.get(change.id) ?? change),
+  );
+  const savedExtras = savedChanges
+    .filter((change) => !seededIds.has(change.id))
+    .map(ensureProposedPatchArtifacts);
+
+  return [...seededOrSaved, ...savedExtras];
 }
 
 function formatGitRefreshedAt(refreshedAt: string | null | undefined) {
@@ -1151,6 +1184,39 @@ export function App() {
     ) ??
     selectedApprovalProposedChange?.patchArtifacts[0] ??
     null;
+  const demoWorkflowRun =
+    agentRuns.find((run) => run.id === demoWorkflow.runId) ?? null;
+  const demoWorkflowApproval =
+    approvalRequests.find(
+      (approval) => approval.id === demoWorkflow.approvalRequestId,
+    ) ?? null;
+  const demoWorkflowProposal =
+    persistedProposedChanges.find(
+      (change) => change.id === demoWorkflow.proposedChangeId,
+    ) ?? null;
+  const demoWorkflowGeneratedArtifactCount =
+    demoWorkflowProposal?.patchArtifacts.filter(
+      (artifact) => artifact.status === "generated",
+    ).length ?? 0;
+  const demoWorkflowLocalDiffCount =
+    demoWorkflowProposal?.files.filter((file) =>
+      gitStatusSummary?.files.some((changedFile) => changedFile.path === file.path),
+    ).length ?? 0;
+  const approvalMatchByPath = useMemo(() => {
+    const matches = new Map<string, PersistedProposedChange>();
+
+    for (const change of persistedProposedChanges) {
+      if (!change.approvalRequestId) {
+        continue;
+      }
+
+      for (const file of change.files) {
+        matches.set(file.path, change);
+      }
+    }
+
+    return matches;
+  }, [persistedProposedChanges]);
 
   async function refreshGitStatus(repository = activeRepository) {
     if (!hasActiveRepository || repository.id === emptyRepository.id) {
@@ -1169,6 +1235,29 @@ export function App() {
       setGitStatusSummary(null);
       setGitStatusState("error");
     }
+  }
+
+  function openDemoAgentRun() {
+    setSelectedAgentRunId(demoWorkflow.runId);
+    setActiveSection("agents");
+  }
+
+  function openDemoApprovalReview() {
+    setSelectedAgentRunId(demoWorkflow.runId);
+    setSelectedApprovalRequestId(demoWorkflow.approvalRequestId);
+    setActiveSection("approvals");
+  }
+
+  function openDemoChangeReview() {
+    const firstMatchingFile = demoWorkflowProposal?.files.find((file) =>
+      gitStatusSummary?.files.some((changedFile) => changedFile.path === file.path),
+    );
+
+    if (firstMatchingFile) {
+      setSelectedGitFilePath(firstMatchingFile.path);
+    }
+
+    setActiveSection("changes");
   }
 
   useEffect(() => {
@@ -1398,22 +1487,19 @@ export function App() {
         }
 
         setIndexingJobs(savedIndexingJobs);
-        if (savedApprovalRequests.length > 0) {
-          setApprovalRequests(savedApprovalRequests);
-        } else {
-          setApprovalRequests(mockApprovalRequests);
-          await saveApprovalRequests(mockApprovalRequests);
-        }
-        if (savedProposedChanges.length > 0) {
-          const normalizedProposedChanges = savedProposedChanges.map(
-            ensureProposedPatchArtifacts,
-          );
-          setPersistedProposedChanges(normalizedProposedChanges);
-          await saveProposedChanges(normalizedProposedChanges);
-        } else {
-          setPersistedProposedChanges(mockProposedChanges);
-          await saveProposedChanges(mockProposedChanges);
-        }
+        const hydratedApprovalRequests =
+          savedApprovalRequests.length > 0
+            ? mergeSeedApprovalRequests(savedApprovalRequests)
+            : mockApprovalRequests;
+        setApprovalRequests(hydratedApprovalRequests);
+        await saveApprovalRequests(hydratedApprovalRequests);
+
+        const hydratedProposedChanges =
+          savedProposedChanges.length > 0
+            ? mergeSeedProposedChanges(savedProposedChanges)
+            : mockProposedChanges;
+        setPersistedProposedChanges(hydratedProposedChanges);
+        await saveProposedChanges(hydratedProposedChanges);
 
         if (savedRepositories.length > 0) {
           const repositoriesWithGitMetadata =
@@ -2306,6 +2392,65 @@ export function App() {
                       </SecondaryButton>
                     </div>
                   </article>
+
+                  <article className="overview-card demo-workflow-card">
+                    <div className="overview-card__header">
+                      <div>
+                        <p className="card-eyebrow">Demo workflow</p>
+                        <h3>Continue review workflow</h3>
+                      </div>
+                      <StatusPill tone="warning" size="sm">
+                        safe demo
+                      </StatusPill>
+                    </div>
+                    <p>
+                      Follow the seeded MVP path from repository intelligence to
+                      agent run, persisted proposed change, approval review,
+                      generated patch artifact states, and matching local Git
+                      diffs when available.
+                    </p>
+                    <dl className="demo-workflow-facts">
+                      <div>
+                        <dt>Agent Run</dt>
+                        <dd>{demoWorkflowRun?.title ?? "Not available"}</dd>
+                      </div>
+                      <div>
+                        <dt>Proposed Change</dt>
+                        <dd>
+                          {demoWorkflowProposal
+                            ? `${demoWorkflowProposal.id} · ${demoWorkflowProposal.status.replaceAll("_", " ")}`
+                            : "Not available"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Generated Artifacts</dt>
+                        <dd>
+                          {demoWorkflowGeneratedArtifactCount} generated ·{" "}
+                          {demoWorkflowProposal?.patchArtifacts.length ?? 0} total
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Matching Local Diffs</dt>
+                        <dd>{demoWorkflowLocalDiffCount} available</dd>
+                      </div>
+                    </dl>
+                    <div className="demo-workflow-actions">
+                      <PrimaryButton
+                        disabled={!demoWorkflowRun}
+                        icon="play"
+                        onClick={openDemoAgentRun}
+                      >
+                        Continue review workflow
+                      </PrimaryButton>
+                      <SecondaryButton
+                        disabled={!demoWorkflowApproval}
+                        icon="approval"
+                        onClick={openDemoApprovalReview}
+                      >
+                        Review approval
+                      </SecondaryButton>
+                    </div>
+                  </article>
                 </section>
 
                 <aside className="repository-support-grid">
@@ -2399,6 +2544,11 @@ export function App() {
                       >
                         {run.status.replaceAll("_", " ")}
                       </StatusPill>
+                      {run.id === demoWorkflow.runId ? (
+                        <StatusPill tone="agent" size="sm" showDot={false}>
+                          demo workflow
+                        </StatusPill>
+                      ) : null}
                       <small>
                         {run.startedAt} ·{" "}
                         {runApproval ? "approval required" : "no approval"}
@@ -2458,6 +2608,25 @@ export function App() {
                   </dd>
                 </div>
               </dl>
+
+              {activeAgentRun.id === demoWorkflow.runId ? (
+                <div className="agent-detail-section demo-workflow-inline">
+                  <div className="overview-card__header">
+                    <p className="card-eyebrow">Demo workflow</p>
+                    <StatusPill tone="warning" size="sm">
+                      seeded path
+                    </StatusPill>
+                  </div>
+                  <p>
+                    This run is linked to persisted proposal{" "}
+                    <strong>{demoWorkflowProposal?.id ?? "not available"}</strong>
+                    , approval{" "}
+                    <strong>{demoWorkflowApproval?.id ?? "not available"}</strong>
+                    , generated patch artifact records, and matching local Git
+                    diffs when the same paths appear in Git status.
+                  </p>
+                </div>
+              ) : null}
 
               <div className="agent-detail-section provider-context-card">
                 <div className="overview-card__header">
@@ -2753,6 +2922,11 @@ export function App() {
                   <SecondaryButton disabled icon="changes">
                     Diffs not generated yet
                   </SecondaryButton>
+                  {activeAgentRun.id === demoWorkflow.runId ? (
+                    <SecondaryButton icon="changes" onClick={openDemoChangeReview}>
+                      Inspect local diffs
+                    </SecondaryButton>
+                  ) : null}
                 </div>
               </article>
             </aside>
@@ -2832,6 +3006,11 @@ export function App() {
                           >
                             {approval.risk} risk
                           </StatusPill>
+                          {approval.id === demoWorkflow.approvalRequestId ? (
+                            <StatusPill tone="agent" size="sm" showDot={false}>
+                              demo workflow
+                            </StatusPill>
+                          ) : null}
                         </span>
                       </button>
                     );
@@ -2902,6 +3081,38 @@ export function App() {
                       </dd>
                     </div>
                   </dl>
+
+                  {selectedApprovalRequest.id === demoWorkflow.approvalRequestId ? (
+                    <div className="approval-review-section demo-workflow-inline">
+                      <div className="overview-card__header">
+                        <div>
+                          <p className="card-eyebrow">Demo workflow</p>
+                          <h3>Connected MVP review path</h3>
+                        </div>
+                        <StatusPill tone="warning" size="sm">
+                          seeded demo
+                        </StatusPill>
+                      </div>
+                      <p>
+                        This approval links one seeded agent run, one persisted
+                        proposed change, generated patch artifact states, and{" "}
+                        {demoWorkflowLocalDiffCount} matching local Git diff
+                        {demoWorkflowLocalDiffCount === 1 ? "" : "s"} when
+                        repository paths match exactly.
+                      </p>
+                      <div className="demo-workflow-actions">
+                        <SecondaryButton icon="play" onClick={openDemoAgentRun}>
+                          Open agent run
+                        </SecondaryButton>
+                        <SecondaryButton
+                          icon="changes"
+                          onClick={openDemoChangeReview}
+                        >
+                          Inspect local diffs
+                        </SecondaryButton>
+                      </div>
+                    </div>
+                  ) : null}
 
                   <div className="approval-review-section">
                     <div className="plan-section__header">
@@ -3251,7 +3462,8 @@ export function App() {
                   </h2>
                   <p>
                     Change review now reads real Git status for the selected
-                    repository. Diff review remains planned for the next layer.
+                    repository and can show read-only local diffs for changed
+                    files.
                   </p>
                 </div>
               </div>
@@ -3321,6 +3533,37 @@ export function App() {
               </dl>
             </article>
 
+            {demoWorkflowProposal ? (
+              <article className="overview-card demo-workflow-card changes-demo-card">
+                <div className="overview-card__header">
+                  <div>
+                    <p className="card-eyebrow">Demo workflow</p>
+                    <h3>Approval-linked local change review</h3>
+                  </div>
+                  <StatusPill
+                    tone={demoWorkflowLocalDiffCount > 0 ? "success" : "neutral"}
+                    size="sm"
+                  >
+                    {demoWorkflowLocalDiffCount} matching local diff
+                    {demoWorkflowLocalDiffCount === 1 ? "" : "s"}
+                  </StatusPill>
+                </div>
+                <p>
+                  Local Git diffs remain repository state. They are only shown
+                  as related to the demo approval when their paths exactly match
+                  proposed affected files.
+                </p>
+                <div className="demo-workflow-actions">
+                  <SecondaryButton icon="approval" onClick={openDemoApprovalReview}>
+                    Review approval
+                  </SecondaryButton>
+                  <SecondaryButton icon="play" onClick={openDemoAgentRun}>
+                    Open agent run
+                  </SecondaryButton>
+                </div>
+              </article>
+            ) : null}
+
             <article className="overview-card git-changes-card">
               <div className="overview-card__header">
                 <div>
@@ -3365,6 +3608,7 @@ export function App() {
                   <div className="git-change-list" aria-label="Changed files">
                     {gitStatusSummary.files.map((file) => {
                       const isSelected = selectedGitChangedFile?.path === file.path;
+                      const matchingProposal = approvalMatchByPath.get(file.path);
 
                       return (
                         <button
@@ -3384,8 +3628,18 @@ export function App() {
                           <div>
                             <strong>{file.path}</strong>
                             {file.oldPath ? <span>Renamed from {file.oldPath}</span> : null}
+                            {matchingProposal ? (
+                              <span>
+                                Matches approval review · {matchingProposal.title}
+                              </span>
+                            ) : null}
                           </div>
                           <span className="git-change-stage">{file.stage}</span>
+                          {matchingProposal ? (
+                            <StatusPill tone="agent" size="sm" showDot={false}>
+                              matches approval
+                            </StatusPill>
+                          ) : null}
                         </button>
                       );
                     })}

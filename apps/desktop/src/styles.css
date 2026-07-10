@@ -1623,6 +1623,71 @@ dt {
   width: 100%;
 }
 
+.demo-workflow-card,
+.demo-workflow-inline {
+  background:
+    linear-gradient(135deg, rgba(255, 247, 239, 0.92), rgba(251, 253, 255, 0.96));
+  border-color: rgba(231, 113, 80, 0.18);
+}
+
+.demo-workflow-card > p,
+.demo-workflow-inline > p {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 540;
+  line-height: 1.6;
+  margin-top: 14px;
+}
+
+.demo-workflow-inline strong {
+  color: var(--color-text-primary);
+  font-weight: 760;
+}
+
+.demo-workflow-facts {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 18px;
+}
+
+.demo-workflow-facts > div {
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(228, 234, 241, 0.92);
+  border-radius: 14px;
+  padding: 13px;
+}
+
+.demo-workflow-facts dt {
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.14em;
+  line-height: 1.2;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+
+.demo-workflow-facts dd {
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 720;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.demo-workflow-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.demo-workflow-actions .primary-action,
+.demo-workflow-actions .secondary-action {
+  justify-content: center;
+}
+
 .repository-intelligence-dashboard {
   display: grid;
   gap: 18px;
@@ -2526,7 +2591,7 @@ dt {
   cursor: pointer;
   display: grid;
   gap: 14px;
-  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
   min-height: 68px;
   padding: 14px 16px;
   text-align: left;
