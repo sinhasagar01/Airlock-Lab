@@ -26,8 +26,9 @@ The app shell now follows a warm premium SaaS dashboard direction.
   requests, linked agent run metadata, proposed plan review, affected files,
   risk and validation sections, repository context, decision controls, and an
   honest diff placeholder.
-- Changes includes a no-local-changes review state, change-readiness feature
-  blocks, repository status facts, and indexed-file browsing/file preview access.
+- Changes includes read-only Git status, clean/dirty state, staged/unstaged
+  counts, changed-file rows, manual refresh, and indexed-file browsing/file
+  preview access.
 - Settings includes workspace settings rows and workspace maintenance actions.
 
 ## Visual System
@@ -58,5 +59,7 @@ The app shell now follows a warm premium SaaS dashboard direction.
   approval handoff, and disabled diff action until generated diffs exist.
 - Approval queue selected state, approval detail, proposed plan review, disabled
   diff placeholder, and approve/reject decision states.
+- Git status loading, clean, changed, not-a-Git-repository, and unavailable
+  states.
 - Approval pending, approved, and rejected.
 - File preview loading, ready, binary, too-large, outside-repository, and unavailable.

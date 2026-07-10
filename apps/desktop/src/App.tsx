@@ -16,6 +16,7 @@ import {
   createMockWorkspaceSnapshot,
   primaryNavigation,
   type DomainStatus,
+  type GitStatusSummary,
   type NavigationSection,
 } from "@ai-dev/core";
 import {
@@ -46,6 +47,7 @@ import {
 } from "./storage/approvalRequestStore";
 import { previewRepositoryFile } from "./storage/filePreview";
 import { scanRepositoryFileTree } from "./storage/fileTreeScanner";
+import { loadGitStatusSummary } from "./storage/gitChanges";
 import { loadRepositoriesGitMetadata } from "./storage/gitMetadata";
 import {
   loadIndexedFileFacts,
@@ -305,6 +307,39 @@ function riskTone(level: ProposedRisk["level"]) {
   return "success";
 }
 
+function changeKindTone(kind: string) {
+  if (kind === "added" || kind === "untracked") {
+    return "success";
+  }
+
+  if (kind === "deleted" || kind === "conflicted") {
+    return "danger";
+  }
+
+  if (kind === "renamed" || kind === "copied") {
+    return "agent";
+  }
+
+  return "warning";
+}
+
+function formatGitRefreshedAt(refreshedAt: string | null | undefined) {
+  if (!refreshedAt) {
+    return "Not refreshed yet";
+  }
+
+  const timestamp = Number(refreshedAt);
+
+  if (!Number.isNaN(timestamp) && timestamp > 0) {
+    return new Date(timestamp * 1000).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
+  return refreshedAt;
+}
+
 type AppShellProps = {
   sidebar: ReactNode;
   children: ReactNode;
@@ -466,6 +501,11 @@ export function App() {
   const [selectedApprovalRequestId, setSelectedApprovalRequestId] = useState(
     mockApprovalRequests[0].id,
   );
+  const [gitStatusSummary, setGitStatusSummary] =
+    useState<GitStatusSummary | null>(null);
+  const [gitStatusState, setGitStatusState] = useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
   const [filePreview, setFilePreview] = useState<FileContentPreview | null>(
     null,
   );
@@ -544,6 +584,30 @@ export function App() {
     () => deriveRepositoryIntelligence(indexedFiles),
     [indexedFiles],
   );
+  const effectiveChangedFileCount =
+    gitStatusSummary?.changedFileCount ?? activeRepository.openChanges;
+  const effectiveBranch = gitStatusSummary?.branch ?? activeRepository.branch;
+  const isWorkingDirectoryClean =
+    gitStatusSummary?.isClean ?? activeRepository.openChanges === 0;
+
+  async function refreshGitStatus(repository = activeRepository) {
+    if (!hasActiveRepository || repository.id === emptyRepository.id) {
+      setGitStatusSummary(null);
+      setGitStatusState("idle");
+      return;
+    }
+
+    setGitStatusState("loading");
+
+    try {
+      const status = await loadGitStatusSummary(repository.id, repository.path);
+      setGitStatusSummary(status);
+      setGitStatusState("ready");
+    } catch {
+      setGitStatusSummary(null);
+      setGitStatusState("error");
+    }
+  }
 
   useEffect(() => {
     let isMounted = true;
@@ -588,6 +652,10 @@ export function App() {
       isMounted = false;
     };
   }, [activeRepository, selectedIndexedFile]);
+
+  useEffect(() => {
+    void refreshGitStatus();
+  }, [activeRepository.id, activeRepository.path, hasActiveRepository]);
 
   useEffect(() => {
     let isMounted = true;
@@ -2204,23 +2272,30 @@ export function App() {
                 <div>
                   <p className="card-eyebrow">Change Review</p>
                   <h2>
-                    {activeRepository.openChanges > 0
-                      ? `${activeRepository.openChanges} local changes waiting for review`
+                    {effectiveChangedFileCount > 0
+                      ? `${effectiveChangedFileCount} local changes waiting for review`
                       : "No local changes waiting for review"}
                   </h2>
                   <p>
-                    Change review will compare repository status, generated
-                    diffs, and release readiness before work moves into human
-                    approval.
+                    Change review now reads real Git status for the selected
+                    repository. Diff review remains planned for the next layer.
                   </p>
                 </div>
               </div>
-              <PrimaryButton
-                icon="play"
-                onClick={() => setActiveSection("agents")}
-              >
-                Start an agent run
-              </PrimaryButton>
+              <div className="changes-hero-actions">
+                <PrimaryButton
+                  icon="search"
+                  onClick={() => void refreshGitStatus()}
+                >
+                  Refresh Git status
+                </PrimaryButton>
+                <SecondaryButton
+                  icon="play"
+                  onClick={() => setActiveSection("agents")}
+                >
+                  Start an agent run
+                </SecondaryButton>
+              </div>
             </article>
 
             <section className="changes-feature-grid" aria-label="Change review readiness">
@@ -2239,32 +2314,113 @@ export function App() {
                   <p className="card-eyebrow">Repository Status</p>
                   <h3>{activeRepository.name}</h3>
                 </div>
-                <StatusPill tone={repositoryTone(activeRepository.status)}>
-                  {activeRepository.status.replace("_", " ")}
+                <StatusPill tone={isWorkingDirectoryClean ? "success" : "warning"}>
+                  {gitStatusState === "loading"
+                    ? "refreshing"
+                    : isWorkingDirectoryClean
+                      ? "clean"
+                      : "changes detected"}
                 </StatusPill>
               </div>
               <dl className="tab-fact-grid changes-fact-grid">
                 <div>
                   <dt>Branch</dt>
-                  <dd>{activeRepository.branch}</dd>
+                  <dd>{effectiveBranch}</dd>
                 </div>
                 <div>
-                  <dt>Open Changes</dt>
-                  <dd>{activeRepository.openChanges}</dd>
+                  <dt>Changed Files</dt>
+                  <dd>{effectiveChangedFileCount}</dd>
                 </div>
                 <div>
-                  <dt>Generated Diffs</dt>
-                  <dd>{activeRepository.openChanges > 0 ? "Ready" : "None"}</dd>
-                </div>
-                <div>
-                  <dt>Release Readiness</dt>
+                  <dt>Staged / Unstaged</dt>
                   <dd>
-                    {activeRepository.openChanges === 0
-                      ? "Clean"
-                      : "Review required"}
+                    {gitStatusSummary
+                      ? `${gitStatusSummary.stagedCount} / ${gitStatusSummary.unstagedCount}`
+                      : "Not refreshed"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Last Refreshed</dt>
+                  <dd>
+                    {formatGitRefreshedAt(gitStatusSummary?.refreshedAt)}
                   </dd>
                 </div>
               </dl>
+            </article>
+
+            <article className="overview-card git-changes-card">
+              <div className="overview-card__header">
+                <div>
+                  <p className="card-eyebrow">Git Status</p>
+                  <h3>
+                    {isWorkingDirectoryClean
+                      ? "Clean working directory"
+                      : "Changed files"}
+                  </h3>
+                </div>
+                <StatusPill
+                  tone={
+                    gitStatusState === "error"
+                      ? "danger"
+                      : gitStatusSummary?.isGitRepository === false
+                        ? "warning"
+                        : "neutral"
+                  }
+                  size="sm"
+                >
+                  {gitStatusState === "error"
+                    ? "unavailable"
+                    : gitStatusSummary?.isGitRepository === false
+                      ? "not a git repository"
+                      : "read only"}
+                </StatusPill>
+              </div>
+
+              {gitStatusState === "error" ? (
+                <div className="git-status-empty">
+                  <IconBadge icon="changes" tone="danger" size="md" />
+                  <div>
+                    <h3>Git status unavailable</h3>
+                    <p>
+                      The workspace could not read Git status for the selected
+                      repository. No write operations were attempted.
+                    </p>
+                  </div>
+                </div>
+              ) : gitStatusSummary && gitStatusSummary.files.length > 0 ? (
+                <div className="git-change-list" aria-label="Changed files">
+                  {gitStatusSummary.files.map((file) => (
+                    <div
+                      className="git-change-item"
+                      key={`${file.statusCode}-${file.oldPath ?? ""}-${file.path}`}
+                    >
+                      <StatusPill
+                        tone={changeKindTone(file.kind)}
+                        size="sm"
+                        showDot={false}
+                      >
+                        {file.kind}
+                      </StatusPill>
+                      <div>
+                        <strong>{file.path}</strong>
+                        {file.oldPath ? <span>Renamed from {file.oldPath}</span> : null}
+                      </div>
+                      <span className="git-change-stage">{file.stage}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="git-status-empty">
+                  <IconBadge icon="approval" tone="success" size="md" />
+                  <div>
+                    <h3>No local changes waiting for review</h3>
+                    <p>
+                      Git status reports a clean working directory for the
+                      selected repository.
+                    </p>
+                  </div>
+                </div>
+              )}
             </article>
 
             <section className="file-browser-shell">

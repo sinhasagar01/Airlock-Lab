@@ -1,6 +1,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ApprovalRequest } from "@ai-dev/ai";
+import type { GitStatusSummary } from "@ai-dev/core";
 import type {
   FileContentPreview,
   IndexedFileFact,
@@ -10,6 +11,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { previewRepositoryFile } from "./storage/filePreview";
+import { loadGitStatusSummary } from "./storage/gitChanges";
 import { updateApprovalRequestStatus } from "./storage/approvalRequestStore";
 
 const mockState = vi.hoisted(() => {
@@ -155,6 +157,39 @@ const mockState = vi.hoisted(() => {
   return {
     approvals,
     files,
+    gitStatus: {
+      repositoryId: repository.id,
+      repositoryPath: repository.path,
+      branch: "main",
+      isGitRepository: true,
+      isClean: false,
+      changedFileCount: 3,
+      stagedCount: 1,
+      unstagedCount: 1,
+      untrackedCount: 1,
+      conflictedCount: 0,
+      refreshedAt: "1783532100",
+      files: [
+        {
+          path: "apps/desktop/src/App.tsx",
+          kind: "modified",
+          stage: "unstaged",
+          statusCode: " M",
+        },
+        {
+          path: "packages/git/src/index.ts",
+          kind: "added",
+          stage: "staged",
+          statusCode: "A ",
+        },
+        {
+          path: "docs/features/git-status.md",
+          kind: "untracked",
+          stage: "untracked",
+          statusCode: "??",
+        },
+      ],
+    } as GitStatusSummary,
     indexingJobs: [] as IndexingJob[],
     preview: {
       path: files[0].path,
@@ -201,6 +236,10 @@ vi.mock("./storage/fileTreeScanner", () => ({
   })),
 }));
 
+vi.mock("./storage/gitChanges", () => ({
+  loadGitStatusSummary: vi.fn(async () => mockState.gitStatus),
+}));
+
 vi.mock("./storage/approvalRequestStore", () => ({
   loadApprovalRequests: vi.fn(async () => mockState.approvals),
   saveApprovalRequests: vi.fn(async () => undefined),
@@ -213,10 +252,12 @@ vi.mock("./storage/filePreview", () => ({
 
 function renderApp(options?: {
   files?: IndexedFileFact[];
+  gitStatus?: GitStatusSummary;
   preview?: FileContentPreview | Promise<FileContentPreview>;
   repositories?: RepositorySummary[];
 }) {
   mockState.files = options?.files ?? [...defaultFiles];
+  mockState.gitStatus = options?.gitStatus ?? defaultGitStatus;
   mockState.preview = options?.preview ?? defaultPreview;
   mockState.repositories = options?.repositories ?? [...defaultRepositories];
 
@@ -232,6 +273,7 @@ async function goToTab(name: string) {
 }
 
 const defaultFiles = [...mockState.files];
+const defaultGitStatus = mockState.gitStatus;
 const defaultPreview = mockState.preview;
 const defaultRepositories = [...mockState.repositories];
 
@@ -244,7 +286,11 @@ beforeEach(() => {
   vi.mocked(previewRepositoryFile).mockImplementation(() =>
     Promise.resolve(mockState.preview),
   );
+  vi.mocked(loadGitStatusSummary).mockImplementation(
+    async () => mockState.gitStatus,
+  );
   mockState.files = [...defaultFiles];
+  mockState.gitStatus = defaultGitStatus;
   mockState.preview = defaultPreview;
   mockState.repositories = defaultRepositories.map((repository) => ({
     ...repository,
@@ -281,7 +327,7 @@ describe("App smoke tests", () => {
     await user.click(screen.getByRole("button", { name: "Changes" }));
     expect(
       await screen.findByRole("heading", {
-        name: "No local changes waiting for review",
+        name: "3 local changes waiting for review",
       }),
     ).toBeInTheDocument();
 
@@ -327,6 +373,35 @@ describe("App smoke tests", () => {
         "Choose a local repository to build indexed facts, Git state, project structure, and safe file preview context.",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("renders real Git status changes in the Changes tab", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Changes" }));
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "3 local changes waiting for review",
+      }),
+    ).toBeInTheDocument();
+    expect(loadGitStatusSummary).toHaveBeenCalledWith(
+      "repo-workspace",
+      "/workspace",
+    );
+    expect(screen.getByText("Changed files")).toBeInTheDocument();
+    expect(screen.getByText("apps/desktop/src/App.tsx")).toBeInTheDocument();
+    expect(screen.getByText("packages/git/src/index.ts")).toBeInTheDocument();
+    expect(screen.getByText("docs/features/git-status.md")).toBeInTheDocument();
+    expect(screen.getByText("Staged / Unstaged")).toBeInTheDocument();
+    expect(screen.getByText("1 / 1")).toBeInTheDocument();
+    expect(screen.getByText("read only")).toBeInTheDocument();
+
+    const callCountBeforeRefresh = vi.mocked(loadGitStatusSummary).mock.calls.length;
+
+    await user.click(screen.getByRole("button", { name: "Refresh Git status" }));
+
+    expect(loadGitStatusSummary).toHaveBeenCalledTimes(callCountBeforeRefresh + 1);
   });
 
   it("renders selected agent run detail with structured proposed plan and approval handoff", async () => {

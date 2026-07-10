@@ -25,6 +25,9 @@ The desktop MVP uses Tauri, React, TypeScript, and Vite. Styling is plain CSS wi
 - Approval review reuses the linked `AgentRun`, `ApprovalRequest`, and
   `ProposedChangePlan` state. Decision buttons may update approval status, but
   they must not execute patches, write files, or run Git commands.
+- Git status uses the shared `GitStatusSummary` model in `packages/core` and the
+  `loadGitStatusSummary` Tauri wrapper. It must remain read-only and bounded to
+  the selected repository.
 
 ## Design System Rules
 
@@ -39,7 +42,8 @@ The desktop MVP uses Tauri, React, TypeScript, and Vite. Styling is plain CSS wi
 - Preserve the state-driven six-tab navigation until a routing migration is
   intentionally scoped.
 - Changes must keep indexed-file browsing and safe preview access available
-  while presenting the change-review empty/readiness state.
+  while presenting real read-only Git status. It must not stage, unstage,
+  discard, commit, reset, checkout, or apply changes.
 - Repositories must use safe indexed metadata for intelligence summaries:
   extension counts, important folders, key files, and path-derived framework
   hints. If package scripts or dependencies are not available through a bounded

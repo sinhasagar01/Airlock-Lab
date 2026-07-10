@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added a read-only Git status data model and Tauri command for the selected
+  repository using fixed safe Git arguments.
+- Updated the Changes tab to show real clean/dirty state, branch, changed file
+  count, staged/unstaged counts, changed-file rows, last refresh time, and
+  manual refresh while preserving indexed-file browsing and safe previews.
+- Expanded smoke coverage for real Git status rendering and refresh behavior.
 - Added an Approval detail review workflow with selectable approval requests,
   linked agent run metadata, proposed plan review, affected files, risk and
   validation sections, repository context, decision controls, and an honest

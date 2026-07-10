@@ -17,6 +17,46 @@ export type DomainStatus =
   | "completed"
   | "failed";
 
+export type GitChangeKind =
+  | "added"
+  | "modified"
+  | "deleted"
+  | "renamed"
+  | "copied"
+  | "untracked"
+  | "conflicted"
+  | "unknown";
+
+export type GitChangeStage =
+  | "staged"
+  | "unstaged"
+  | "both"
+  | "untracked"
+  | "unknown";
+
+export type GitChangedFile = {
+  path: string;
+  oldPath?: string;
+  kind: GitChangeKind;
+  stage: GitChangeStage;
+  statusCode: string;
+};
+
+export type GitStatusSummary = {
+  repositoryId: string;
+  repositoryPath: string;
+  branch?: string;
+  isGitRepository: boolean;
+  isClean: boolean;
+  changedFileCount: number;
+  stagedCount: number;
+  unstagedCount: number;
+  untrackedCount: number;
+  conflictedCount: number;
+  files: GitChangedFile[];
+  refreshedAt: string;
+};
+
 export function createWorkspaceSummary(
   summary: WorkspaceSummary,
 ): WorkspaceSummary {

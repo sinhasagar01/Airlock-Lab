@@ -2,7 +2,7 @@
 
 ## Current MVP State
 
-The desktop app supports local repository selection, persisted repositories, Git metadata, persisted indexing jobs, indexed file facts, repository intelligence summaries, inspectable agent run detail with structured proposed plans, approval detail review, approval request persistence, indexed-file browsing, and safe file content previews.
+The desktop app supports local repository selection, persisted repositories, Git metadata, read-only Git status, persisted indexing jobs, indexed file facts, repository intelligence summaries, inspectable agent run detail with structured proposed plans, approval detail review, approval request persistence, indexed-file browsing, and safe file content previews.
 
 The desktop app now has an initial Vitest/jsdom smoke suite covering six-tab
 rendering, sidebar navigation, approval actions, pending approval count updates,
@@ -44,8 +44,9 @@ source of truth.
   approval requests, linked agent run metadata, proposed plan review, affected
   files, risk and validation sections, repository context, decision controls,
   persisted approve/reject updates, and an honest diff placeholder.
-- Changes now presents a polished no-local-changes review state, change-readiness
-  feature blocks, repository status facts, and the full indexed-file browser.
+- Changes now presents real read-only Git status with clean/dirty state,
+  staged/unstaged/untracked counts, changed-file rows, manual refresh,
+  repository status facts, and the full indexed-file browser.
 - The indexed-file browser and preview panel now use the dashboard design system
   with premium file rows, selected-file metadata, designed state panels, and a
   polished code preview frame.
@@ -54,4 +55,4 @@ source of truth.
 
 ## Active Safety Boundary
 
-Safe file preview remains local-first and path-bounded to the selected repository. Repository Intelligence prefers persisted/indexed facts over new filesystem reads. Agent run and approval detail are inspectable mock/structured plan state only and do not write files, execute patches, run Git commands, or generate diffs. Visual changes do not weaken size limits, binary handling, or outside-repository blocking.
+Safe file preview remains local-first and path-bounded to the selected repository. Repository Intelligence prefers persisted/indexed facts over new filesystem reads. Git status is read-only, uses fixed native Git arguments, and does not expose arbitrary Git execution. Agent run and approval detail are inspectable mock/structured plan state only and do not write files, execute patches, run Git commands, or generate diffs. Visual changes do not weaken size limits, binary handling, or outside-repository blocking.
