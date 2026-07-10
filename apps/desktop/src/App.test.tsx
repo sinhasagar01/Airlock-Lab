@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ApprovalRequest } from "@ai-dev/ai";
+import type { ApprovalRequest, PersistedProposedChange } from "@ai-dev/ai";
 import type { GitFileDiff, GitStatusSummary } from "@ai-dev/core";
 import type {
   FileContentPreview,
@@ -13,6 +13,7 @@ import { App } from "./App";
 import { previewRepositoryFile } from "./storage/filePreview";
 import { loadGitFileDiff, loadGitStatusSummary } from "./storage/gitChanges";
 import { updateApprovalRequestStatus } from "./storage/approvalRequestStore";
+import { saveProposedChanges } from "./storage/proposedChangeStore";
 
 const mockState = vi.hoisted(() => {
   const repository: RepositorySummary = {
@@ -224,6 +225,62 @@ const mockState = vi.hoisted(() => {
       refreshedAt: "1783532100",
     } as GitFileDiff,
     indexingJobs: [] as IndexingJob[],
+    proposedChanges: [
+      {
+        id: "proposal-mvp-shell",
+        runId: "run-mvp-shell",
+        approvalRequestId: "approval-provider-rfc",
+        repositoryId: repository.id,
+        title: "Draft app shell implementation plan",
+        summary:
+          "Persisted proposal record for reviewing the app shell plan before file writes.",
+        status: "ready_for_review",
+        files: [
+          {
+            id: "proposal-file-app",
+            path: "apps/desktop/src/App.tsx",
+            operation: "modify",
+            reason: "Primary shell and run-detail composition lives here today.",
+            riskLevel: "medium",
+            patchArtifactStatus: "not_generated",
+          },
+          {
+            id: "proposal-file-ai",
+            path: "packages/ai/src/index.ts",
+            operation: "modify",
+            reason: "Agent contracts need durable proposal shapes.",
+            riskLevel: "medium",
+            patchArtifactStatus: "not_generated",
+          },
+        ],
+        patchArtifacts: [],
+        createdAt: "Today, 10:42",
+        updatedAt: "Today, 10:42",
+      },
+      {
+        id: "proposal-index-refresh",
+        runId: "run-index-refresh",
+        approvalRequestId: "approval-indexing-job",
+        repositoryId: repository.id,
+        title: "Refresh repository context index",
+        summary:
+          "Persisted proposal record for indexing persistence follow-up work.",
+        status: "ready_for_review",
+        files: [
+          {
+            id: "proposal-file-indexing",
+            path: "packages/indexing/src/index.ts",
+            operation: "modify",
+            reason: "Repository intelligence helpers derive context from facts.",
+            riskLevel: "low",
+            patchArtifactStatus: "not_generated",
+          },
+        ],
+        patchArtifacts: [],
+        createdAt: "Today, 10:46",
+        updatedAt: "Today, 10:46",
+      },
+    ] as PersistedProposedChange[],
     preview: {
       path: files[0].path,
       status: "ready",
@@ -280,6 +337,11 @@ vi.mock("./storage/approvalRequestStore", () => ({
   updateApprovalRequestStatus: vi.fn(async () => undefined),
 }));
 
+vi.mock("./storage/proposedChangeStore", () => ({
+  loadProposedChanges: vi.fn(async () => mockState.proposedChanges),
+  saveProposedChanges: vi.fn(async () => undefined),
+}));
+
 vi.mock("./storage/filePreview", () => ({
   previewRepositoryFile: vi.fn(() => Promise.resolve(mockState.preview)),
 }));
@@ -289,12 +351,15 @@ function renderApp(options?: {
   gitDiff?: GitFileDiff;
   gitStatus?: GitStatusSummary;
   preview?: FileContentPreview | Promise<FileContentPreview>;
+  proposedChanges?: PersistedProposedChange[];
   repositories?: RepositorySummary[];
 }) {
   mockState.files = options?.files ?? [...defaultFiles];
   mockState.gitDiff = options?.gitDiff ?? defaultGitDiff;
   mockState.gitStatus = options?.gitStatus ?? defaultGitStatus;
   mockState.preview = options?.preview ?? defaultPreview;
+  mockState.proposedChanges =
+    options?.proposedChanges ?? [...defaultProposedChanges];
   mockState.repositories = options?.repositories ?? [...defaultRepositories];
 
   return {
@@ -312,6 +377,7 @@ const defaultFiles = [...mockState.files];
 const defaultGitDiff = mockState.gitDiff;
 const defaultGitStatus = mockState.gitStatus;
 const defaultPreview = mockState.preview;
+const defaultProposedChanges = [...mockState.proposedChanges];
 const defaultRepositories = [...mockState.repositories];
 
 afterEach(() => {
@@ -350,6 +416,7 @@ beforeEach(() => {
   mockState.gitDiff = defaultGitDiff;
   mockState.gitStatus = defaultGitStatus;
   mockState.preview = defaultPreview;
+  mockState.proposedChanges = [...defaultProposedChanges];
   mockState.repositories = defaultRepositories.map((repository) => ({
     ...repository,
     openChanges: 0,
@@ -509,6 +576,10 @@ describe("App smoke tests", () => {
     expect(screen.getByText("Known risks")).toBeInTheDocument();
     expect(screen.getByText("Check strategy")).toBeInTheDocument();
     expect(screen.getByText("apps/desktop/src/App.tsx")).toBeInTheDocument();
+    expect(screen.getByText("Proposal Record")).toBeInTheDocument();
+    expect(screen.getByText("proposal-mvp-shell")).toBeInTheDocument();
+    expect(screen.getAllByText("ready for review").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("not generated").length).toBeGreaterThan(0);
     expect(screen.getByText(/real Git diffs yet/)).toBeInTheDocument();
     expect(screen.getByText(String(defaultFiles.length))).toBeInTheDocument();
     expect(
@@ -572,6 +643,10 @@ describe("App smoke tests", () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/Mock Provider.*mock-planner-v1/)).toBeInTheDocument();
     expect(screen.getByText("Plan attached to approval")).toBeInTheDocument();
+    expect(screen.getByText("Proposal Status")).toBeInTheDocument();
+    expect(screen.getByText("Patch Artifacts")).toBeInTheDocument();
+    expect(screen.getAllByText("ready for review").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("not generated").length).toBeGreaterThan(0);
     expect(screen.getByText("Ordered plan")).toBeInTheDocument();
     expect(screen.getByText("Review risks")).toBeInTheDocument();
     expect(screen.getByText("Check strategy")).toBeInTheDocument();
@@ -600,6 +675,13 @@ describe("App smoke tests", () => {
       "approval-provider-rfc",
       "approved",
     );
+    expect(saveProposedChanges).toHaveBeenCalledWith([
+      expect.objectContaining({
+        approvalRequestId: "approval-provider-rfc",
+        id: "proposal-mvp-shell",
+        status: "approved",
+      }),
+    ]);
     expect(
       await screen.findByRole("heading", { name: "1 pending approvals" }),
     ).toBeInTheDocument();
@@ -618,6 +700,13 @@ describe("App smoke tests", () => {
       "approval-indexing-job",
       "rejected",
     );
+    expect(saveProposedChanges).toHaveBeenCalledWith([
+      expect.objectContaining({
+        approvalRequestId: "approval-indexing-job",
+        id: "proposal-index-refresh",
+        status: "rejected",
+      }),
+    ]);
     expect(
       await screen.findByRole("heading", { name: "0 pending approvals" }),
     ).toBeInTheDocument();

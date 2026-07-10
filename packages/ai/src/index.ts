@@ -68,6 +68,64 @@ export type ProposedChangePlan = {
   approvalRequired: boolean;
 };
 
+export type ProposedChangeStatus =
+  | "draft"
+  | "ready_for_review"
+  | "approved"
+  | "rejected"
+  | "superseded"
+  | "applied";
+
+export type ProposedPatchArtifactStatus =
+  | "not_generated"
+  | "generated"
+  | "failed"
+  | "unavailable";
+
+export type ProposedChangeFileOperation =
+  | "create"
+  | "modify"
+  | "delete"
+  | "rename"
+  | "unknown";
+
+export type ProposedChangeFile = {
+  id: string;
+  path: string;
+  oldPath?: string;
+  operation: ProposedChangeFileOperation;
+  reason: string;
+  riskLevel: "low" | "medium" | "high";
+  patchArtifactStatus: ProposedPatchArtifactStatus;
+};
+
+export type ProposedPatchArtifact = {
+  id: string;
+  proposedChangeId: string;
+  filePath: string;
+  status: ProposedPatchArtifactStatus;
+  isBinary: boolean;
+  isTooLarge: boolean;
+  additions?: number;
+  deletions?: number;
+  rawDiff?: string;
+  createdAt?: string;
+};
+
+export type PersistedProposedChange = {
+  id: string;
+  runId: string;
+  approvalRequestId?: string;
+  repositoryId: string;
+  title: string;
+  summary: string;
+  status: ProposedChangeStatus;
+  files: ProposedChangeFile[];
+  patchArtifacts: ProposedPatchArtifact[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type ApprovalRequestStatus = "pending" | "approved" | "rejected";
 
 export type ApprovalRisk = "low" | "medium" | "high";
@@ -293,6 +351,75 @@ export function createMockProposedChangePlans(): ProposedChangePlan[] {
           status: "planned",
         },
       ],
+    },
+  ];
+}
+
+export function createMockPersistedProposedChanges(): PersistedProposedChange[] {
+  return [
+    {
+      id: "proposal-mvp-shell",
+      runId: "run-mvp-shell",
+      approvalRequestId: "approval-provider-rfc",
+      repositoryId: "repo-workspace",
+      title: "Draft app shell implementation plan",
+      summary:
+        "Durable proposal record for reviewing the app shell plan before any implementation writes are permitted.",
+      status: "ready_for_review",
+      files: [
+        {
+          id: "proposal-mvp-shell-app",
+          path: "apps/desktop/src/App.tsx",
+          operation: "modify",
+          reason: "Primary shell and run-detail composition lives here today.",
+          riskLevel: "medium",
+          patchArtifactStatus: "not_generated",
+        },
+        {
+          id: "proposal-mvp-shell-ai",
+          path: "packages/ai/src/index.ts",
+          operation: "modify",
+          reason:
+            "Agent run and proposed plan contracts need reusable typed shapes.",
+          riskLevel: "medium",
+          patchArtifactStatus: "not_generated",
+        },
+        {
+          id: "proposal-mvp-shell-test",
+          path: "apps/desktop/src/App.test.tsx",
+          operation: "modify",
+          reason:
+            "Smoke coverage should confirm run detail, proposed plan, and approval handoff are visible.",
+          riskLevel: "low",
+          patchArtifactStatus: "not_generated",
+        },
+      ],
+      patchArtifacts: [],
+      createdAt: "Today, 10:42",
+      updatedAt: "Today, 10:42",
+    },
+    {
+      id: "proposal-index-refresh",
+      runId: "run-index-refresh",
+      approvalRequestId: "approval-indexing-job",
+      repositoryId: "repo-workspace",
+      title: "Refresh repository context index",
+      summary:
+        "Durable proposal record for indexing persistence follow-up work before file writes or generated diffs exist.",
+      status: "ready_for_review",
+      files: [
+        {
+          id: "proposal-index-refresh-indexing",
+          path: "packages/indexing/src/index.ts",
+          operation: "modify",
+          reason: "Repository intelligence helpers derive context from facts.",
+          riskLevel: "low",
+          patchArtifactStatus: "not_generated",
+        },
+      ],
+      patchArtifacts: [],
+      createdAt: "Today, 10:46",
+      updatedAt: "Today, 10:46",
     },
   ];
 }

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added a persisted proposed-change model that links agent runs, approval
+  requests, repositories, proposed files, and future patch artifact records.
+- Added SQLite storage for proposed changes and seed-on-empty hydration in the
+  desktop app.
+- Updated Agent Runs and Approval Review to consume persisted proposed-change
+  status, file risk, and patch artifact state.
+- Approval decisions now update the linked proposed-change status to approved
+  or rejected without writing files, running Git, or applying patches.
 - Attached matching local Git diffs to the Approval Detail review screen by
   matching proposed affected files against read-only Git status paths.
 - Reused the safe local diff panel in approval review with loading, rendered

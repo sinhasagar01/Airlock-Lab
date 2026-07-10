@@ -1399,6 +1399,11 @@ dt {
   margin-top: 24px;
 }
 
+.proposal-link-fact-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 22px;
+}
+
 .agent-detail-section {
   background: #fbfdff;
   border: 1px solid #e4eaf1;
@@ -1536,6 +1541,11 @@ dt {
 .plan-file-item,
 .plan-risk-item {
   grid-template-columns: max-content minmax(0, 1fr);
+}
+
+.plan-file-item {
+  align-items: center;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
 }
 
 .plan-validation-item {

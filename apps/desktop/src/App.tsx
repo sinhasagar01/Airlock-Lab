@@ -3,12 +3,16 @@ import { open } from "@tauri-apps/plugin-dialog";
 import {
   createMockAgentRuns,
   createMockApprovalRequests,
+  createMockPersistedProposedChanges,
   createMockProposedChangePlans,
   createMockProvider,
   type ApprovalRequest,
   type ApprovalRequestStatus,
   type ApprovalRisk,
   type AgentRun,
+  type PersistedProposedChange,
+  type ProposedChangeFile,
+  type ProposedChangeFileOperation,
   type ProposedChangeStepStatus,
   type ProposedRisk,
 } from "@ai-dev/ai";
@@ -57,6 +61,10 @@ import {
 } from "./storage/indexedFileStore";
 import { loadIndexingJobs, saveIndexingJob } from "./storage/indexingJobStore";
 import {
+  loadProposedChanges,
+  saveProposedChanges,
+} from "./storage/proposedChangeStore";
+import {
   loadSavedRepositories,
   saveRepositories,
 } from "./storage/repositoryStore";
@@ -77,6 +85,7 @@ const emptyRepository: RepositorySummary = {
 const agentRuns = createMockAgentRuns();
 const proposedChangePlans = createMockProposedChangePlans();
 const mockApprovalRequests = createMockApprovalRequests();
+const mockProposedChanges = createMockPersistedProposedChanges();
 const dashboardActivity = [
   {
     badge: "ready",
@@ -323,6 +332,38 @@ function changeKindTone(kind: string) {
   }
 
   return "warning";
+}
+
+function proposedChangeStatusTone(status: PersistedProposedChange["status"]) {
+  if (status === "approved" || status === "applied") {
+    return "success";
+  }
+
+  if (status === "rejected" || status === "superseded") {
+    return "danger";
+  }
+
+  if (status === "ready_for_review") {
+    return "warning";
+  }
+
+  return "neutral";
+}
+
+function patchArtifactTone(status: ProposedChangeFile["patchArtifactStatus"]) {
+  if (status === "generated") {
+    return "success";
+  }
+
+  if (status === "failed") {
+    return "danger";
+  }
+
+  if (status === "unavailable") {
+    return "warning";
+  }
+
+  return "neutral";
 }
 
 function formatGitRefreshedAt(refreshedAt: string | null | undefined) {
@@ -667,6 +708,8 @@ export function App() {
   const [indexingJobs, setIndexingJobs] = useState<IndexingJob[]>([]);
   const [approvalRequests, setApprovalRequests] =
     useState<ApprovalRequest[]>(mockApprovalRequests);
+  const [persistedProposedChanges, setPersistedProposedChanges] =
+    useState<PersistedProposedChange[]>(mockProposedChanges);
   const [indexedFiles, setIndexedFiles] = useState<IndexedFileFact[]>([]);
   const [fileSearch, setFileSearch] = useState("");
   const [extensionFilter, setExtensionFilter] = useState("all");
@@ -719,6 +762,9 @@ export function App() {
   const activeProposedPlan =
     proposedChangePlans.find((plan) => plan.runId === activeAgentRun.id) ??
     null;
+  const activePersistedProposedChange =
+    persistedProposedChanges.find((change) => change.runId === activeAgentRun.id) ??
+    null;
   const activeRunApproval =
     approvalRequests.find(
       (approval) => approval.agentRunId === activeAgentRun.id,
@@ -733,6 +779,13 @@ export function App() {
   const selectedApprovalPlan = selectedApprovalRequest
     ? proposedChangePlans.find(
         (plan) => plan.runId === selectedApprovalRequest.agentRunId,
+      ) ?? null
+    : null;
+  const selectedApprovalProposedChange = selectedApprovalRequest
+    ? persistedProposedChanges.find(
+        (change) =>
+          change.approvalRequestId === selectedApprovalRequest.id ||
+          change.runId === selectedApprovalRequest.agentRunId,
       ) ?? null
     : null;
   const pendingApprovalCount = approvalRequests.filter(
@@ -783,22 +836,40 @@ export function App() {
     gitStatusSummary?.files[0] ??
     null;
   const approvalAffectedFiles = useMemo(() => {
+    if (selectedApprovalProposedChange?.files.length) {
+      return selectedApprovalProposedChange.files.map((file) => ({
+        changeType: file.operation,
+        patchArtifactStatus: file.patchArtifactStatus,
+        path: file.path,
+        reason: file.reason,
+        riskLevel: file.riskLevel,
+      }));
+    }
+
     if (selectedApprovalPlan?.affectedFiles.length) {
       return selectedApprovalPlan.affectedFiles.map((file) => ({
         changeType: file.changeType,
+        patchArtifactStatus: "not_generated" as const,
         path: file.path,
         reason: file.reason,
+        riskLevel: "medium" as const,
       }));
     }
 
     return (
       selectedApprovalRequest?.files.map((path) => ({
-        changeType: "unknown" as const,
+        changeType: "unknown" as ProposedChangeFileOperation,
+        patchArtifactStatus: "not_generated" as const,
         path,
         reason: "Listed on the approval request.",
+        riskLevel: "medium" as const,
       })) ?? []
     );
-  }, [selectedApprovalPlan, selectedApprovalRequest]);
+  }, [
+    selectedApprovalPlan,
+    selectedApprovalProposedChange,
+    selectedApprovalRequest,
+  ]);
   const approvalDiffEntries = useMemo(
     () =>
       approvalAffectedFiles.map((file) => ({
@@ -1025,6 +1096,7 @@ export function App() {
         const savedRepositories = await loadSavedRepositories();
         const savedIndexingJobs = await loadIndexingJobs();
         const savedApprovalRequests = await loadApprovalRequests();
+        const savedProposedChanges = await loadProposedChanges();
 
         if (!isMounted) {
           return;
@@ -1036,6 +1108,12 @@ export function App() {
         } else {
           setApprovalRequests(mockApprovalRequests);
           await saveApprovalRequests(mockApprovalRequests);
+        }
+        if (savedProposedChanges.length > 0) {
+          setPersistedProposedChanges(savedProposedChanges);
+        } else {
+          setPersistedProposedChanges(mockProposedChanges);
+          await saveProposedChanges(mockProposedChanges);
         }
 
         if (savedRepositories.length > 0) {
@@ -1188,12 +1266,38 @@ export function App() {
     approvalId: string,
     status: ApprovalRequestStatus,
   ) {
+    let updatedProposal: PersistedProposedChange | null = null;
+
+    if (status === "approved" || status === "rejected") {
+      const linkedProposal = persistedProposedChanges.find(
+        (change) => change.approvalRequestId === approvalId,
+      );
+
+      if (linkedProposal) {
+        updatedProposal = {
+          ...linkedProposal,
+          status,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+    }
+
     setApprovalRequests((currentRequests) =>
       currentRequests.map((request) =>
         request.id === approvalId ? { ...request, status } : request,
       ),
     );
+    if (updatedProposal) {
+      setPersistedProposedChanges((currentChanges) =>
+        currentChanges.map((change) =>
+          change.id === updatedProposal.id ? updatedProposal : change,
+        ),
+      );
+    }
     await updateApprovalRequestStatus(approvalId, status);
+    if (updatedProposal) {
+      await saveProposedChanges([updatedProposal]);
+    }
   }
 
   function formatFileSize(sizeBytes: number): string {
@@ -2078,18 +2182,50 @@ export function App() {
                   <h2>Structured implementation plan</h2>
                 </div>
                 <StatusPill
-                  tone={activeProposedPlan?.approvalRequired ? "warning" : "success"}
+                  tone={
+                    activePersistedProposedChange
+                      ? proposedChangeStatusTone(activePersistedProposedChange.status)
+                      : activeProposedPlan?.approvalRequired
+                        ? "warning"
+                        : "success"
+                  }
                 >
-                  {activeProposedPlan?.approvalRequired
-                    ? "approval required"
-                    : "approval not required"}
+                  {activePersistedProposedChange?.status.replaceAll("_", " ") ??
+                    (activeProposedPlan?.approvalRequired
+                      ? "approval required"
+                      : "approval not required")}
                 </StatusPill>
               </div>
 
               <p className="tab-card-copy">
-                {activeProposedPlan?.summary ??
+                {activePersistedProposedChange?.summary ??
+                  activeProposedPlan?.summary ??
                   "No structured proposed plan is available for this run yet."}
               </p>
+
+              {activePersistedProposedChange ? (
+                <dl className="tab-fact-grid proposal-link-fact-grid">
+                  <div>
+                    <dt>Proposal Record</dt>
+                    <dd>{activePersistedProposedChange.id}</dd>
+                  </div>
+                  <div>
+                    <dt>Approval Link</dt>
+                    <dd>
+                      {activePersistedProposedChange.approvalRequestId ??
+                        "Not linked"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Patch Artifacts</dt>
+                    <dd>
+                      {activePersistedProposedChange.patchArtifacts.length > 0
+                        ? `${activePersistedProposedChange.patchArtifacts.length} stored`
+                        : "Not generated"}
+                    </dd>
+                  </div>
+                </dl>
+              ) : null}
 
               {activeProposedPlan ? (
                 <div className="proposed-plan-grid">
@@ -2129,15 +2265,29 @@ export function App() {
                       </div>
                     </div>
                     <div className="plan-file-list">
-                      {activeProposedPlan.affectedFiles.map((file) => (
+                      {(activePersistedProposedChange?.files ??
+                        activeProposedPlan.affectedFiles.map((file) => ({
+                          operation: file.changeType,
+                          patchArtifactStatus: "not_generated" as const,
+                          path: file.path,
+                          reason: file.reason,
+                          riskLevel: "medium" as const,
+                        }))).map((file) => (
                         <div className="plan-file-item" key={file.path}>
                           <StatusPill tone="neutral" size="sm" showDot={false}>
-                            {file.changeType}
+                            {file.operation}
                           </StatusPill>
                           <div>
                             <strong>{file.path}</strong>
                             <span>{file.reason}</span>
                           </div>
+                          <StatusPill
+                            tone={patchArtifactTone(file.patchArtifactStatus)}
+                            size="sm"
+                            showDot={false}
+                          >
+                            {file.patchArtifactStatus.replaceAll("_", " ")}
+                          </StatusPill>
                         </div>
                       ))}
                     </div>
@@ -2409,6 +2559,23 @@ export function App() {
                       <dt>Created</dt>
                       <dd>{selectedApprovalRequest.createdAt}</dd>
                     </div>
+                    <div>
+                      <dt>Proposal Status</dt>
+                      <dd>
+                        {selectedApprovalProposedChange?.status.replaceAll(
+                          "_",
+                          " ",
+                        ) ?? "Not persisted"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Patch Artifacts</dt>
+                      <dd>
+                        {selectedApprovalProposedChange?.patchArtifacts.length
+                          ? `${selectedApprovalProposedChange.patchArtifacts.length} stored`
+                          : "Not generated"}
+                      </dd>
+                    </div>
                   </dl>
 
                   <div className="approval-review-section">
@@ -2476,16 +2643,26 @@ export function App() {
                     <h2>Plan attached to approval</h2>
                   </div>
                   <StatusPill
-                    tone={selectedApprovalPlan?.approvalRequired ? "warning" : "neutral"}
+                    tone={
+                      selectedApprovalProposedChange
+                        ? proposedChangeStatusTone(
+                            selectedApprovalProposedChange.status,
+                          )
+                        : selectedApprovalPlan?.approvalRequired
+                          ? "warning"
+                          : "neutral"
+                    }
                   >
-                    {selectedApprovalPlan?.approvalRequired
-                      ? "approval required"
-                      : "no plan attached"}
+                    {selectedApprovalProposedChange?.status.replaceAll("_", " ") ??
+                      (selectedApprovalPlan?.approvalRequired
+                        ? "approval required"
+                        : "no plan attached")}
                   </StatusPill>
                 </div>
 
                 <p className="tab-card-copy">
-                  {selectedApprovalPlan?.summary ??
+                  {selectedApprovalProposedChange?.summary ??
+                    selectedApprovalPlan?.summary ??
                     "No structured proposed plan is linked to this approval yet."}
                 </p>
 
@@ -2603,8 +2780,8 @@ export function App() {
                   <div className="overview-card__header">
                     <div>
                       <p className="card-eyebrow">Diff Review</p>
-                      <h3>Local repository diffs</h3>
-                    </div>
+                        <h3>Local repository diffs</h3>
+                      </div>
                     <StatusPill
                       tone={approvalLocalDiffCount > 0 ? "success" : "neutral"}
                       size="sm"
@@ -2658,6 +2835,13 @@ export function App() {
                                   : entry.reason}
                               </small>
                             </span>
+                            <StatusPill
+                              tone={patchArtifactTone(entry.patchArtifactStatus)}
+                              size="sm"
+                              showDot={false}
+                            >
+                              {entry.patchArtifactStatus.replaceAll("_", " ")}
+                            </StatusPill>
                             <StatusPill
                               tone={entry.changedFile ? "success" : "neutral"}
                               size="sm"
