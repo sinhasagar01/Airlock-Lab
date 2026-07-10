@@ -6,14 +6,22 @@ The desktop MVP uses Tauri, React, TypeScript, and Vite. Styling is plain CSS wi
 
 ## UI Architecture
 
-- `apps/desktop/src/App.tsx` owns the current MVP shell and product flows.
+- `apps/desktop/src/App.tsx` owns the current MVP state orchestration and
+  top-level tab composition.
+- `apps/desktop/src/components/AppShell.tsx` owns the reusable shell, sidebar,
+  and header components.
+- `apps/desktop/src/features/*` contains feature-level reusable surfaces such
+  as file preview browsing, local Git diff preview, generated patch artifact
+  review, and demo workflow constants.
+- `apps/desktop/src/lib/*` contains stable desktop seed data, UI-state/tone
+  helpers, and seed-merging helpers.
 - `packages/ui/src/index.tsx` provides shared primitives for status pills,
   summary cards, dashboard cards, icon badges, primary/secondary buttons, icons,
   and empty states.
 - Storage and Tauri command wrappers remain under `apps/desktop/src/storage`.
-- The final dashboard migration keeps desktop-specific shell composition in
-  `App.tsx` through `AppShell`, `Sidebar`, `SidebarNavItem`, `AppHeader`, and
-  `UpgradeCard` while the low-level primitives live in `packages/ui`.
+- The final dashboard migration keeps low-level primitives in `packages/ui`,
+  feature-specific reusable components under `apps/desktop/src/features`, and
+  desktop app orchestration in `App.tsx`.
 - All six top-level tabs use the shared header, summary cards, card surfaces,
   status pills, icon badges, and primary/secondary button treatments.
 - Repository Intelligence data is derived in `packages/indexing` from indexed

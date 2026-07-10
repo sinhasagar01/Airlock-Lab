@@ -1,0 +1,155 @@
+import type { ReactNode } from "react";
+import { primaryNavigation, type NavigationSection } from "@ai-dev/core";
+import {
+  Icon,
+  PrimaryButton,
+  SecondaryButton,
+  StatusPill,
+  type IconName,
+} from "@ai-dev/ui";
+import { navigationIcons } from "../lib/appData";
+
+type AppShellProps = {
+  sidebar: ReactNode;
+  children: ReactNode;
+};
+
+export function AppShell({ sidebar, children }: AppShellProps) {
+  return (
+    <main className="app-shell">
+      {sidebar}
+      <section className="workspace">{children}</section>
+    </main>
+  );
+}
+
+type SidebarProps = {
+  activeSection: NavigationSection;
+  pendingApprovalCount: number;
+  onSelectSection: (section: NavigationSection) => void;
+};
+
+export function Sidebar({
+  activeSection,
+  pendingApprovalCount,
+  onSelectSection,
+}: SidebarProps) {
+  return (
+    <aside className="sidebar">
+      <div className="brand-lockup">
+        <span className="product-mark">ADW</span>
+        <div className="brand">AI Developer Workspace</div>
+      </div>
+
+      <nav aria-label="Primary navigation" className="sidebar-nav">
+        {primaryNavigation.map((item) => (
+          <SidebarNavItem
+            count={item.id === "approvals" ? pendingApprovalCount : 0}
+            icon={navigationIcons[item.id]}
+            isActive={activeSection === item.id}
+            key={item.id}
+            label={item.label}
+            onClick={() => onSelectSection(item.id)}
+          />
+        ))}
+      </nav>
+
+      <UpgradeCard />
+
+      <div className="sidebar-user" aria-label="Current user">
+        <span className="sidebar-user__avatar" aria-hidden="true">
+          S
+        </span>
+        <div>
+          <strong>Sagar</strong>
+          <span>Admin</span>
+        </div>
+        <Icon name="chevron" size="sm" />
+      </div>
+    </aside>
+  );
+}
+
+type SidebarNavItemProps = {
+  count?: number;
+  icon: IconName;
+  isActive: boolean;
+  label: string;
+  onClick: () => void;
+};
+
+function SidebarNavItem({
+  count = 0,
+  icon,
+  isActive,
+  label,
+  onClick,
+}: SidebarNavItemProps) {
+  return (
+    <button
+      aria-current={isActive ? "page" : undefined}
+      aria-label={label}
+      className="sidebar-nav-item"
+      onClick={onClick}
+      type="button"
+    >
+      <Icon name={icon} />
+      <span>{label}</span>
+      {count > 0 ? <span className="nav-count">{count}</span> : null}
+    </button>
+  );
+}
+
+function UpgradeCard() {
+  return (
+    <div className="sidebar-upgrade">
+      <div className="sidebar-upgrade__icon">
+        <Icon name="spark" />
+      </div>
+      <h2>Pro Intelligence</h2>
+      <p>Deeper local code insight for approved agent work.</p>
+      <SecondaryButton className="sidebar-upgrade__button">
+        Upgrade Plan
+      </SecondaryButton>
+    </div>
+  );
+}
+
+type AppHeaderProps = {
+  description: string;
+  eyebrow: string;
+  pendingApprovalCount: number;
+  providerName: string;
+  title: string;
+  onChooseRepository: () => void;
+};
+
+export function AppHeader({
+  description,
+  eyebrow,
+  pendingApprovalCount,
+  providerName,
+  title,
+  onChooseRepository,
+}: AppHeaderProps) {
+  return (
+    <header className="app-header">
+      <div className="app-header__copy">
+        <p className="eyebrow">{eyebrow}</p>
+        <h1>{title}</h1>
+        <p className="hero-copy">{description}</p>
+      </div>
+      <div className="app-header__actions">
+        <div className="status-row">
+          <StatusPill tone="success">Provider: {providerName}</StatusPill>
+          <StatusPill tone="warning">
+            Pending approvals: {pendingApprovalCount}
+          </StatusPill>
+        </div>
+        <PrimaryButton icon="repository" onClick={onChooseRepository}>
+          Choose repository
+        </PrimaryButton>
+      </div>
+    </header>
+  );
+}

@@ -13,6 +13,11 @@ script also runs Rust native boundary tests for path safety, safe preview
 rejection, Git status parsing, Git diff parsing, non-Git handling, and unsafe
 Git diff path rejection.
 
+`App.tsx` remains the top-level state orchestrator, but stable seed data,
+desktop shell components, UI-state helpers, generated patch artifact panels,
+local Git diff preview, and indexed-file browser/preview now live in focused
+desktop modules under `components`, `features`, and `lib`.
+
 ## Current UI Direction
 
 The product is in the final dashboard design migration, using

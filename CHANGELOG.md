@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Split desktop `App.tsx` into focused component, feature, and helper modules
+  for shell, seed data, UI-state helpers, file preview, Git diff preview,
+  generated patch artifacts, and demo workflow constants without changing
+  product behavior.
 - Added native Tauri boundary smoke tests for safe relative paths, preview
   traversal/absolute-path rejection, non-Git status handling, Git status
   parsing, Git diff parsing, and unsafe Git diff path rejection.
