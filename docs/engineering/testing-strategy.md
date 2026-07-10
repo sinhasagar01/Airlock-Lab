@@ -135,13 +135,30 @@ Current desktop smoke coverage includes:
 
 - Six-tab rendering and sidebar navigation.
 - Approval queue actions and pending-count updates.
+- Connected demo workflow navigation across Repository Intelligence, Agent
+  Runs, Approval Review, and Changes.
 - Safe file preview panel states for no file selected, loading, text preview,
   binary content, too-large files, outside-repository blocking, preview errors,
   and selected-file changes.
+- Graceful UI states when native Git status, Git diff, or preview wrappers are
+  unavailable.
 
 Tauri filesystem, SQL, dialog, Git, and scan calls should be mocked at the
 desktop storage-wrapper boundary in UI tests. Tests must not mock broader
 filesystem access or weaken the native safe-preview command contract.
+
+Native Tauri boundary coverage now runs through `npm run test` via the desktop
+`test:native` script. Rust tests cover:
+
+- Safe relative path validation for file preview and Git diff paths.
+- File preview rejection for traversal and absolute paths outside the selected
+  repository.
+- Non-Git repository handling for Git status.
+- Git diff rejection for traversal, absolute paths, and unsafe old paths.
+- Git porcelain parsing for modified, added, deleted, renamed, untracked,
+  staged/unstaged/both, and conflicted files.
+- Git diff parsing for metadata, hunk, added, removed, context, and binary
+  lines.
 
 The MVP can defer:
 

@@ -226,6 +226,10 @@ fn canonical_selected_git_root(repository_path: &str) -> Result<(PathBuf, String
 }
 
 fn is_safe_relative_git_path(file_path: &str) -> bool {
+    is_safe_relative_path(file_path)
+}
+
+fn is_safe_relative_path(file_path: &str) -> bool {
     if file_path.trim().is_empty() || file_path.contains('\0') {
         return false;
     }
@@ -534,6 +538,17 @@ fn preview_repository_file(repository_path: String, file_path: String) -> FileCo
             };
         }
     };
+
+    if !is_safe_relative_path(&file_path) {
+        return FileContentPreview {
+            path: file_path,
+            status: "outside_repository".to_string(),
+            content: None,
+            size_bytes: 0,
+            max_size_bytes: MAX_PREVIEW_BYTES,
+        };
+    }
+
     let requested_path = repository_root.join(&file_path);
     let canonical_file_path = match fs::canonicalize(&requested_path) {
         Ok(path) => path,
@@ -858,6 +873,220 @@ fn load_git_file_diff(
         raw_diff: Some(raw_diff),
         lines,
         refreshed_at: now_unix_seconds(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        process::Command,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        let suffix = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!(
+            "ai-developer-workspace-{name}-{}-{suffix}",
+            std::process::id()
+        ))
+    }
+
+    fn create_temp_dir(name: &str) -> PathBuf {
+        let path = unique_temp_dir(name);
+        fs::create_dir_all(&path).expect("create temp test directory");
+        path
+    }
+
+    fn remove_temp_dir(path: &Path) {
+        let _ = fs::remove_dir_all(path);
+    }
+
+    fn init_git_repo(path: &Path) {
+        let output = Command::new("git")
+            .args(["init"])
+            .current_dir(path)
+            .output()
+            .expect("run git init");
+
+        assert!(
+            output.status.success(),
+            "git init failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn safe_relative_path_rejects_traversal_absolute_empty_and_null_paths() {
+        assert!(is_safe_relative_path("src/App.tsx"));
+        assert!(is_safe_relative_path("apps/desktop/src/App.tsx"));
+        assert!(!is_safe_relative_path(""));
+        assert!(!is_safe_relative_path("   "));
+        assert!(!is_safe_relative_path("../outside.txt"));
+        assert!(!is_safe_relative_path("src/../outside.txt"));
+        assert!(!is_safe_relative_path("/tmp/outside.txt"));
+        assert!(!is_safe_relative_path("src/App.tsx\0.png"));
+    }
+
+    #[test]
+    fn preview_rejects_traversal_and_absolute_paths_before_reading() {
+        let repository = create_temp_dir("preview-repository");
+        let outside = create_temp_dir("preview-outside");
+        fs::write(repository.join("safe.txt"), "hello").expect("write safe file");
+        fs::write(outside.join("secret.txt"), "secret").expect("write outside file");
+
+        let traversal_preview = preview_repository_file(
+            repository.to_string_lossy().to_string(),
+            "../preview-outside/secret.txt".to_string(),
+        );
+        let absolute_preview = preview_repository_file(
+            repository.to_string_lossy().to_string(),
+            outside.join("secret.txt").to_string_lossy().to_string(),
+        );
+        let safe_preview = preview_repository_file(
+            repository.to_string_lossy().to_string(),
+            "safe.txt".to_string(),
+        );
+
+        assert_eq!(traversal_preview.status, "outside_repository");
+        assert_eq!(absolute_preview.status, "outside_repository");
+        assert_eq!(safe_preview.status, "ready");
+        assert_eq!(safe_preview.content.as_deref(), Some("hello"));
+
+        remove_temp_dir(&repository);
+        remove_temp_dir(&outside);
+    }
+
+    #[test]
+    fn git_status_reports_non_git_repository_gracefully() {
+        let repository = create_temp_dir("non-git-status");
+        let summary = load_git_status_summary(
+            "repo-test".to_string(),
+            repository.to_string_lossy().to_string(),
+        );
+
+        assert!(!summary.is_git_repository);
+        assert!(summary.is_clean);
+        assert_eq!(summary.changed_file_count, 0);
+        assert_eq!(summary.branch.as_deref(), Some("not a git repository"));
+
+        remove_temp_dir(&repository);
+    }
+
+    #[test]
+    fn git_diff_rejects_traversal_and_absolute_paths() {
+        let repository = create_temp_dir("git-diff-safety");
+        init_git_repo(&repository);
+
+        let traversal_diff = load_git_file_diff(
+            "repo-test".to_string(),
+            repository.to_string_lossy().to_string(),
+            "../outside.txt".to_string(),
+            "unstaged".to_string(),
+            "modified".to_string(),
+            None,
+        );
+        let absolute_diff = load_git_file_diff(
+            "repo-test".to_string(),
+            repository.to_string_lossy().to_string(),
+            repository.join("file.txt").to_string_lossy().to_string(),
+            "unstaged".to_string(),
+            "modified".to_string(),
+            None,
+        );
+        let unsafe_old_path_diff = load_git_file_diff(
+            "repo-test".to_string(),
+            repository.to_string_lossy().to_string(),
+            "new.txt".to_string(),
+            "staged".to_string(),
+            "renamed".to_string(),
+            Some("../old.txt".to_string()),
+        );
+
+        assert_eq!(traversal_diff.kind, "unavailable");
+        assert!(traversal_diff.raw_diff.is_none());
+        assert_eq!(absolute_diff.kind, "unavailable");
+        assert!(absolute_diff.raw_diff.is_none());
+        assert_eq!(unsafe_old_path_diff.kind, "unavailable");
+        assert!(unsafe_old_path_diff.raw_diff.is_none());
+
+        remove_temp_dir(&repository);
+    }
+
+    #[test]
+    fn parses_porcelain_status_kinds_and_stages() {
+        let modified = parse_porcelain_line(" M apps/desktop/src/App.tsx").unwrap();
+        let added = parse_porcelain_line("A  packages/core/src/index.ts").unwrap();
+        let deleted = parse_porcelain_line(" D old-file.ts").unwrap();
+        let renamed = parse_porcelain_line("R  old.ts -> new.ts").unwrap();
+        let untracked = parse_porcelain_line("?? docs/new.md").unwrap();
+        let staged_and_unstaged = parse_porcelain_line("MM package.json").unwrap();
+        let conflicted = parse_porcelain_line("UU src/conflict.ts").unwrap();
+
+        assert_eq!(modified.kind, "modified");
+        assert_eq!(modified.stage, "unstaged");
+        assert_eq!(added.kind, "added");
+        assert_eq!(added.stage, "staged");
+        assert_eq!(deleted.kind, "deleted");
+        assert_eq!(deleted.stage, "unstaged");
+        assert_eq!(renamed.kind, "renamed");
+        assert_eq!(renamed.stage, "staged");
+        assert_eq!(renamed.old_path.as_deref(), Some("old.ts"));
+        assert_eq!(renamed.path, "new.ts");
+        assert_eq!(untracked.kind, "untracked");
+        assert_eq!(untracked.stage, "untracked");
+        assert_eq!(staged_and_unstaged.kind, "modified");
+        assert_eq!(staged_and_unstaged.stage, "both");
+        assert_eq!(conflicted.kind, "conflicted");
+        assert_eq!(conflicted.stage, "unknown");
+        assert!(parse_porcelain_line(" M ").is_none());
+    }
+
+    #[test]
+    fn parses_git_diff_line_types_and_counts() {
+        let raw_diff = "\
+diff --git a/src/app.ts b/src/app.ts
+index 1111111..2222222 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -1,4 +1,5 @@
+ import { app } from './app';
+-const name = 'old';
++const name = 'new';
++const enabled = true;
+ context line";
+        let (lines, additions, deletions, is_binary) = parse_git_diff(raw_diff);
+
+        assert!(!is_binary);
+        assert_eq!(additions, 2);
+        assert_eq!(deletions, 1);
+        assert_eq!(lines[0].r#type, "metadata");
+        assert_eq!(lines[3].r#type, "metadata");
+        assert_eq!(lines[4].r#type, "hunk");
+        assert_eq!(lines[5].r#type, "context");
+        assert_eq!(lines[6].r#type, "removed");
+        assert_eq!(lines[7].r#type, "added");
+        assert_eq!(lines[8].r#type, "added");
+        assert_eq!(lines[9].r#type, "context");
+    }
+
+    #[test]
+    fn parses_binary_git_diff_as_binary_without_counting_metadata_headers() {
+        let raw_diff = "\
+diff --git a/image.png b/image.png
+index 1111111..2222222 100644
+Binary files a/image.png and b/image.png differ";
+        let (lines, additions, deletions, is_binary) = parse_git_diff(raw_diff);
+
+        assert!(is_binary);
+        assert_eq!(additions, 0);
+        assert_eq!(deletions, 0);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].r#type, "metadata");
     }
 }
 

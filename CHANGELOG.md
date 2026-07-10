@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added native Tauri boundary smoke tests for safe relative paths, preview
+  traversal/absolute-path rejection, non-Git status handling, Git status
+  parsing, Git diff parsing, and unsafe Git diff path rejection.
+- Hardened safe file preview to reject traversal, absolute, empty, and null-byte
+  paths before resolving or reading files.
+- Expanded frontend smoke coverage for graceful Git status failures and demo
+  workflow navigation when native status/preview wrappers are unavailable.
 - Added the first connected safe demo workflow seed across Repository
   Intelligence, Agent Runs, persisted proposed changes, Approval Review,
   generated patch artifact states, and matching local Git diff indicators.

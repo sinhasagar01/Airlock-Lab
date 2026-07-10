@@ -8,7 +8,10 @@ The desktop app now has an initial Vitest/jsdom smoke suite covering six-tab
 rendering, sidebar navigation, approval actions, pending approval count updates,
 visible safe file preview states, outside-repository blocking, and selected-file
 preview updates. It also covers the seeded demo workflow path from Repository
-Intelligence to Agent Runs, Approval Review, and Changes.
+Intelligence to Agent Runs, Approval Review, and Changes. The desktop test
+script also runs Rust native boundary tests for path safety, safe preview
+rejection, Git status parsing, Git diff parsing, non-Git handling, and unsafe
+Git diff path rejection.
 
 ## Current UI Direction
 
@@ -65,4 +68,4 @@ source of truth.
 
 ## Active Safety Boundary
 
-Safe file preview remains local-first and path-bounded to the selected repository. Repository Intelligence prefers persisted/indexed facts over new filesystem reads. Git status, local diff preview, and approval-attached matching local diffs are read-only, use fixed native Git arguments, validate repository-relative paths, and do not expose arbitrary Git execution. Persisted proposed changes and generated patch artifact records are durable review metadata only. Agent run and approval detail do not write files, execute patches, stage, reset, checkout, commit, or generate patch diffs. The demo workflow is seeded review state plus real read-only repository state; it does not claim real agent execution happened. Generated artifact previews render stored `rawDiff` only and failed/unavailable/not-generated states do not fake diff content. Visual changes do not weaken size limits, binary handling, or outside-repository blocking.
+Safe file preview remains local-first and path-bounded to the selected repository. Repository Intelligence prefers persisted/indexed facts over new filesystem reads. Git status, local diff preview, and approval-attached matching local diffs are read-only, use fixed native Git arguments, validate repository-relative paths, and do not expose arbitrary Git execution. File preview and Git diff paths reject traversal, absolute paths, empty paths, and null-byte paths before native reads or Git diff commands. Persisted proposed changes and generated patch artifact records are durable review metadata only. Agent run and approval detail do not write files, execute patches, stage, reset, checkout, commit, or generate patch diffs. The demo workflow is seeded review state plus real read-only repository state; it does not claim real agent execution happened. Generated artifact previews render stored `rawDiff` only and failed/unavailable/not-generated states do not fake diff content. Visual changes do not weaken size limits, binary handling, or outside-repository blocking.

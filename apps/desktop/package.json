@@ -10,7 +10,8 @@
     "build:web": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests && npm run test:native",
+    "test:native": "PATH=/opt/homebrew/opt/rustup/bin:$PATH cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
     "@ai-dev/ai": "*",

@@ -650,6 +650,51 @@ describe("App smoke tests", () => {
     expect(loadGitStatusSummary).toHaveBeenCalledTimes(callCountBeforeRefresh + 1);
   });
 
+  it("shows Git status unavailable state when the native Git status wrapper rejects", async () => {
+    vi.mocked(loadGitStatusSummary).mockRejectedValue(new Error("git unavailable"));
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Changes" }));
+
+    expect(await screen.findByText("Git status unavailable")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "The workspace could not read Git status for the selected repository. No write operations were attempted.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Approval-linked local change review")).toBeInTheDocument();
+  });
+
+  it("keeps the demo workflow navigable when native status and preview wrappers are unavailable", async () => {
+    vi.mocked(loadGitStatusSummary).mockRejectedValue(new Error("git unavailable"));
+    vi.mocked(previewRepositoryFile).mockRejectedValue(new Error("preview unavailable"));
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Repositories" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Continue review workflow" }),
+    );
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Draft app shell implementation plan",
+      }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Approve provider abstraction patch plan",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Generated Patch Artifacts")).toBeInTheDocument();
+    expect(screen.getByText("Local repository diffs")).toBeInTheDocument();
+    expect(screen.getAllByText("No local diff yet").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled();
+  });
+
   it("shows an honest untracked diff state when a changed file has no tracked baseline", async () => {
     const { user } = renderApp();
 
