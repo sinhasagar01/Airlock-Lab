@@ -24,8 +24,8 @@ The app shell now follows a warm premium SaaS dashboard direction.
   handoff.
 - Approvals now uses a master/detail review workflow with selectable approval
   requests, linked agent run metadata, proposed plan review, affected files,
-  risk and validation sections, repository context, decision controls, and an
-  honest diff placeholder.
+  risk and validation sections, repository context, matching local Git diff
+  review, and decision controls.
 - Changes includes read-only Git status, clean/dirty state,
   staged/unstaged/untracked counts, selectable changed-file rows, local Git diff
   preview, manual refresh, and indexed-file browsing/file preview access.
@@ -57,8 +57,9 @@ The app shell now follows a warm premium SaaS dashboard direction.
   been read through a safe bounded path.
 - Agent run detail selected state, structured proposed plan state, linked
   approval handoff, and disabled diff action until generated diffs exist.
-- Approval queue selected state, approval detail, proposed plan review, disabled
-  diff placeholder, and approve/reject decision states.
+- Approval queue selected state, approval detail, proposed plan review, matching
+  local-diff availability, selected approval diff, missing local diff, and
+  approve/reject decision states.
 - Git status loading, clean, changed, not-a-Git-repository, and unavailable
   states.
 - Local diff loading, text diff, untracked, binary, too-large, unavailable, and

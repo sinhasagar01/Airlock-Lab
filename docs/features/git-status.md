@@ -16,6 +16,8 @@ repository.
   stage, and raw Git status code.
 - Users can manually refresh Git status.
 - Users can select a changed file and inspect a read-only local Git diff.
+- Approval review can reuse the same safe local diff wrapper when proposed
+  affected files match changed files by repository-relative path.
 - Diff preview supports staged, unstaged, combined, untracked, binary,
   too-large, unavailable, and empty states.
 - The indexed-file browser and safe file preview remain available below the Git
@@ -63,5 +65,6 @@ The shared model lives in `packages/core`:
 - `GitDiffLine`
 - `GitDiffLineType`
 
-The diff model is read-only. It represents local working tree or staged diffs
-and does not represent generated patch plans or approval-attached diffs yet.
+The diff model is read-only. It represents local working tree or staged diffs.
+Approval review may attach matching local Git diffs for inspection, but these
+are not generated patch diffs and do not imply file writes have happened.

@@ -23,8 +23,10 @@ The desktop MVP uses Tauri, React, TypeScript, and Vite. Styling is plain CSS wi
   `ProposedChangePlan`. Keep proposed plans separate from real Git diffs until
   the diff model and approval review attachment are explicitly implemented.
 - Approval review reuses the linked `AgentRun`, `ApprovalRequest`, and
-  `ProposedChangePlan` state. Decision buttons may update approval status, but
-  they must not execute patches, write files, or run Git commands.
+  `ProposedChangePlan` state. It may match proposed affected files to local Git
+  status paths and render read-only local diffs through `loadGitFileDiff`.
+  Decision buttons may update approval status, but they must not execute
+  patches, write files, or run Git commands.
 - Git status uses the shared `GitStatusSummary` model in `packages/core` and the
   `loadGitStatusSummary` Tauri wrapper. It must remain read-only and bounded to
   the selected repository.
@@ -54,9 +56,9 @@ The desktop MVP uses Tauri, React, TypeScript, and Vite. Styling is plain CSS wi
 - Agent Runs may show expected affected files, plan steps, risks, validation,
   and approval handoff from seeded/structured run data. It must not imply real
   generated diffs or file writes before those systems exist.
-- Approvals must present generated diff attachment as planned/unavailable until
-  approval-specific diff attachment exists. Do not render fake generated diff
-  hunks from the local Git diff viewer.
+- Approvals may present matching local repository diffs for affected files, but
+  generated patch diffs remain planned until approval-specific diff attachment
+  exists. Do not label local Git diffs as agent-generated diffs.
 - Settings must not add destructive behavior unless it is implemented with an
   explicit confirmation gate.
 

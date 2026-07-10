@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Attached matching local Git diffs to the Approval Detail review screen by
+  matching proposed affected files against read-only Git status paths.
+- Reused the safe local diff panel in approval review with loading, rendered
+  text diff, missing-local-diff, unavailable, binary, and too-large states.
+- Expanded smoke coverage for approval diff availability, rendered local diff
+  content, loading state, error state, and approve/reject continuity.
 - Added a safe read-only local Git diff viewer for changed files in the Changes
   tab, including staged, unstaged, combined, untracked, binary, too-large,
   unavailable, and no-diff states.

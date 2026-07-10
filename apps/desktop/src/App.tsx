@@ -382,6 +382,138 @@ function gitDiffStateTitle(
   return "Local Git diff";
 }
 
+type GitDiffPreviewPanelProps = {
+  file: GitChangedFile | null;
+  diff: GitFileDiff | null;
+  state: "idle" | "loading" | "ready" | "error";
+  emptyDescription: string;
+};
+
+function GitDiffPreviewPanel({
+  file,
+  diff,
+  emptyDescription,
+  state,
+}: GitDiffPreviewPanelProps) {
+  return (
+    <section className="git-diff-panel" aria-label="Selected file diff">
+      <div className="git-diff-panel__header">
+        <div>
+          <p className="card-eyebrow">Read-only diff</p>
+          <h3>{gitDiffStateTitle(file, diff, state)}</h3>
+          <p>{file?.path ?? emptyDescription}</p>
+        </div>
+        <StatusPill
+          tone={
+            diff?.kind === "unavailable" || state === "error"
+              ? "warning"
+              : diff?.kind === "untracked"
+                ? "neutral"
+                : "success"
+          }
+          size="sm"
+        >
+          {state === "loading" ? "loading" : diff?.kind ?? "idle"}
+        </StatusPill>
+      </div>
+
+      <dl className="diff-metadata-grid">
+        <div>
+          <dt>Additions</dt>
+          <dd>+{diff?.additions ?? 0}</dd>
+        </div>
+        <div>
+          <dt>Deletions</dt>
+          <dd>-{diff?.deletions ?? 0}</dd>
+        </div>
+        <div>
+          <dt>Lines</dt>
+          <dd>{diff?.lineCount ?? 0}</dd>
+        </div>
+      </dl>
+
+      {state === "loading" ? (
+        <div className="git-diff-state">
+          <IconBadge icon="search" tone="accent" size="md" />
+          <div>
+            <h4>Loading diff safely</h4>
+            <p>
+              The workspace is running a fixed read-only Git diff command inside
+              the selected repository.
+            </p>
+          </div>
+        </div>
+      ) : state === "error" ? (
+        <div className="git-diff-state">
+          <IconBadge icon="changes" tone="danger" size="md" />
+          <div>
+            <h4>Diff could not be loaded</h4>
+            <p>
+              No write operation was attempted. Refresh Git status and try
+              selecting the file again.
+            </p>
+          </div>
+        </div>
+      ) : diff?.isTooLarge ? (
+        <div className="git-diff-state">
+          <IconBadge icon="file" tone="warning" size="md" />
+          <div>
+            <h4>Diff exceeds preview limits</h4>
+            <p>
+              This local diff is too large for the inline preview. It remains
+              read-only and unavailable for review here.
+            </p>
+          </div>
+        </div>
+      ) : diff?.isBinary || diff?.kind === "binary" ? (
+        <div className="git-diff-state">
+          <IconBadge icon="file" tone="warning" size="md" />
+          <div>
+            <h4>Binary diff</h4>
+            <p>
+              Git reported this file as binary, so there is no text diff to
+              render in the workspace.
+            </p>
+          </div>
+        </div>
+      ) : diff?.kind === "untracked" ? (
+        <div className="git-diff-state">
+          <IconBadge icon="file" tone="neutral" size="md" />
+          <div>
+            <h4>No tracked baseline yet</h4>
+            <p>
+              This file is untracked. A text diff will be available after a
+              tracked baseline exists.
+            </p>
+          </div>
+        </div>
+      ) : diff?.kind === "unavailable" || !diff || diff.lines.length === 0 ? (
+        <div className="git-diff-state">
+          <IconBadge icon="changes" tone="neutral" size="md" />
+          <div>
+            <h4>No diff content available</h4>
+            <p>
+              Git did not return a diff for this file and stage. The file
+              remains visible in the status list.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <pre className="git-diff-code" tabIndex={0}>
+          {diff.lines.map((line, index) => (
+            <code
+              className={`git-diff-line git-diff-line--${line.type}`}
+              key={`${line.type}-${index}-${line.content}`}
+            >
+              {line.content}
+            </code>
+          ))}
+        </pre>
+      )}
+    </section>
+  );
+}
+
 type AppShellProps = {
   sidebar: ReactNode;
   children: ReactNode;
@@ -555,6 +687,14 @@ export function App() {
   const [gitFileDiffState, setGitFileDiffState] = useState<
     "idle" | "loading" | "ready" | "error"
   >("idle");
+  const [selectedApprovalDiffPath, setSelectedApprovalDiffPath] = useState<
+    string | null
+  >(null);
+  const [approvalGitFileDiff, setApprovalGitFileDiff] =
+    useState<GitFileDiff | null>(null);
+  const [approvalGitFileDiffState, setApprovalGitFileDiffState] = useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
   const [filePreview, setFilePreview] = useState<FileContentPreview | null>(
     null,
   );
@@ -642,6 +782,43 @@ export function App() {
     gitStatusSummary?.files.find((file) => file.path === selectedGitFilePath) ??
     gitStatusSummary?.files[0] ??
     null;
+  const approvalAffectedFiles = useMemo(() => {
+    if (selectedApprovalPlan?.affectedFiles.length) {
+      return selectedApprovalPlan.affectedFiles.map((file) => ({
+        changeType: file.changeType,
+        path: file.path,
+        reason: file.reason,
+      }));
+    }
+
+    return (
+      selectedApprovalRequest?.files.map((path) => ({
+        changeType: "unknown" as const,
+        path,
+        reason: "Listed on the approval request.",
+      })) ?? []
+    );
+  }, [selectedApprovalPlan, selectedApprovalRequest]);
+  const approvalDiffEntries = useMemo(
+    () =>
+      approvalAffectedFiles.map((file) => ({
+        ...file,
+        changedFile:
+          gitStatusSummary?.files.find((changedFile) => changedFile.path === file.path) ??
+          null,
+      })),
+    [approvalAffectedFiles, gitStatusSummary],
+  );
+  const approvalLocalDiffCount = approvalDiffEntries.filter(
+    (entry) => entry.changedFile,
+  ).length;
+  const selectedApprovalDiffEntry =
+    approvalDiffEntries.find((entry) => entry.path === selectedApprovalDiffPath) ??
+    approvalDiffEntries.find((entry) => entry.changedFile) ??
+    approvalDiffEntries[0] ??
+    null;
+  const selectedApprovalChangedFile =
+    selectedApprovalDiffEntry?.changedFile ?? null;
 
   async function refreshGitStatus(repository = activeRepository) {
     if (!hasActiveRepository || repository.id === emptyRepository.id) {
@@ -769,6 +946,75 @@ export function App() {
     selectedGitChangedFile?.oldPath,
     selectedGitChangedFile?.path,
     selectedGitChangedFile?.stage,
+  ]);
+
+  useEffect(() => {
+    if (approvalDiffEntries.length === 0) {
+      setSelectedApprovalDiffPath(null);
+      return;
+    }
+
+    const selectedFileStillExists = approvalDiffEntries.some(
+      (entry) => entry.path === selectedApprovalDiffPath,
+    );
+
+    if (!selectedFileStillExists) {
+      setSelectedApprovalDiffPath(
+        approvalDiffEntries.find((entry) => entry.changedFile)?.path ??
+          approvalDiffEntries[0].path,
+      );
+    }
+  }, [approvalDiffEntries, selectedApprovalDiffPath]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadSelectedApprovalDiff() {
+      if (
+        activeSection !== "approvals" ||
+        !selectedApprovalChangedFile ||
+        !hasActiveRepository
+      ) {
+        setApprovalGitFileDiff(null);
+        setApprovalGitFileDiffState("idle");
+        return;
+      }
+
+      setApprovalGitFileDiffState("loading");
+
+      try {
+        const diff = await loadGitFileDiff(
+          activeRepository.id,
+          activeRepository.path,
+          selectedApprovalChangedFile,
+        );
+
+        if (isMounted) {
+          setApprovalGitFileDiff(diff);
+          setApprovalGitFileDiffState("ready");
+        }
+      } catch {
+        if (isMounted) {
+          setApprovalGitFileDiff(null);
+          setApprovalGitFileDiffState("error");
+        }
+      }
+    }
+
+    void loadSelectedApprovalDiff();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [
+    activeRepository.id,
+    activeRepository.path,
+    activeSection,
+    hasActiveRepository,
+    selectedApprovalChangedFile?.kind,
+    selectedApprovalChangedFile?.oldPath,
+    selectedApprovalChangedFile?.path,
+    selectedApprovalChangedFile?.stage,
   ]);
 
   useEffect(() => {
@@ -2353,23 +2599,101 @@ export function App() {
                   </dl>
                 </article>
 
-                <article className="overview-card diff-placeholder-card">
+                <article className="overview-card approval-diff-review-card">
                   <div className="overview-card__header">
                     <div>
                       <p className="card-eyebrow">Diff Review</p>
-                      <h3>Diffs not generated yet</h3>
+                      <h3>Local repository diffs</h3>
                     </div>
-                    <StatusPill tone="neutral" size="sm" showDot={false}>
-                      planned
+                    <StatusPill
+                      tone={approvalLocalDiffCount > 0 ? "success" : "neutral"}
+                      size="sm"
+                      showDot={false}
+                    >
+                      {approvalLocalDiffCount} available
                     </StatusPill>
                   </div>
                   <p>
-                    Generated and local diffs will appear here once the diff
-                    model is implemented.
+                    This shows matching local Git diffs. Generated patch diffs
+                    will be attached after the proposed change model is
+                    connected to file writes.
                   </p>
-                  <SecondaryButton disabled icon="changes">
-                    Diff review planned
-                  </SecondaryButton>
+                  <dl className="diff-review-summary">
+                    <div>
+                      <dt>Affected Files</dt>
+                      <dd>{approvalDiffEntries.length}</dd>
+                    </div>
+                    <div>
+                      <dt>Local Diffs</dt>
+                      <dd>{approvalLocalDiffCount}</dd>
+                    </div>
+                    <div>
+                      <dt>Missing</dt>
+                      <dd>{approvalDiffEntries.length - approvalLocalDiffCount}</dd>
+                    </div>
+                  </dl>
+
+                  <div
+                    className="approval-diff-file-list"
+                    aria-label="Approval diff files"
+                  >
+                    {approvalDiffEntries.length > 0 ? (
+                      approvalDiffEntries.map((entry) => {
+                        const isSelected =
+                          selectedApprovalDiffEntry?.path === entry.path;
+
+                        return (
+                          <button
+                            aria-pressed={isSelected}
+                            className={`approval-diff-file ${isSelected ? "is-selected" : ""}`}
+                            key={entry.path}
+                            onClick={() => setSelectedApprovalDiffPath(entry.path)}
+                            type="button"
+                          >
+                            <span>
+                              <strong>{entry.path}</strong>
+                              <small>
+                                {entry.changedFile
+                                  ? `${entry.changedFile.kind} · ${entry.changedFile.stage}`
+                                  : entry.reason}
+                              </small>
+                            </span>
+                            <StatusPill
+                              tone={entry.changedFile ? "success" : "neutral"}
+                              size="sm"
+                              showDot={false}
+                            >
+                              {entry.changedFile
+                                ? "Local diff available"
+                                : "No local diff yet"}
+                            </StatusPill>
+                          </button>
+                        );
+                      })
+                    ) : (
+                      <div className="git-diff-state">
+                        <IconBadge icon="changes" tone="neutral" size="md" />
+                        <div>
+                          <h4>No affected files listed</h4>
+                          <p>
+                            This approval does not have proposed affected files
+                            to match against local Git status.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <GitDiffPreviewPanel
+                    diff={approvalGitFileDiff}
+                    emptyDescription={
+                      selectedApprovalDiffEntry
+                        ? "No matching local Git change exists for the selected affected file."
+                        : "Select an affected file to inspect matching local repository diffs."
+                    }
+                    file={selectedApprovalChangedFile}
+                    state={approvalGitFileDiffState}
+                  />
                 </article>
               </aside>
             </section>
@@ -2532,135 +2856,12 @@ export function App() {
                     })}
                   </div>
 
-                  <section className="git-diff-panel" aria-label="Selected file diff">
-                    <div className="git-diff-panel__header">
-                      <div>
-                        <p className="card-eyebrow">Read-only diff</p>
-                        <h3>
-                          {gitDiffStateTitle(
-                            selectedGitChangedFile,
-                            gitFileDiff,
-                            gitFileDiffState,
-                          )}
-                        </h3>
-                        <p>
-                          {selectedGitChangedFile?.path ??
-                            "Choose a changed file to inspect its local Git diff."}
-                        </p>
-                      </div>
-                      <StatusPill
-                        tone={
-                          gitFileDiff?.kind === "unavailable" ||
-                          gitFileDiffState === "error"
-                            ? "warning"
-                            : gitFileDiff?.kind === "untracked"
-                              ? "neutral"
-                              : "success"
-                        }
-                        size="sm"
-                      >
-                        {gitFileDiffState === "loading"
-                          ? "loading"
-                          : gitFileDiff?.kind ?? "idle"}
-                      </StatusPill>
-                    </div>
-
-                    <dl className="diff-metadata-grid">
-                      <div>
-                        <dt>Additions</dt>
-                        <dd>+{gitFileDiff?.additions ?? 0}</dd>
-                      </div>
-                      <div>
-                        <dt>Deletions</dt>
-                        <dd>-{gitFileDiff?.deletions ?? 0}</dd>
-                      </div>
-                      <div>
-                        <dt>Lines</dt>
-                        <dd>{gitFileDiff?.lineCount ?? 0}</dd>
-                      </div>
-                    </dl>
-
-                    {gitFileDiffState === "loading" ? (
-                      <div className="git-diff-state">
-                        <IconBadge icon="search" tone="accent" size="md" />
-                        <div>
-                          <h4>Loading diff safely</h4>
-                          <p>
-                            The workspace is running a fixed read-only Git diff
-                            command inside the selected repository.
-                          </p>
-                        </div>
-                      </div>
-                    ) : gitFileDiffState === "error" ? (
-                      <div className="git-diff-state">
-                        <IconBadge icon="changes" tone="danger" size="md" />
-                        <div>
-                          <h4>Diff could not be loaded</h4>
-                          <p>
-                            No write operation was attempted. Refresh Git status
-                            and try selecting the file again.
-                          </p>
-                        </div>
-                      </div>
-                    ) : gitFileDiff?.isTooLarge ? (
-                      <div className="git-diff-state">
-                        <IconBadge icon="file" tone="warning" size="md" />
-                        <div>
-                          <h4>Diff exceeds preview limits</h4>
-                          <p>
-                            This local diff is too large for the inline preview.
-                            It remains read-only and unavailable for review here.
-                          </p>
-                        </div>
-                      </div>
-                    ) : gitFileDiff?.isBinary || gitFileDiff?.kind === "binary" ? (
-                      <div className="git-diff-state">
-                        <IconBadge icon="file" tone="warning" size="md" />
-                        <div>
-                          <h4>Binary diff</h4>
-                          <p>
-                            Git reported this file as binary, so there is no text
-                            diff to render in the workspace.
-                          </p>
-                        </div>
-                      </div>
-                    ) : gitFileDiff?.kind === "untracked" ? (
-                      <div className="git-diff-state">
-                        <IconBadge icon="file" tone="neutral" size="md" />
-                        <div>
-                          <h4>No tracked baseline yet</h4>
-                          <p>
-                            This file is untracked. A text diff will be available
-                            after a tracked baseline exists.
-                          </p>
-                        </div>
-                      </div>
-                    ) : gitFileDiff?.kind === "unavailable" ||
-                      !gitFileDiff ||
-                      gitFileDiff.lines.length === 0 ? (
-                      <div className="git-diff-state">
-                        <IconBadge icon="changes" tone="neutral" size="md" />
-                        <div>
-                          <h4>No diff content available</h4>
-                          <p>
-                            Git did not return a diff for this file and stage.
-                            The file remains visible in the status list.
-                          </p>
-                        </div>
-                      </div>
-                    ) : (
-                      <pre className="git-diff-code" tabIndex={0}>
-                        {gitFileDiff.lines.map((line, index) => (
-                          <code
-                            className={`git-diff-line git-diff-line--${line.type}`}
-                            key={`${line.type}-${index}-${line.content}`}
-                          >
-                            {line.content}
-                          </code>
-                        ))}
-                      </pre>
-                    )}
-                  </section>
+                  <GitDiffPreviewPanel
+                    diff={gitFileDiff}
+                    emptyDescription="Choose a changed file to inspect its local Git diff."
+                    file={selectedGitChangedFile}
+                    state={gitFileDiffState}
+                  />
                 </div>
               ) : (
                 <div className="git-status-empty">

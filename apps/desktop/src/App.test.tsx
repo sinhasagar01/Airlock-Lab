@@ -575,13 +575,22 @@ describe("App smoke tests", () => {
     expect(screen.getByText("Ordered plan")).toBeInTheDocument();
     expect(screen.getByText("Review risks")).toBeInTheDocument();
     expect(screen.getByText("Check strategy")).toBeInTheDocument();
-    expect(screen.getByText("Diff review planned")).toBeInTheDocument();
-    expect(screen.getByText("Diffs not generated yet")).toBeInTheDocument();
+    expect(screen.getByText("Local repository diffs")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Generated and local diffs will appear here once the diff model is implemented.",
+        /This shows matching local Git diffs. Generated patch diffs/,
       ),
     ).toBeInTheDocument();
+    expect(screen.getByText("Local Diffs")).toBeInTheDocument();
+    expect(screen.getAllByText("Local diff available").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("No local diff yet").length).toBeGreaterThan(0);
+    expect(await screen.findByText("Local Git diff")).toBeInTheDocument();
+    expect(screen.getByText("+export const label = 'new';")).toBeInTheDocument();
+    expect(loadGitFileDiff).toHaveBeenCalledWith(
+      "repo-workspace",
+      "/workspace",
+      expect.objectContaining({ path: "apps/desktop/src/App.tsx" }),
+    );
     expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled();
 
@@ -612,6 +621,31 @@ describe("App smoke tests", () => {
     expect(
       await screen.findByRole("heading", { name: "0 pending approvals" }),
     ).toBeInTheDocument();
+  });
+
+  it("shows approval diff loading state from the safe local diff wrapper", async () => {
+    vi.mocked(loadGitFileDiff).mockImplementation(
+      () => new Promise<GitFileDiff>(() => undefined),
+    );
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Approvals" }));
+
+    expect(await screen.findByText("Loading diff safely")).toBeInTheDocument();
+    expect(screen.getByText("Local repository diffs")).toBeInTheDocument();
+  });
+
+  it("shows approval diff error state without hiding approval actions", async () => {
+    vi.mocked(loadGitFileDiff).mockImplementation(async () => {
+      throw new Error("diff failed");
+    });
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Approvals" }));
+
+    expect(await screen.findByText("Diff could not be loaded")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled();
   });
 
   it("shows the no-file-selected preview state when no indexed files exist", async () => {

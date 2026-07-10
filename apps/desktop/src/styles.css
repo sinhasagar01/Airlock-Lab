@@ -1908,6 +1908,7 @@ dt {
 .approval-detail-card,
 .approval-plan-review-card,
 .approval-repository-context-card,
+.approval-diff-review-card,
 .diff-placeholder-card {
   padding: 26px;
 }
@@ -2020,6 +2021,7 @@ dt {
 
 .approval-decision-card h3,
 .approval-repository-context-card h3,
+.approval-diff-review-card h3,
 .diff-placeholder-card h3 {
   color: var(--color-text-primary);
   font-size: 19px;
@@ -2029,6 +2031,7 @@ dt {
 }
 
 .approval-decision-card p,
+.approval-diff-review-card > p,
 .diff-placeholder-card p {
   color: var(--color-text-secondary);
   font-size: 13px;
@@ -2060,6 +2063,107 @@ dt {
 .diff-placeholder-card {
   display: grid;
   gap: 18px;
+}
+
+.approval-diff-review-card {
+  display: grid;
+  gap: 18px;
+}
+
+.diff-review-summary {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.diff-review-summary div {
+  background: #fbfdff;
+  border: 1px solid #e4eaf1;
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+
+.diff-review-summary dt {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 780;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.diff-review-summary dd {
+  color: var(--color-text-primary);
+  font-size: 18px;
+  font-weight: 760;
+  line-height: 1.2;
+  margin-top: 8px;
+}
+
+.approval-diff-file-list {
+  display: grid;
+  gap: 10px;
+}
+
+.approval-diff-file {
+  align-items: center;
+  background: #fbfdff;
+  border: 1px solid #e4eaf1;
+  border-radius: var(--radius-lg);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 82px;
+  padding: 14px;
+  text-align: left;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.approval-diff-file:hover {
+  background: #ffffff;
+  border-color: rgba(231, 113, 80, 0.35);
+  box-shadow: var(--shadow-soft);
+  transform: translateY(-1px);
+}
+
+.approval-diff-file:focus-visible {
+  outline: 3px solid rgba(231, 113, 80, 0.26);
+  outline-offset: 3px;
+}
+
+.approval-diff-file.is-selected {
+  background: #fffaf6;
+  border-color: rgba(231, 113, 80, 0.55);
+  box-shadow: 0 16px 34px rgba(35, 31, 27, 0.08);
+}
+
+.approval-diff-file strong,
+.approval-diff-file small {
+  display: block;
+  min-width: 0;
+}
+
+.approval-diff-file strong {
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 740;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.approval-diff-file small {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 540;
+  line-height: 1.4;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
 }
 
 .diff-placeholder-card .secondary-action {
