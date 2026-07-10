@@ -2195,9 +2195,16 @@ dt {
   margin-top: 10px;
 }
 
+.git-review-layout {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(280px, 0.42fr) minmax(0, 0.58fr);
+}
+
 .git-change-list {
   display: grid;
   gap: 10px;
+  align-content: start;
 }
 
 .git-change-item {
@@ -2205,11 +2212,38 @@ dt {
   background: #fbfdff;
   border: 1px solid #e4eaf1;
   border-radius: var(--radius-lg);
+  color: inherit;
+  cursor: pointer;
   display: grid;
   gap: 14px;
   grid-template-columns: max-content minmax(0, 1fr) max-content;
   min-height: 68px;
   padding: 14px 16px;
+  text-align: left;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+  width: 100%;
+}
+
+.git-change-item:hover {
+  background: #ffffff;
+  border-color: rgba(231, 113, 80, 0.35);
+  box-shadow: var(--shadow-soft);
+  transform: translateY(-1px);
+}
+
+.git-change-item:focus-visible {
+  outline: 3px solid rgba(231, 113, 80, 0.26);
+  outline-offset: 3px;
+}
+
+.git-change-item.is-selected {
+  background: #fffaf6;
+  border-color: rgba(231, 113, 80, 0.55);
+  box-shadow: 0 16px 34px rgba(35, 31, 27, 0.08);
 }
 
 .git-change-item strong,
@@ -2266,6 +2300,146 @@ dt {
   font-size: 13px;
   font-weight: 520;
   line-height: 1.55;
+}
+
+.git-diff-panel {
+  background: #fbfdff;
+  border: 1px solid #e4eaf1;
+  border-radius: var(--radius-lg);
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  padding: 18px;
+}
+
+.git-diff-panel__header {
+  align-items: start;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.git-diff-panel__header h3 {
+  font-size: 20px;
+  margin-top: 7px;
+}
+
+.git-diff-panel__header p:not(.card-eyebrow) {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 560;
+  line-height: 1.45;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+
+.diff-metadata-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.diff-metadata-grid div {
+  background: var(--color-surface);
+  border: 1px solid #e7edf4;
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+
+.diff-metadata-grid dt {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 780;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.diff-metadata-grid dd {
+  color: var(--color-text-primary);
+  font-size: 18px;
+  font-weight: 760;
+  line-height: 1.2;
+  margin-top: 8px;
+}
+
+.git-diff-state {
+  align-items: center;
+  background: var(--color-surface);
+  border: 1px dashed #dfe7ef;
+  border-radius: var(--radius-lg);
+  display: grid;
+  gap: 14px;
+  grid-template-columns: max-content minmax(0, 1fr);
+  min-height: 180px;
+  padding: 18px;
+}
+
+.git-diff-state h4 {
+  color: var(--color-text-primary);
+  font-size: 15px;
+  font-weight: 760;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.git-diff-state p {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 520;
+  line-height: 1.55;
+  margin-top: 7px;
+}
+
+.git-diff-code {
+  background: #0b1221;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  color: #dce6f3;
+  display: block;
+  font-family:
+    "SFMono-Regular", "SF Mono", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  font-weight: 520;
+  line-height: 1.62;
+  margin: 0;
+  max-height: 460px;
+  min-height: 260px;
+  overflow: auto;
+  padding: 16px 0;
+  tab-size: 2;
+}
+
+.git-diff-code:focus-visible {
+  outline: 3px solid rgba(231, 113, 80, 0.32);
+  outline-offset: 3px;
+}
+
+.git-diff-line {
+  display: block;
+  min-height: 19px;
+  padding: 0 18px;
+  white-space: pre;
+}
+
+.git-diff-line--metadata {
+  color: #8ca0b8;
+}
+
+.git-diff-line--hunk {
+  background: rgba(116, 95, 255, 0.18);
+  color: #c8c2ff;
+}
+
+.git-diff-line--added {
+  background: rgba(27, 191, 138, 0.16);
+  color: #94f0ca;
+}
+
+.git-diff-line--removed {
+  background: rgba(231, 113, 80, 0.16);
+  color: #ffb39d;
 }
 
 .settings-card,
@@ -3181,6 +3355,7 @@ dd {
   .repository-intelligence-grid,
   .repository-support-grid,
   .changes-feature-grid,
+  .git-review-layout,
   .content-grid {
     grid-template-columns: 1fr;
   }

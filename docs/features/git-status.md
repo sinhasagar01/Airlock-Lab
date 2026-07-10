@@ -2,8 +2,9 @@
 
 ## Purpose
 
-Git status turns the Changes tab into a real repository state surface. It is the
-read-only foundation for future local diff review.
+Git status turns the Changes tab into a real repository state surface. Local
+diff preview lets the user inspect changed-file content without modifying the
+repository.
 
 ## MVP Behavior
 
@@ -14,6 +15,9 @@ read-only foundation for future local diff review.
 - Changed files include path, previous path for detectable renames, change kind,
   stage, and raw Git status code.
 - Users can manually refresh Git status.
+- Users can select a changed file and inspect a read-only local Git diff.
+- Diff preview supports staged, unstaged, combined, untracked, binary,
+  too-large, unavailable, and empty states.
 - The indexed-file browser and safe file preview remain available below the Git
   status surface.
 
@@ -27,6 +31,8 @@ Allowed native commands:
 - `git branch --show-current`
 - `git rev-parse --short HEAD`
 - `git status --porcelain=v1`
+- `git diff -- <path>`
+- `git diff --cached -- <path>`
 
 Not allowed:
 
@@ -40,7 +46,9 @@ Not allowed:
 
 The Tauri command uses fixed argument lists, no shell interpolation, canonicalized
 repository roots, and current-directory execution bounded to the selected
-repository path.
+repository path. Diff paths are validated as repository-relative paths and
+absolute paths, parent-directory traversal, and unsafe path components are
+rejected.
 
 ## Data Model
 
@@ -50,5 +58,10 @@ The shared model lives in `packages/core`:
 - `GitChangedFile`
 - `GitChangeKind`
 - `GitChangeStage`
+- `GitFileDiff`
+- `GitDiffKind`
+- `GitDiffLine`
+- `GitDiffLineType`
 
-The diff model is intentionally not implemented yet.
+The diff model is read-only. It represents local working tree or staged diffs
+and does not represent generated patch plans or approval-attached diffs yet.

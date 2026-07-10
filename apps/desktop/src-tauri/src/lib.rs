@@ -1,6 +1,6 @@
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -9,6 +9,7 @@ use serde::Serialize;
 
 const MAX_INDEXED_FILES: usize = 5_000;
 const MAX_PREVIEW_BYTES: u64 = 256 * 1024;
+const MAX_DIFF_BYTES: usize = 512 * 1024;
 const IGNORED_DIRECTORIES: &[&str] = &[
     ".git",
     "node_modules",
@@ -80,6 +81,31 @@ struct GitStatusSummary {
     refreshed_at: String,
 }
 
+#[derive(Serialize)]
+struct GitDiffLine {
+    r#type: String,
+    content: String,
+    old_line_number: Option<u32>,
+    new_line_number: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct GitFileDiff {
+    repository_id: String,
+    repository_path: String,
+    file_path: String,
+    old_path: Option<String>,
+    kind: String,
+    is_binary: bool,
+    is_too_large: bool,
+    line_count: usize,
+    additions: usize,
+    deletions: usize,
+    raw_diff: Option<String>,
+    lines: Vec<GitDiffLine>,
+    refreshed_at: String,
+}
+
 fn git_output(repository_path: &str, args: &[&str]) -> Option<String> {
     let output = Command::new("git")
         .args(args)
@@ -92,6 +118,20 @@ fn git_output(repository_path: &str, args: &[&str]) -> Option<String> {
     }
 
     Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn git_output_raw(repository_path: &str, args: &[&str]) -> Option<Vec<u8>> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repository_path)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    Some(output.stdout)
 }
 
 fn should_skip_path(path: &Path) -> bool {
@@ -133,6 +173,75 @@ fn empty_git_status_summary(
         files: Vec::new(),
         refreshed_at: now_unix_seconds(),
     }
+}
+
+fn empty_git_file_diff(
+    repository_id: String,
+    repository_path: String,
+    file_path: String,
+    old_path: Option<String>,
+    kind: &str,
+) -> GitFileDiff {
+    GitFileDiff {
+        repository_id,
+        repository_path,
+        file_path,
+        old_path,
+        kind: kind.to_string(),
+        is_binary: false,
+        is_too_large: false,
+        line_count: 0,
+        additions: 0,
+        deletions: 0,
+        raw_diff: None,
+        lines: Vec::new(),
+        refreshed_at: now_unix_seconds(),
+    }
+}
+
+fn canonical_selected_git_root(repository_path: &str) -> Result<(PathBuf, String), String> {
+    let repository_root = fs::canonicalize(repository_path).map_err(|_| "unavailable")?;
+    let canonical_repository_path = repository_root.to_string_lossy().to_string();
+    let is_git_repository = git_output(
+        &canonical_repository_path,
+        &["rev-parse", "--is-inside-work-tree"],
+    )
+    .is_some_and(|value| value == "true");
+
+    if !is_git_repository {
+        return Err("not_git_repository".to_string());
+    }
+
+    let git_top_level = git_output(
+        &canonical_repository_path,
+        &["rev-parse", "--show-toplevel"],
+    )
+    .and_then(|path| fs::canonicalize(path).ok());
+
+    if git_top_level.as_ref() != Some(&repository_root) {
+        return Err("repository_root_mismatch".to_string());
+    }
+
+    Ok((repository_root, canonical_repository_path))
+}
+
+fn is_safe_relative_git_path(file_path: &str) -> bool {
+    if file_path.trim().is_empty() || file_path.contains('\0') {
+        return false;
+    }
+
+    let path = Path::new(file_path);
+
+    if path.is_absolute() {
+        return false;
+    }
+
+    path.components().all(|component| match component {
+        Component::Normal(_) => true,
+        Component::CurDir | Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+            false
+        }
+    })
 }
 
 fn git_change_kind(index_status: char, worktree_status: char) -> String {
@@ -218,6 +327,61 @@ fn parse_porcelain_line(line: &str) -> Option<GitChangedFile> {
         stage: git_change_stage(index_status, worktree_status),
         status_code,
     })
+}
+
+fn diff_kind_for_stage(stage: &str, change_kind: &str) -> String {
+    if change_kind == "untracked" || stage == "untracked" {
+        return "untracked".to_string();
+    }
+
+    match stage {
+        "staged" => "staged",
+        "unstaged" => "unstaged",
+        "both" => "combined",
+        _ => "unavailable",
+    }
+    .to_string()
+}
+
+fn parse_git_diff(raw_diff: &str) -> (Vec<GitDiffLine>, usize, usize, bool) {
+    let mut additions = 0;
+    let mut deletions = 0;
+    let is_binary = raw_diff.contains("Binary files ") || raw_diff.contains("GIT binary patch");
+    let lines = raw_diff
+        .lines()
+        .map(|line| {
+            let line_type = if line.starts_with("@@") {
+                "hunk"
+            } else if line.starts_with("diff --git")
+                || line.starts_with("index ")
+                || line.starts_with("new file mode")
+                || line.starts_with("deleted file mode")
+                || line.starts_with("rename from")
+                || line.starts_with("rename to")
+                || line.starts_with("---")
+                || line.starts_with("+++")
+            {
+                "metadata"
+            } else if line.starts_with('+') {
+                additions += 1;
+                "added"
+            } else if line.starts_with('-') {
+                deletions += 1;
+                "removed"
+            } else {
+                "context"
+            };
+
+            GitDiffLine {
+                r#type: line_type.to_string(),
+                content: line.to_string(),
+                old_line_number: None,
+                new_line_number: None,
+            }
+        })
+        .collect();
+
+    (lines, additions, deletions, is_binary)
 }
 
 fn scan_directory(
@@ -555,6 +719,148 @@ fn load_git_status_summary(repository_id: String, repository_path: String) -> Gi
     }
 }
 
+#[tauri::command]
+fn load_git_file_diff(
+    repository_id: String,
+    repository_path: String,
+    file_path: String,
+    stage: String,
+    kind: String,
+    old_path: Option<String>,
+) -> GitFileDiff {
+    let (_, canonical_repository_path) = match canonical_selected_git_root(&repository_path) {
+        Ok(root) => root,
+        Err(_) => {
+            return empty_git_file_diff(
+                repository_id,
+                repository_path,
+                file_path,
+                old_path,
+                "unavailable",
+            );
+        }
+    };
+
+    if !is_safe_relative_git_path(&file_path)
+        || old_path
+            .as_deref()
+            .is_some_and(|path| !is_safe_relative_git_path(path))
+    {
+        return empty_git_file_diff(
+            repository_id,
+            canonical_repository_path,
+            file_path,
+            old_path,
+            "unavailable",
+        );
+    }
+
+    let diff_kind = diff_kind_for_stage(&stage, &kind);
+
+    if diff_kind == "untracked" {
+        return empty_git_file_diff(
+            repository_id,
+            canonical_repository_path,
+            file_path,
+            old_path,
+            "untracked",
+        );
+    }
+
+    if diff_kind == "unavailable" {
+        return empty_git_file_diff(
+            repository_id,
+            canonical_repository_path,
+            file_path,
+            old_path,
+            "unavailable",
+        );
+    }
+
+    let mut diff_bytes = Vec::new();
+    let mut append_diff = |args: &[&str]| -> bool {
+        let Some(output) = git_output_raw(&canonical_repository_path, args) else {
+            return false;
+        };
+
+        if !diff_bytes.is_empty() && !output.is_empty() {
+            diff_bytes.extend_from_slice(b"\n");
+        }
+
+        diff_bytes.extend_from_slice(&output);
+        true
+    };
+
+    let loaded = match diff_kind.as_str() {
+        "staged" => append_diff(&["diff", "--cached", "--", file_path.as_str()]),
+        "unstaged" => append_diff(&["diff", "--", file_path.as_str()]),
+        "combined" => {
+            let staged_loaded = append_diff(&["diff", "--cached", "--", file_path.as_str()]);
+            let unstaged_loaded = append_diff(&["diff", "--", file_path.as_str()]);
+            staged_loaded || unstaged_loaded
+        }
+        _ => false,
+    };
+
+    if !loaded {
+        return empty_git_file_diff(
+            repository_id,
+            canonical_repository_path,
+            file_path,
+            old_path,
+            "unavailable",
+        );
+    }
+
+    if diff_bytes.len() > MAX_DIFF_BYTES {
+        return GitFileDiff {
+            is_too_large: true,
+            ..empty_git_file_diff(
+                repository_id,
+                canonical_repository_path,
+                file_path,
+                old_path,
+                diff_kind.as_str(),
+            )
+        };
+    }
+
+    let raw_diff = String::from_utf8_lossy(&diff_bytes).to_string();
+
+    if raw_diff.trim().is_empty() {
+        return empty_git_file_diff(
+            repository_id,
+            canonical_repository_path,
+            file_path,
+            old_path,
+            "unavailable",
+        );
+    }
+
+    let (lines, additions, deletions, is_binary) = parse_git_diff(&raw_diff);
+    let line_count = lines.len();
+
+    GitFileDiff {
+        repository_id,
+        repository_path: canonical_repository_path,
+        file_path,
+        old_path,
+        kind: if is_binary {
+            "binary".to_string()
+        } else {
+            diff_kind
+        },
+        is_binary,
+        is_too_large: false,
+        line_count,
+        additions,
+        deletions,
+        raw_diff: Some(raw_diff),
+        lines,
+        refreshed_at: now_unix_seconds(),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -563,6 +869,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
+            load_git_file_diff,
             load_git_status_summary,
             load_repository_git_metadata,
             preview_repository_file,

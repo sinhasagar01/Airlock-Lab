@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added a safe read-only local Git diff viewer for changed files in the Changes
+  tab, including staged, unstaged, combined, untracked, binary, too-large,
+  unavailable, and no-diff states.
+- Added shared Git diff types, a `loadGitFileDiff` wrapper, and a bounded Tauri
+  command that validates repository-relative paths before running fixed
+  read-only Git diff commands.
+- Expanded smoke coverage for rendered local diff content and untracked-file
+  diff states.
 - Added a read-only Git status data model and Tauri command for the selected
   repository using fixed safe Git arguments.
 - Updated the Changes tab to show real clean/dirty state, branch, changed file

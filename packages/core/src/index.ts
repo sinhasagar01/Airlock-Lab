@@ -57,6 +57,44 @@ export type GitStatusSummary = {
   refreshedAt: string;
 };
 
+export type GitDiffKind =
+  | "unstaged"
+  | "staged"
+  | "combined"
+  | "untracked"
+  | "binary"
+  | "unavailable";
+
+export type GitDiffLineType =
+  | "context"
+  | "added"
+  | "removed"
+  | "hunk"
+  | "metadata";
+
+export type GitDiffLine = {
+  type: GitDiffLineType;
+  content: string;
+  oldLineNumber?: number;
+  newLineNumber?: number;
+};
+
+export type GitFileDiff = {
+  repositoryId: string;
+  repositoryPath: string;
+  filePath: string;
+  oldPath?: string;
+  kind: GitDiffKind;
+  isBinary: boolean;
+  isTooLarge: boolean;
+  lineCount: number;
+  additions: number;
+  deletions: number;
+  rawDiff?: string;
+  lines: GitDiffLine[];
+  refreshedAt: string;
+};
+
 export function createWorkspaceSummary(
   summary: WorkspaceSummary,
 ): WorkspaceSummary {

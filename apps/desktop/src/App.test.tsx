@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ApprovalRequest } from "@ai-dev/ai";
-import type { GitStatusSummary } from "@ai-dev/core";
+import type { GitFileDiff, GitStatusSummary } from "@ai-dev/core";
 import type {
   FileContentPreview,
   IndexedFileFact,
@@ -11,7 +11,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { previewRepositoryFile } from "./storage/filePreview";
-import { loadGitStatusSummary } from "./storage/gitChanges";
+import { loadGitFileDiff, loadGitStatusSummary } from "./storage/gitChanges";
 import { updateApprovalRequestStatus } from "./storage/approvalRequestStore";
 
 const mockState = vi.hoisted(() => {
@@ -190,6 +190,39 @@ const mockState = vi.hoisted(() => {
         },
       ],
     } as GitStatusSummary,
+    gitDiff: {
+      repositoryId: repository.id,
+      repositoryPath: repository.path,
+      filePath: "apps/desktop/src/App.tsx",
+      kind: "unstaged",
+      isBinary: false,
+      isTooLarge: false,
+      lineCount: 7,
+      additions: 1,
+      deletions: 1,
+      rawDiff:
+        "diff --git a/apps/desktop/src/App.tsx b/apps/desktop/src/App.tsx\n@@ -1,3 +1,3 @@\n-export const label = 'old';\n+export const label = 'new';",
+      lines: [
+        {
+          type: "metadata",
+          content:
+            "diff --git a/apps/desktop/src/App.tsx b/apps/desktop/src/App.tsx",
+        },
+        {
+          type: "hunk",
+          content: "@@ -1,3 +1,3 @@",
+        },
+        {
+          type: "removed",
+          content: "-export const label = 'old';",
+        },
+        {
+          type: "added",
+          content: "+export const label = 'new';",
+        },
+      ],
+      refreshedAt: "1783532100",
+    } as GitFileDiff,
     indexingJobs: [] as IndexingJob[],
     preview: {
       path: files[0].path,
@@ -237,6 +270,7 @@ vi.mock("./storage/fileTreeScanner", () => ({
 }));
 
 vi.mock("./storage/gitChanges", () => ({
+  loadGitFileDiff: vi.fn(async () => mockState.gitDiff),
   loadGitStatusSummary: vi.fn(async () => mockState.gitStatus),
 }));
 
@@ -252,11 +286,13 @@ vi.mock("./storage/filePreview", () => ({
 
 function renderApp(options?: {
   files?: IndexedFileFact[];
+  gitDiff?: GitFileDiff;
   gitStatus?: GitStatusSummary;
   preview?: FileContentPreview | Promise<FileContentPreview>;
   repositories?: RepositorySummary[];
 }) {
   mockState.files = options?.files ?? [...defaultFiles];
+  mockState.gitDiff = options?.gitDiff ?? defaultGitDiff;
   mockState.gitStatus = options?.gitStatus ?? defaultGitStatus;
   mockState.preview = options?.preview ?? defaultPreview;
   mockState.repositories = options?.repositories ?? [...defaultRepositories];
@@ -273,6 +309,7 @@ async function goToTab(name: string) {
 }
 
 const defaultFiles = [...mockState.files];
+const defaultGitDiff = mockState.gitDiff;
 const defaultGitStatus = mockState.gitStatus;
 const defaultPreview = mockState.preview;
 const defaultRepositories = [...mockState.repositories];
@@ -289,7 +326,28 @@ beforeEach(() => {
   vi.mocked(loadGitStatusSummary).mockImplementation(
     async () => mockState.gitStatus,
   );
+  vi.mocked(loadGitFileDiff).mockImplementation(async (_id, _path, file) => {
+    if (file.stage === "untracked") {
+      return {
+        ...mockState.gitDiff,
+        filePath: file.path,
+        kind: "untracked",
+        additions: 0,
+        deletions: 0,
+        lineCount: 0,
+        rawDiff: undefined,
+        lines: [],
+      };
+    }
+
+    return {
+      ...mockState.gitDiff,
+      filePath: file.path,
+      kind: file.stage === "staged" ? "staged" : mockState.gitDiff.kind,
+    };
+  });
   mockState.files = [...defaultFiles];
+  mockState.gitDiff = defaultGitDiff;
   mockState.gitStatus = defaultGitStatus;
   mockState.preview = defaultPreview;
   mockState.repositories = defaultRepositories.map((repository) => ({
@@ -390,18 +448,49 @@ describe("App smoke tests", () => {
       "/workspace",
     );
     expect(screen.getByText("Changed files")).toBeInTheDocument();
-    expect(screen.getByText("apps/desktop/src/App.tsx")).toBeInTheDocument();
+    expect(screen.getAllByText("apps/desktop/src/App.tsx").length).toBeGreaterThan(0);
     expect(screen.getByText("packages/git/src/index.ts")).toBeInTheDocument();
     expect(screen.getByText("docs/features/git-status.md")).toBeInTheDocument();
     expect(screen.getByText("Staged / Unstaged")).toBeInTheDocument();
     expect(screen.getByText("1 / 1")).toBeInTheDocument();
     expect(screen.getByText("read only")).toBeInTheDocument();
+    expect(loadGitFileDiff).toHaveBeenCalledWith(
+      "repo-workspace",
+      "/workspace",
+      expect.objectContaining({ path: "apps/desktop/src/App.tsx" }),
+    );
+    expect(await screen.findByText("Local Git diff")).toBeInTheDocument();
+    expect(screen.getByText("+export const label = 'new';")).toBeInTheDocument();
 
     const callCountBeforeRefresh = vi.mocked(loadGitStatusSummary).mock.calls.length;
 
     await user.click(screen.getByRole("button", { name: "Refresh Git status" }));
 
     expect(loadGitStatusSummary).toHaveBeenCalledTimes(callCountBeforeRefresh + 1);
+  });
+
+  it("shows an honest untracked diff state when a changed file has no tracked baseline", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Changes" }));
+    await screen.findByText("Local Git diff");
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /docs\/features\/git-status\.md/,
+      }),
+    );
+
+    expect(await screen.findByText("Untracked file")).toBeInTheDocument();
+    expect(screen.getByText("No tracked baseline yet")).toBeInTheDocument();
+    expect(loadGitFileDiff).toHaveBeenCalledWith(
+      "repo-workspace",
+      "/workspace",
+      expect.objectContaining({
+        path: "docs/features/git-status.md",
+        stage: "untracked",
+      }),
+    );
   });
 
   it("renders selected agent run detail with structured proposed plan and approval handoff", async () => {

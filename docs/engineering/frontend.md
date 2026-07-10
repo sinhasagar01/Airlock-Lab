@@ -28,6 +28,9 @@ The desktop MVP uses Tauri, React, TypeScript, and Vite. Styling is plain CSS wi
 - Git status uses the shared `GitStatusSummary` model in `packages/core` and the
   `loadGitStatusSummary` Tauri wrapper. It must remain read-only and bounded to
   the selected repository.
+- Local diff preview uses the shared `GitFileDiff` model in `packages/core` and
+  the `loadGitFileDiff` Tauri wrapper. It is selected from changed-file rows and
+  must remain read-only, repository-relative, and unavailable for unsafe paths.
 
 ## Design System Rules
 
@@ -42,8 +45,8 @@ The desktop MVP uses Tauri, React, TypeScript, and Vite. Styling is plain CSS wi
 - Preserve the state-driven six-tab navigation until a routing migration is
   intentionally scoped.
 - Changes must keep indexed-file browsing and safe preview access available
-  while presenting real read-only Git status. It must not stage, unstage,
-  discard, commit, reset, checkout, or apply changes.
+  while presenting real read-only Git status and local diff preview. It must not
+  stage, unstage, discard, commit, reset, checkout, or apply changes.
 - Repositories must use safe indexed metadata for intelligence summaries:
   extension counts, important folders, key files, and path-derived framework
   hints. If package scripts or dependencies are not available through a bounded
@@ -51,8 +54,9 @@ The desktop MVP uses Tauri, React, TypeScript, and Vite. Styling is plain CSS wi
 - Agent Runs may show expected affected files, plan steps, risks, validation,
   and approval handoff from seeded/structured run data. It must not imply real
   generated diffs or file writes before those systems exist.
-- Approvals must present diff attachment as planned/unavailable until the real
-  diff model exists. Do not render fake diff hunks.
+- Approvals must present generated diff attachment as planned/unavailable until
+  approval-specific diff attachment exists. Do not render fake generated diff
+  hunks from the local Git diff viewer.
 - Settings must not add destructive behavior unless it is implemented with an
   explicit confirmation gate.
 

@@ -16,6 +16,8 @@ import {
   createMockWorkspaceSnapshot,
   primaryNavigation,
   type DomainStatus,
+  type GitChangedFile,
+  type GitFileDiff,
   type GitStatusSummary,
   type NavigationSection,
 } from "@ai-dev/core";
@@ -47,7 +49,7 @@ import {
 } from "./storage/approvalRequestStore";
 import { previewRepositoryFile } from "./storage/filePreview";
 import { scanRepositoryFileTree } from "./storage/fileTreeScanner";
-import { loadGitStatusSummary } from "./storage/gitChanges";
+import { loadGitFileDiff, loadGitStatusSummary } from "./storage/gitChanges";
 import { loadRepositoriesGitMetadata } from "./storage/gitMetadata";
 import {
   loadIndexedFileFacts,
@@ -340,6 +342,46 @@ function formatGitRefreshedAt(refreshedAt: string | null | undefined) {
   return refreshedAt;
 }
 
+function gitDiffStateTitle(
+  file: GitChangedFile | null,
+  diff: GitFileDiff | null,
+  state: "idle" | "loading" | "ready" | "error",
+) {
+  if (!file) {
+    return "Select a changed file";
+  }
+
+  if (state === "loading") {
+    return "Loading local diff";
+  }
+
+  if (state === "error") {
+    return "Diff unavailable";
+  }
+
+  if (!diff) {
+    return "Diff not loaded yet";
+  }
+
+  if (diff.isTooLarge) {
+    return "Diff is too large to preview";
+  }
+
+  if (diff.isBinary || diff.kind === "binary") {
+    return "Binary diff unavailable";
+  }
+
+  if (diff.kind === "untracked") {
+    return "Untracked file";
+  }
+
+  if (diff.kind === "unavailable" || diff.lines.length === 0) {
+    return "No local diff available";
+  }
+
+  return "Local Git diff";
+}
+
 type AppShellProps = {
   sidebar: ReactNode;
   children: ReactNode;
@@ -506,6 +548,13 @@ export function App() {
   const [gitStatusState, setGitStatusState] = useState<
     "idle" | "loading" | "ready" | "error"
   >("idle");
+  const [selectedGitFilePath, setSelectedGitFilePath] = useState<string | null>(
+    null,
+  );
+  const [gitFileDiff, setGitFileDiff] = useState<GitFileDiff | null>(null);
+  const [gitFileDiffState, setGitFileDiffState] = useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
   const [filePreview, setFilePreview] = useState<FileContentPreview | null>(
     null,
   );
@@ -589,6 +638,10 @@ export function App() {
   const effectiveBranch = gitStatusSummary?.branch ?? activeRepository.branch;
   const isWorkingDirectoryClean =
     gitStatusSummary?.isClean ?? activeRepository.openChanges === 0;
+  const selectedGitChangedFile =
+    gitStatusSummary?.files.find((file) => file.path === selectedGitFilePath) ??
+    gitStatusSummary?.files[0] ??
+    null;
 
   async function refreshGitStatus(repository = activeRepository) {
     if (!hasActiveRepository || repository.id === emptyRepository.id) {
@@ -656,6 +709,67 @@ export function App() {
   useEffect(() => {
     void refreshGitStatus();
   }, [activeRepository.id, activeRepository.path, hasActiveRepository]);
+
+  useEffect(() => {
+    if (!gitStatusSummary || gitStatusSummary.files.length === 0) {
+      setSelectedGitFilePath(null);
+      return;
+    }
+
+    const selectedFileStillExists = gitStatusSummary.files.some(
+      (file) => file.path === selectedGitFilePath,
+    );
+
+    if (!selectedFileStillExists) {
+      setSelectedGitFilePath(gitStatusSummary.files[0].path);
+    }
+  }, [gitStatusSummary, selectedGitFilePath]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadSelectedDiff() {
+      if (!selectedGitChangedFile || !hasActiveRepository) {
+        setGitFileDiff(null);
+        setGitFileDiffState("idle");
+        return;
+      }
+
+      setGitFileDiffState("loading");
+
+      try {
+        const diff = await loadGitFileDiff(
+          activeRepository.id,
+          activeRepository.path,
+          selectedGitChangedFile,
+        );
+
+        if (isMounted) {
+          setGitFileDiff(diff);
+          setGitFileDiffState("ready");
+        }
+      } catch {
+        if (isMounted) {
+          setGitFileDiff(null);
+          setGitFileDiffState("error");
+        }
+      }
+    }
+
+    void loadSelectedDiff();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [
+    activeRepository.id,
+    activeRepository.path,
+    hasActiveRepository,
+    selectedGitChangedFile?.kind,
+    selectedGitChangedFile?.oldPath,
+    selectedGitChangedFile?.path,
+    selectedGitChangedFile?.stage,
+  ]);
 
   useEffect(() => {
     let isMounted = true;
@@ -2388,26 +2502,165 @@ export function App() {
                   </div>
                 </div>
               ) : gitStatusSummary && gitStatusSummary.files.length > 0 ? (
-                <div className="git-change-list" aria-label="Changed files">
-                  {gitStatusSummary.files.map((file) => (
-                    <div
-                      className="git-change-item"
-                      key={`${file.statusCode}-${file.oldPath ?? ""}-${file.path}`}
-                    >
-                      <StatusPill
-                        tone={changeKindTone(file.kind)}
-                        size="sm"
-                        showDot={false}
-                      >
-                        {file.kind}
-                      </StatusPill>
+                <div className="git-review-layout">
+                  <div className="git-change-list" aria-label="Changed files">
+                    {gitStatusSummary.files.map((file) => {
+                      const isSelected = selectedGitChangedFile?.path === file.path;
+
+                      return (
+                        <button
+                          aria-pressed={isSelected}
+                          className={`git-change-item ${isSelected ? "is-selected" : ""}`}
+                          key={`${file.statusCode}-${file.oldPath ?? ""}-${file.path}`}
+                          onClick={() => setSelectedGitFilePath(file.path)}
+                          type="button"
+                        >
+                          <StatusPill
+                            tone={changeKindTone(file.kind)}
+                            size="sm"
+                            showDot={false}
+                          >
+                            {file.kind}
+                          </StatusPill>
+                          <div>
+                            <strong>{file.path}</strong>
+                            {file.oldPath ? <span>Renamed from {file.oldPath}</span> : null}
+                          </div>
+                          <span className="git-change-stage">{file.stage}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <section className="git-diff-panel" aria-label="Selected file diff">
+                    <div className="git-diff-panel__header">
                       <div>
-                        <strong>{file.path}</strong>
-                        {file.oldPath ? <span>Renamed from {file.oldPath}</span> : null}
+                        <p className="card-eyebrow">Read-only diff</p>
+                        <h3>
+                          {gitDiffStateTitle(
+                            selectedGitChangedFile,
+                            gitFileDiff,
+                            gitFileDiffState,
+                          )}
+                        </h3>
+                        <p>
+                          {selectedGitChangedFile?.path ??
+                            "Choose a changed file to inspect its local Git diff."}
+                        </p>
                       </div>
-                      <span className="git-change-stage">{file.stage}</span>
+                      <StatusPill
+                        tone={
+                          gitFileDiff?.kind === "unavailable" ||
+                          gitFileDiffState === "error"
+                            ? "warning"
+                            : gitFileDiff?.kind === "untracked"
+                              ? "neutral"
+                              : "success"
+                        }
+                        size="sm"
+                      >
+                        {gitFileDiffState === "loading"
+                          ? "loading"
+                          : gitFileDiff?.kind ?? "idle"}
+                      </StatusPill>
                     </div>
-                  ))}
+
+                    <dl className="diff-metadata-grid">
+                      <div>
+                        <dt>Additions</dt>
+                        <dd>+{gitFileDiff?.additions ?? 0}</dd>
+                      </div>
+                      <div>
+                        <dt>Deletions</dt>
+                        <dd>-{gitFileDiff?.deletions ?? 0}</dd>
+                      </div>
+                      <div>
+                        <dt>Lines</dt>
+                        <dd>{gitFileDiff?.lineCount ?? 0}</dd>
+                      </div>
+                    </dl>
+
+                    {gitFileDiffState === "loading" ? (
+                      <div className="git-diff-state">
+                        <IconBadge icon="search" tone="accent" size="md" />
+                        <div>
+                          <h4>Loading diff safely</h4>
+                          <p>
+                            The workspace is running a fixed read-only Git diff
+                            command inside the selected repository.
+                          </p>
+                        </div>
+                      </div>
+                    ) : gitFileDiffState === "error" ? (
+                      <div className="git-diff-state">
+                        <IconBadge icon="changes" tone="danger" size="md" />
+                        <div>
+                          <h4>Diff could not be loaded</h4>
+                          <p>
+                            No write operation was attempted. Refresh Git status
+                            and try selecting the file again.
+                          </p>
+                        </div>
+                      </div>
+                    ) : gitFileDiff?.isTooLarge ? (
+                      <div className="git-diff-state">
+                        <IconBadge icon="file" tone="warning" size="md" />
+                        <div>
+                          <h4>Diff exceeds preview limits</h4>
+                          <p>
+                            This local diff is too large for the inline preview.
+                            It remains read-only and unavailable for review here.
+                          </p>
+                        </div>
+                      </div>
+                    ) : gitFileDiff?.isBinary || gitFileDiff?.kind === "binary" ? (
+                      <div className="git-diff-state">
+                        <IconBadge icon="file" tone="warning" size="md" />
+                        <div>
+                          <h4>Binary diff</h4>
+                          <p>
+                            Git reported this file as binary, so there is no text
+                            diff to render in the workspace.
+                          </p>
+                        </div>
+                      </div>
+                    ) : gitFileDiff?.kind === "untracked" ? (
+                      <div className="git-diff-state">
+                        <IconBadge icon="file" tone="neutral" size="md" />
+                        <div>
+                          <h4>No tracked baseline yet</h4>
+                          <p>
+                            This file is untracked. A text diff will be available
+                            after a tracked baseline exists.
+                          </p>
+                        </div>
+                      </div>
+                    ) : gitFileDiff?.kind === "unavailable" ||
+                      !gitFileDiff ||
+                      gitFileDiff.lines.length === 0 ? (
+                      <div className="git-diff-state">
+                        <IconBadge icon="changes" tone="neutral" size="md" />
+                        <div>
+                          <h4>No diff content available</h4>
+                          <p>
+                            Git did not return a diff for this file and stage.
+                            The file remains visible in the status list.
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <pre className="git-diff-code" tabIndex={0}>
+                        {gitFileDiff.lines.map((line, index) => (
+                          <code
+                            className={`git-diff-line git-diff-line--${line.type}`}
+                            key={`${line.type}-${index}-${line.content}`}
+                          >
+                            {line.content}
+                          </code>
+                        ))}
+                      </pre>
+                    )}
+                  </section>
                 </div>
               ) : (
                 <div className="git-status-empty">
