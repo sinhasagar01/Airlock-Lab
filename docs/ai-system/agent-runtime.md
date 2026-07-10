@@ -84,11 +84,17 @@ A proposed change plan should include:
 - Whether human approval is required
 
 The plan is not a diff. It must not claim that changes have been generated until
-the Git diff and proposed patch model exist.
+a generated patch artifact explicitly stores patch content.
 
 Approval review should consume the same proposed change plan rather than
 duplicating separate plan text. This keeps agent-run inspection and human
 approval review aligned while diff attachment is still pending.
+
+Generated patch artifacts are a separate review layer from the proposed plan.
+The runtime may expose artifact records with `not_generated`, `generated`,
+`failed`, or `unavailable` states. Generated previews are read-only and must
+only render stored artifact diff content; placeholder and error states must not
+borrow local Git diffs or fabricate patch output.
 
 ## Run Lifecycle
 

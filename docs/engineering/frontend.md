@@ -29,6 +29,11 @@ The desktop MVP uses Tauri, React, TypeScript, and Vite. Styling is plain CSS wi
 - Proposed changes are normalized through `ensureProposedPatchArtifacts` so
   every proposed file has a placeholder patch artifact record, usually
   `not_generated`, before any generated diff content exists.
+- `PatchArtifactList` and `PatchArtifactDetail` render generated patch artifact
+  records as a selectable review surface in Agent Runs and Approval Review.
+  `generated` artifacts may show a read-only preview only when `rawDiff` is
+  present; `not_generated`, `failed`, `unavailable`, binary, and too-large
+  states should render designed state panels instead of fake diff text.
 - Approval review reuses the linked `AgentRun`, `ApprovalRequest`, and
   `ProposedChangePlan` state plus the linked `PersistedProposedChange` record.
   It may match proposed affected files to local Git status paths and render

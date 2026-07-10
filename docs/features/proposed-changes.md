@@ -23,6 +23,12 @@ effects exist.
   artifacts without generating patch content.
 - Placeholder artifacts are usually `not_generated` until a future patch
   generation workflow stores real diff content.
+- Agent Runs and Approval Review render generated patch artifacts as selectable
+  records with detail states for `not_generated`, `generated`, `failed`, and
+  `unavailable`.
+- A generated artifact preview is shown only when the artifact has stored
+  `rawDiff` content. `not_generated`, `failed`, and `unavailable` states must
+  not fabricate diff text.
 - Approval decisions update the linked proposed-change status to `approved` or
   `rejected`.
 - Agent Runs and Approval Review consume persisted proposed-change records while
@@ -52,6 +58,19 @@ agent-generated patch diffs.
 The MVP renders generated patch artifact placeholders separately from matching
 local Git diffs so the review surface does not confuse current repository
 changes with future generated patch output.
+
+## Artifact Detail States
+
+- `not_generated`: shows an honest placeholder explaining that no patch exists
+  yet.
+- `generated`: shows stored patch metadata and a read-only preview when
+  `rawDiff` exists. If no preview content is stored, it shows a no-preview
+  state.
+- `failed`: shows the failed artifact state without inventing replacement diff
+  content.
+- `unavailable`: shows that the artifact cannot be reviewed yet.
+- Binary or too-large artifacts use dedicated states and do not inline unsafe or
+  oversized content.
 
 ## Data Model
 

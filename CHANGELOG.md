@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added generated patch artifact detail panels in Agent Runs and Approval
+  Review, including not-generated, generated preview, failed, unavailable,
+  binary, and too-large states.
+- Added smoke coverage for selectable patch artifact states and stored generated
+  patch preview rendering without confusing those artifacts with local Git
+  diffs.
 - Added generated patch artifact placeholder records for persisted proposed
   changes, with normalization so every proposed file has a `not_generated`
   artifact slot.
