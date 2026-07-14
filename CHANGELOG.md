@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Fixed native repository selection by granting the existing app-local SQLite
+  persistence path `sql:allow-execute`, which prevents a successful Tauri
+  directory selection from failing while repositories are saved.
+- Added a Tauri v2 repository-picker boundary that attempts the native dialog
+  first, uses `isTauri()` only to classify failures, and keeps browser preview,
+  native dialog, and post-selection storage errors distinct.
+- Added repository-picker and desktop regression tests for native selection,
+  cancellation, browser fallback, native dialog failure, and persistence
+  failure without adding manual path entry or changing filesystem scope.
 - Added optional OpenAI-backed structured plan generation behind the existing
   provider adapter contract, while keeping Mock Provider as the default.
 - Added a native Tauri credential and request boundary using `OPENAI_API_KEY`

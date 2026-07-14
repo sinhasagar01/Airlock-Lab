@@ -22,7 +22,14 @@ import {
   saveProposedChange,
   saveProposedChanges,
 } from "./storage/proposedChangeStore";
-import { loadSavedRepositories } from "./storage/repositoryStore";
+import {
+  loadSavedRepositories,
+  saveRepositories,
+} from "./storage/repositoryStore";
+import {
+  pickRepositoryDirectories,
+  RepositoryPickerError,
+} from "./storage/repositoryPicker";
 import {
   loadOpenAiProviderConfiguration,
   requestOpenAiPlan,
@@ -362,9 +369,15 @@ const mockState = vi.hoisted(() => {
   };
 });
 
-vi.mock("@tauri-apps/plugin-dialog", () => ({
-  open: vi.fn(async () => null),
-}));
+vi.mock("./storage/repositoryPicker", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./storage/repositoryPicker")>();
+
+  return {
+    ...actual,
+    pickRepositoryDirectories: vi.fn(async () => null),
+  };
+});
 
 vi.mock("./storage/repositoryStore", () => ({
   loadSavedRepositories: vi.fn(async () => mockState.repositories),
@@ -473,6 +486,8 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  vi.mocked(pickRepositoryDirectories).mockResolvedValue(null);
+  vi.mocked(saveRepositories).mockResolvedValue(undefined);
   vi.mocked(loadOpenAiProviderConfiguration).mockResolvedValue({
     configured: false,
     model: "gpt-5.6-luna",
@@ -604,6 +619,92 @@ describe("App smoke tests", () => {
         "Describe a task to create a review-only plan with the mock provider.",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("persists repositories returned by the native directory picker", async () => {
+    const { user } = renderApp();
+
+    await waitFor(() => expect(saveRepositories).toHaveBeenCalled());
+    vi.mocked(saveRepositories).mockClear();
+    vi.mocked(pickRepositoryDirectories).mockResolvedValue([
+      "/workspace/second-repository",
+    ]);
+
+    await user.click(screen.getByRole("button", { name: "Choose repository" }));
+
+    await waitFor(() => {
+      expect(saveRepositories).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({ path: "/workspace/second-repository" }),
+        ]),
+      );
+    });
+    expect(
+      screen.queryByText(/web preview cannot open local folders/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the web fallback only when the picker reports browser runtime", async () => {
+    vi.mocked(pickRepositoryDirectories).mockRejectedValue(
+      new RepositoryPickerError(
+        "browser_runtime",
+        "Repository selection requires the native Tauri app.",
+      ),
+    );
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Choose repository" }));
+
+    expect(
+      await screen.findByText(
+        "Repository selection is available in the native Tauri app. The web preview cannot open local folders.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("does not mislabel a native dialog failure as web preview", async () => {
+    vi.mocked(pickRepositoryDirectories).mockRejectedValue(
+      new RepositoryPickerError(
+        "native_dialog_failed",
+        "The native repository picker could not be opened.",
+      ),
+    );
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Choose repository" }));
+
+    expect(
+      await screen.findByText(
+        "The native repository picker could not open. Restart the desktop app and try again.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/web preview cannot open local folders/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("reports post-selection persistence failures separately", async () => {
+    const { user } = renderApp();
+
+    await waitFor(() => expect(saveRepositories).toHaveBeenCalled());
+    vi.mocked(saveRepositories).mockClear();
+    vi.mocked(saveRepositories).mockRejectedValueOnce(
+      new Error("execute not allowed"),
+    );
+    vi.mocked(pickRepositoryDirectories).mockResolvedValue([
+      "/workspace/second-repository",
+    ]);
+
+    await user.click(screen.getByRole("button", { name: "Choose repository" }));
+
+    expect(
+      await screen.findByText(
+        "The repository was selected, but the workspace could not save it. Check native storage access and try again.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/web preview cannot open local folders/i),
+    ).not.toBeInTheDocument();
   });
 
   it("renders repository intelligence from indexed file facts", async () => {

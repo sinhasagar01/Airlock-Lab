@@ -2,7 +2,7 @@
 
 ## Current MVP State
 
-The desktop app supports local repository selection, persisted repositories, Git metadata, read-only Git status and local diff preview, approval-attached matching local diffs, persisted indexing jobs, persisted proposed changes with generated patch artifact records and detail states, indexed file facts, repository intelligence summaries, task-driven mock-provider agent runs with durable structured plans and linked pending approvals, inspectable agent run detail, approval detail review, approval request persistence, a connected safe demo workflow seed, indexed-file browsing, and safe file content previews.
+The desktop app supports local repository selection, persisted repositories, Git metadata, read-only Git status and local diff preview, approval-attached matching local diffs, persisted indexing jobs, persisted proposed changes with generated patch artifact records and detail states, indexed file facts, repository intelligence summaries, task-driven mock-provider agent runs with durable structured plans and linked pending approvals, inspectable agent run detail, approval detail review, approval request persistence, a connected safe demo workflow seed, indexed-file browsing, and safe file content previews. Native repository selection now attempts the Tauri v2 dialog directly and persists successful selections through the explicitly allowed app-local SQLite execute capability; browser, native-dialog, and storage failures remain separately labeled.
 
 The desktop app now has an initial Vitest/jsdom smoke suite covering six-tab
 rendering, sidebar navigation, approval actions, pending approval count updates,
