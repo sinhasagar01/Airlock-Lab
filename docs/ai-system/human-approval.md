@@ -120,13 +120,14 @@ Approval review should distinguish three related concepts:
 - Agent Runs and Approval Review show informational Apply Readiness gates for
   the selected artifact. Approval state is one input, but even an approved,
   dry-run-passed artifact is only `closer to ready`. Validation is now bound to
-  a normalized SHA-256 artifact digest and a lightweight repository snapshot.
-  If patch content, branch, HEAD, clean state, or changed-file count differs,
-  readiness is blocked until validation runs again.
+  a normalized SHA-256 artifact digest and a repository snapshot.
+  Native validation also records bounded target-file fingerprints and an
+  authoritative snapshot digest. If patch content, branch, HEAD, Git state,
+  relevant paths, or target fingerprints differ, readiness is blocked until
+  validation runs again.
 - Current digest and snapshot checks are review evidence, not application
-  authorization. Future native application must repeat them and add target-file
-  fingerprints, an authoritative repository-state digest, and one-shot apply
-  authorization.
+  authorization. Future native application must repeat them inside the same
+  protected request as any write and add one-shot apply authorization.
 - `Apply unavailable` is disabled and has no write-capable action.
 - Matching local Git diffs are read-only repository diffs for affected files
   that currently appear in Git status.

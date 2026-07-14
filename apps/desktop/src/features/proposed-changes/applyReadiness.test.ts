@@ -15,7 +15,20 @@ const validationSnapshot: RepositoryValidationSnapshot = {
   isClean: true,
   changedFileCount: 0,
   relevantFilePaths: ["src/App.tsx"],
+  artifactDigest: "digest-1",
+  targetFileFingerprints: [
+    {
+      path: "src/App.tsx",
+      exists: true,
+      sizeBytes: 120,
+      modifiedAt: "2026-07-14T11:59:00.000Z",
+      contentSha256: "f".repeat(64),
+      status: "captured",
+    },
+  ],
+  repositorySnapshotDigest: "a".repeat(64),
   capturedAt: "2026-07-14T12:00:00.000Z",
+  fingerprintedAt: "2026-07-14T12:00:00.000Z",
 };
 
 const readyContext: ApplyReadinessContext = {
@@ -64,6 +77,7 @@ describe("evaluateApplyReadiness", () => {
     expect(gateStatus(result, "dry_run")).toBe("passed");
     expect(gateStatus(result, "artifact_digest")).toBe("passed");
     expect(gateStatus(result, "validation_snapshot")).toBe("passed");
+    expect(gateStatus(result, "target_fingerprints")).toBe("passed");
     expect(gateStatus(result, "repository_staleness")).toBe("passed");
   });
 
@@ -146,6 +160,7 @@ describe("evaluateApplyReadiness", () => {
       currentRepositorySnapshot: {
         ...validationSnapshot,
         headSha: "def5678",
+        repositorySnapshotDigest: "b".repeat(64),
       },
     });
 
@@ -170,6 +185,48 @@ describe("evaluateApplyReadiness", () => {
 
     expect(gateStatus(result, "artifact_digest")).toBe("not_checked");
     expect(gateStatus(result, "validation_snapshot")).toBe("not_checked");
+    expect(gateStatus(result, "target_fingerprints")).toBe("not_checked");
     expect(gateStatus(result, "repository_staleness")).toBe("not_checked");
+  });
+
+  it("blocks readiness when a target fingerprint is forbidden", () => {
+    const result = evaluateApplyReadiness(
+      generatedArtifact({
+        validationRepositorySnapshot: {
+          ...validationSnapshot,
+          targetFileFingerprints: [
+            {
+              path: ".env",
+              exists: false,
+              status: "forbidden",
+              reason: "Policy forbids fingerprinting this path.",
+            },
+          ],
+        },
+      }),
+      readyContext,
+    );
+
+    expect(gateStatus(result, "target_fingerprints")).toBe("blocked");
+  });
+
+  it("keeps legacy validation snapshots explicitly unavailable", () => {
+    const result = evaluateApplyReadiness(
+      generatedArtifact({
+        validationRepositorySnapshot: {
+          repositoryId: "repo-1",
+          branch: "main",
+          headSha: "abc1234",
+          isClean: true,
+          changedFileCount: 0,
+          relevantFilePaths: ["src/App.tsx"],
+          capturedAt: "2026-07-14T12:00:00.000Z",
+        },
+      }),
+      readyContext,
+    );
+
+    expect(gateStatus(result, "target_fingerprints")).toBe("future");
+    expect(gateStatus(result, "repository_staleness")).toBe("future");
   });
 });

@@ -36,7 +36,7 @@ effects exist.
 - Selected artifact details expose the same informational **Apply Readiness**
   gates in Agent Runs and Approval Review. Gates derive from approval,
   generation, validation, repository, Git-state, path, binary, size, artifact
-  digest, and validation-snapshot data.
+  digest, target-file fingerprint, and validation-snapshot data.
 - Apply readiness can be closer to ready, blocked, or pending checks, but it
   never authorizes a write. A changed artifact digest or changed repository
   snapshot blocks readiness and requires revalidation.
@@ -117,15 +117,21 @@ Git stderr, and never applies, stages, writes, or commits changes.
 Retained patch text is normalized to LF line endings with a terminal newline
 and assigned a SHA-256 digest. Generated artifacts persist their current
 digest. Validation persists the digest it checked, `validatedAt`, `dryRunAt`
-when Git completed the check, and a lightweight repository snapshot. The
+when Git completed the check, and a repository validation snapshot. The
 snapshot contains no file contents: only repository ID, branch, short HEAD,
-clean state, changed-file count, relevant proposal paths, and capture time.
+clean state, changed-file count, relevant proposal paths, bounded target-file
+fingerprints, and capture time. Existing regular UTF-8 targets up to 256 KiB
+receive a content SHA-256; missing, binary, oversized, forbidden, symlink, and
+unavailable targets retain typed metadata states instead.
 
 Apply Readiness derives staleness by comparing the current artifact digest with
-the validated digest and the latest read-only Git summary with the validation
-snapshot. Digest or repository changes produce a blocked state and require a
-new validation. Missing native snapshot data remains explicitly unavailable;
-it is not treated as a pass.
+the validated digest and a freshly recomputed native repository snapshot digest
+with the validation snapshot digest. The digest canonically summarizes
+repository identity, branch, HEAD, Git state, relevant paths, artifact digest,
+and sorted fingerprints. Capture timestamps are excluded so unchanged state
+remains comparable. Digest or repository changes produce a blocked state and
+require a new validation. Missing native evidence remains explicitly
+unavailable; it is not treated as a pass.
 
 Apply readiness is a frontend explanation of existing review state, not a
 security decision. Approval does not apply a patch, `dry_run_passed` does not
@@ -145,3 +151,4 @@ The shared model lives in `packages/ai`:
 - `PatchValidationStatus`
 - `PatchValidationResult`
 - `RepositoryValidationSnapshot`
+- `TargetFileFingerprint`

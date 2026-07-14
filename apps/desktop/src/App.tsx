@@ -100,6 +100,7 @@ import { scanRepositoryFileTree } from "./storage/fileTreeScanner";
 import { loadGitFileDiff, loadGitStatusSummary } from "./storage/gitChanges";
 import { loadRepositoriesGitMetadata } from "./storage/gitMetadata";
 import { dryRunGeneratedPatch } from "./storage/patchValidation";
+import { loadRepositoryValidationSnapshot } from "./storage/repositoryValidationSnapshot";
 import {
   loadIndexedFileFacts,
   replaceIndexedFileFacts,
@@ -223,6 +224,10 @@ export function App() {
   const [validatingPatchArtifactId, setValidatingPatchArtifactId] = useState<
     string | null
   >(null);
+  const [currentFingerprintSnapshot, setCurrentFingerprintSnapshot] = useState<{
+    artifactId: string;
+    snapshot: RepositoryValidationSnapshot;
+  } | null>(null);
   const [filePreview, setFilePreview] = useState<FileContentPreview | null>(
     null,
   );
@@ -425,6 +430,19 @@ export function App() {
     ) ??
     selectedApprovalProposedChange?.patchArtifacts[0] ??
     null;
+  const selectedReadinessArtifact =
+    activeSection === "approvals"
+      ? selectedApprovalPatchArtifact
+      : selectedAgentPatchArtifact;
+  const selectedReadinessChange =
+    activeSection === "approvals"
+      ? selectedApprovalProposedChange
+      : activePersistedProposedChange;
+  const selectedReadinessRepositorySnapshot =
+    currentFingerprintSnapshot &&
+    currentFingerprintSnapshot.artifactId === selectedReadinessArtifact?.id
+      ? currentFingerprintSnapshot.snapshot
+      : currentRepositoryValidationSnapshot;
   const demoWorkflowRun =
     agentRuns.find((run) => run.id === demoWorkflow.runId) ?? null;
   const demoWorkflowApproval =
@@ -763,6 +781,13 @@ export function App() {
       }
     }
 
+    if (validation.repositorySnapshot) {
+      setCurrentFingerprintSnapshot({
+        artifactId: artifact.id,
+        snapshot: validation.repositorySnapshot,
+      });
+    }
+
     if (hasActiveRepository && change.repositoryId === activeRepository.id) {
       await refreshGitStatus(activeRepository);
     }
@@ -950,6 +975,62 @@ export function App() {
       setSelectedApprovalPatchArtifactId(artifacts[0].id);
     }
   }, [selectedApprovalProposedChange, selectedApprovalPatchArtifactId]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadCurrentFingerprintSnapshot() {
+      if (
+        !["agents", "approvals"].includes(activeSection) ||
+        !hasActiveRepository ||
+        !selectedReadinessArtifact?.artifactDigest ||
+        !selectedReadinessArtifact.validationRepositorySnapshot
+          ?.repositorySnapshotDigest ||
+        !selectedReadinessChange ||
+        selectedReadinessChange.repositoryId !== activeRepository.id
+      ) {
+        setCurrentFingerprintSnapshot(null);
+        return;
+      }
+
+      try {
+        const snapshot = await loadRepositoryValidationSnapshot(
+          activeRepository.id,
+          activeRepository.path,
+          selectedReadinessArtifact.artifactDigest,
+          selectedReadinessChange.files.map((file) => file.path),
+        );
+
+        if (isMounted) {
+          setCurrentFingerprintSnapshot({
+            artifactId: selectedReadinessArtifact.id,
+            snapshot,
+          });
+        }
+      } catch {
+        if (isMounted) {
+          setCurrentFingerprintSnapshot(null);
+        }
+      }
+    }
+
+    void loadCurrentFingerprintSnapshot();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [
+    activeRepository.id,
+    activeRepository.path,
+    activeSection,
+    gitStatusSummary?.refreshedAt,
+    hasActiveRepository,
+    selectedReadinessArtifact?.artifactDigest,
+    selectedReadinessArtifact?.id,
+    selectedReadinessArtifact?.validationRepositorySnapshot
+      ?.repositorySnapshotDigest,
+    selectedReadinessChange,
+  ]);
 
   useEffect(() => {
     let isMounted = true;
@@ -2381,7 +2462,7 @@ export function App() {
                             activeRepository.id,
                       ),
                       currentRepositorySnapshot:
-                        currentRepositoryValidationSnapshot,
+                        selectedReadinessRepositorySnapshot,
                       workingTreeState: applyReadinessWorkingTreeState,
                     }}
                     artifact={selectedAgentPatchArtifact}
@@ -2971,7 +3052,7 @@ export function App() {
                             activeRepository.id,
                       ),
                       currentRepositorySnapshot:
-                        currentRepositoryValidationSnapshot,
+                        selectedReadinessRepositorySnapshot,
                       workingTreeState: applyReadinessWorkingTreeState,
                   }}
                   artifact={selectedApprovalPatchArtifact}

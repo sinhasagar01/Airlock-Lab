@@ -8,6 +8,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 const MAX_INDEXED_FILES: usize = 5_000;
 const MAX_PREVIEW_BYTES: u64 = 256 * 1024;
@@ -18,6 +19,8 @@ const MAX_PROVIDER_FOLDERS: usize = 20;
 const MAX_PROVIDER_EXTENSIONS: usize = 12;
 const MAX_GENERATED_PATCH_BYTES: usize = 64 * 1024;
 const MAX_GENERATED_PATCH_LINES: usize = 4_000;
+const MAX_FINGERPRINT_BYTES: u64 = 256 * 1024;
+const MAX_FINGERPRINT_TARGETS: usize = 64;
 const DEFAULT_OPENAI_MODEL: &str = "gpt-5.6-luna";
 const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 const OPENAI_MODELS_URL: &str = "https://api.openai.com/v1/models";
@@ -132,6 +135,27 @@ struct PatchValidationInput {
     relevant_file_paths: Vec<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RepositorySnapshotInput {
+    repository_id: String,
+    repository_path: String,
+    artifact_digest: String,
+    relevant_file_paths: Vec<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TargetFileFingerprint {
+    path: String,
+    exists: bool,
+    size_bytes: Option<u64>,
+    modified_at: Option<String>,
+    content_sha256: Option<String>,
+    status: String,
+    reason: Option<String>,
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RepositoryValidationSnapshot {
@@ -141,7 +165,11 @@ struct RepositoryValidationSnapshot {
     is_clean: bool,
     changed_file_count: usize,
     relevant_file_paths: Vec<String>,
+    artifact_digest: Option<String>,
+    target_file_fingerprints: Vec<TargetFileFingerprint>,
+    repository_snapshot_digest: Option<String>,
     captured_at: String,
+    fingerprinted_at: String,
 }
 
 #[derive(Serialize)]
@@ -355,6 +383,147 @@ fn is_safe_relative_path(file_path: &str) -> bool {
     })
 }
 
+fn is_valid_sha256(digest: &str) -> bool {
+    digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn is_forbidden_fingerprint_path(file_path: &str) -> bool {
+    let normalized = file_path.to_ascii_lowercase();
+    let path = Path::new(&normalized);
+
+    path.components()
+        .any(|component| matches!(component, Component::Normal(segment) if segment == ".git"))
+        || is_sensitive_provider_path(file_path)
+}
+
+fn metadata_modified_at(metadata: &fs::Metadata) -> Option<String> {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs().to_string())
+}
+
+fn fingerprint_target_file(repository_root: &Path, file_path: &str) -> TargetFileFingerprint {
+    if is_forbidden_fingerprint_path(file_path) {
+        return TargetFileFingerprint {
+            path: file_path.to_string(),
+            exists: false,
+            size_bytes: None,
+            modified_at: None,
+            content_sha256: None,
+            status: "forbidden".to_string(),
+            reason: Some("Policy forbids reading or fingerprinting this path.".to_string()),
+        };
+    }
+
+    let target_path = repository_root.join(file_path);
+    let metadata = match fs::symlink_metadata(&target_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return TargetFileFingerprint {
+                path: file_path.to_string(),
+                exists: false,
+                size_bytes: None,
+                modified_at: None,
+                content_sha256: None,
+                status: "missing".to_string(),
+                reason: None,
+            };
+        }
+        Err(_) => {
+            return TargetFileFingerprint {
+                path: file_path.to_string(),
+                exists: false,
+                size_bytes: None,
+                modified_at: None,
+                content_sha256: None,
+                status: "unavailable".to_string(),
+                reason: Some("File metadata is unavailable.".to_string()),
+            };
+        }
+    };
+
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return TargetFileFingerprint {
+            path: file_path.to_string(),
+            exists: true,
+            size_bytes: Some(metadata.len()),
+            modified_at: metadata_modified_at(&metadata),
+            content_sha256: None,
+            status: "unavailable".to_string(),
+            reason: Some("Only regular repository files can be fingerprinted.".to_string()),
+        };
+    }
+
+    if metadata.len() > MAX_FINGERPRINT_BYTES {
+        return TargetFileFingerprint {
+            path: file_path.to_string(),
+            exists: true,
+            size_bytes: Some(metadata.len()),
+            modified_at: metadata_modified_at(&metadata),
+            content_sha256: None,
+            status: "too_large".to_string(),
+            reason: Some("File exceeds the 256 KiB fingerprint limit.".to_string()),
+        };
+    }
+
+    let canonical_target = match fs::canonicalize(&target_path) {
+        Ok(path) if path.starts_with(repository_root) => path,
+        _ => {
+            return TargetFileFingerprint {
+                path: file_path.to_string(),
+                exists: true,
+                size_bytes: Some(metadata.len()),
+                modified_at: metadata_modified_at(&metadata),
+                content_sha256: None,
+                status: "unavailable".to_string(),
+                reason: Some("File resolves outside the selected repository.".to_string()),
+            };
+        }
+    };
+    let content = match fs::read(canonical_target) {
+        Ok(content) => content,
+        Err(_) => {
+            return TargetFileFingerprint {
+                path: file_path.to_string(),
+                exists: true,
+                size_bytes: Some(metadata.len()),
+                modified_at: metadata_modified_at(&metadata),
+                content_sha256: None,
+                status: "unavailable".to_string(),
+                reason: Some("File content could not be read for fingerprinting.".to_string()),
+            };
+        }
+    };
+
+    if content.contains(&0) || std::str::from_utf8(&content).is_err() {
+        return TargetFileFingerprint {
+            path: file_path.to_string(),
+            exists: true,
+            size_bytes: Some(metadata.len()),
+            modified_at: metadata_modified_at(&metadata),
+            content_sha256: None,
+            status: "binary".to_string(),
+            reason: Some("Binary or non-UTF-8 content is not hashed.".to_string()),
+        };
+    }
+
+    TargetFileFingerprint {
+        path: file_path.to_string(),
+        exists: true,
+        size_bytes: Some(metadata.len()),
+        modified_at: metadata_modified_at(&metadata),
+        content_sha256: Some(sha256_hex(&content)),
+        status: "captured".to_string(),
+        reason: None,
+    }
+}
+
 fn patch_validation_result(
     input: &PatchValidationInput,
     status: &str,
@@ -392,9 +561,25 @@ fn patch_validation_result_with_snapshot(
 }
 
 fn capture_repository_validation_snapshot(
-    input: &PatchValidationInput,
+    repository_id: &str,
+    repository_root: &Path,
     canonical_repository_path: &str,
-) -> RepositoryValidationSnapshot {
+    artifact_digest: &str,
+    relevant_paths: &[String],
+) -> Result<RepositoryValidationSnapshot, String> {
+    if !is_valid_sha256(artifact_digest) {
+        return Err("The artifact digest is invalid.".to_string());
+    }
+
+    if relevant_paths.is_empty()
+        || relevant_paths.len() > MAX_FINGERPRINT_TARGETS
+        || relevant_paths
+            .iter()
+            .any(|path| path.len() > 320 || !is_safe_relative_git_path(path))
+    {
+        return Err("A target path is unsafe or outside the repository.".to_string());
+    }
+
     let head_sha = git_output(canonical_repository_path, &["rev-parse", "--short", "HEAD"]);
     let branch = git_output(canonical_repository_path, &["branch", "--show-current"])
         .filter(|value| !value.is_empty())
@@ -402,23 +587,41 @@ fn capture_repository_validation_snapshot(
     let status_output =
         git_output(canonical_repository_path, &["status", "--porcelain=v1"]).unwrap_or_default();
     let changed_file_count = status_output.lines().count();
-    let mut relevant_file_paths = if input.relevant_file_paths.is_empty() {
-        vec![input.file_path.clone()]
-    } else {
-        input.relevant_file_paths.clone()
-    };
+    let mut relevant_file_paths = relevant_paths.to_vec();
     relevant_file_paths.sort();
     relevant_file_paths.dedup();
+    let target_file_fingerprints: Vec<TargetFileFingerprint> = relevant_file_paths
+        .iter()
+        .map(|path| fingerprint_target_file(repository_root, path))
+        .collect();
+    let canonical_snapshot = json!({
+        "artifactDigest": artifact_digest.to_ascii_lowercase(),
+        "branch": &branch,
+        "changedFileCount": changed_file_count,
+        "headSha": &head_sha,
+        "isClean": changed_file_count == 0,
+        "relevantFilePaths": &relevant_file_paths,
+        "repositoryId": repository_id,
+        "targetFileFingerprints": &target_file_fingerprints,
+    });
+    let repository_snapshot_digest = serde_json::to_vec(&canonical_snapshot)
+        .ok()
+        .map(|bytes| sha256_hex(&bytes));
+    let captured_at = now_unix_seconds();
 
-    RepositoryValidationSnapshot {
-        repository_id: input.repository_id.clone(),
+    Ok(RepositoryValidationSnapshot {
+        repository_id: repository_id.to_string(),
         branch,
         head_sha,
         is_clean: changed_file_count == 0,
         changed_file_count,
         relevant_file_paths,
-        captured_at: now_unix_seconds(),
-    }
+        artifact_digest: Some(artifact_digest.to_ascii_lowercase()),
+        target_file_fingerprints,
+        repository_snapshot_digest,
+        captured_at: captured_at.clone(),
+        fingerprinted_at: captured_at,
+    })
 }
 
 fn validate_generated_patch_structure(input: &PatchValidationInput) -> Result<(), String> {
@@ -1433,6 +1636,24 @@ fn load_git_file_diff(
 }
 
 #[tauri::command]
+fn load_repository_validation_snapshot(
+    input: RepositorySnapshotInput,
+) -> Result<RepositoryValidationSnapshot, String> {
+    let (repository_root, canonical_repository_path) =
+        canonical_selected_git_root(&input.repository_path)
+            .map_err(|_| "Selected Git repository is unavailable.".to_string())?;
+
+    capture_repository_validation_snapshot(
+        &input.repository_id,
+        &repository_root,
+        &canonical_repository_path,
+        &input.artifact_digest,
+        &input.relevant_file_paths,
+    )
+    .map_err(|_| "Repository fingerprint evidence is unavailable.".to_string())
+}
+
+#[tauri::command]
 fn validate_generated_patch(input: PatchValidationInput) -> PatchValidationResult {
     if let Err(reason) = validate_generated_patch_structure(&input) {
         return match reason.as_str() {
@@ -1455,7 +1676,9 @@ fn validate_generated_patch(input: PatchValidationInput) -> PatchValidationResul
         };
     }
 
-    let (_, canonical_repository_path) = match canonical_selected_git_root(&input.repository_path) {
+    let (repository_root, canonical_repository_path) = match canonical_selected_git_root(
+        &input.repository_path,
+    ) {
         Ok(root) => root,
         Err(_) => {
             return patch_validation_result(
@@ -1465,8 +1688,34 @@ fn validate_generated_patch(input: PatchValidationInput) -> PatchValidationResul
             );
         }
     };
-    let repository_snapshot =
-        capture_repository_validation_snapshot(&input, &canonical_repository_path);
+    let Some(artifact_digest) = input.artifact_digest.as_deref() else {
+        return patch_validation_result(
+            &input,
+            "valid_structure",
+            "Patch structure is valid, but its artifact digest is unavailable.",
+        );
+    };
+    let relevant_paths = if input.relevant_file_paths.is_empty() {
+        vec![input.file_path.clone()]
+    } else {
+        input.relevant_file_paths.clone()
+    };
+    let repository_snapshot = match capture_repository_validation_snapshot(
+        &input.repository_id,
+        &repository_root,
+        &canonical_repository_path,
+        artifact_digest,
+        &relevant_paths,
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(_) => {
+            return patch_validation_result(
+                &input,
+                "valid_structure",
+                "Patch structure is valid, but native fingerprint evidence is unavailable.",
+            );
+        }
+    };
 
     let mut child = match Command::new("git")
         .args(["apply", "--check", "--whitespace=nowarn", "-"])
@@ -1790,7 +2039,7 @@ mod tests {
             operation: operation.to_string(),
             is_binary: false,
             raw_diff: Some(raw_diff.to_string()),
-            artifact_digest: Some("sha256:test-digest".to_string()),
+            artifact_digest: Some("a".repeat(64)),
             relevant_file_paths: vec![file_path.to_string()],
         }
     }
@@ -2023,7 +2272,7 @@ mod tests {
         assert_eq!(result.status, "dry_run_passed");
         assert_eq!(
             result.artifact_digest.as_deref(),
-            Some("sha256:test-digest")
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         );
         assert!(result.dry_run_at.is_some());
         let snapshot = result
@@ -2033,9 +2282,141 @@ mod tests {
         assert!(snapshot.is_clean);
         assert_eq!(snapshot.changed_file_count, 0);
         assert_eq!(snapshot.relevant_file_paths, vec!["new-file.txt"]);
+        assert_eq!(snapshot.target_file_fingerprints.len(), 1);
+        assert_eq!(snapshot.target_file_fingerprints[0].status, "missing");
+        assert!(snapshot.repository_snapshot_digest.is_some());
         assert!(!repository_path.join("new-file.txt").exists());
         assert_eq!(status_before, status_after);
         remove_temp_dir(&repository_path);
+    }
+
+    #[test]
+    fn repository_snapshot_fingerprints_are_bounded_and_detect_target_changes() {
+        let repository_path = create_temp_dir("repository-fingerprints");
+        init_git_repo(&repository_path);
+        fs::write(repository_path.join("safe.txt"), "hello\n").expect("write safe file");
+        fs::write(repository_path.join("binary.bin"), [0_u8, 159, 146, 150])
+            .expect("write binary file");
+        fs::write(
+            repository_path.join("large.txt"),
+            vec![b'x'; MAX_FINGERPRINT_BYTES as usize + 1],
+        )
+        .expect("write large file");
+        fs::write(repository_path.join(".env"), "SECRET=hidden").expect("write forbidden file");
+        let input = RepositorySnapshotInput {
+            repository_id: "repo-test".to_string(),
+            repository_path: repository_path.to_string_lossy().to_string(),
+            artifact_digest: "b".repeat(64),
+            relevant_file_paths: vec![
+                "safe.txt".to_string(),
+                "binary.bin".to_string(),
+                "large.txt".to_string(),
+                ".env".to_string(),
+                "missing.txt".to_string(),
+            ],
+        };
+
+        let first_snapshot =
+            load_repository_validation_snapshot(input).expect("capture first repository snapshot");
+        let fingerprint_status = |path: &str| {
+            first_snapshot
+                .target_file_fingerprints
+                .iter()
+                .find(|fingerprint| fingerprint.path == path)
+                .map(|fingerprint| fingerprint.status.as_str())
+        };
+
+        assert_eq!(fingerprint_status("safe.txt"), Some("captured"));
+        assert_eq!(fingerprint_status("binary.bin"), Some("binary"));
+        assert_eq!(fingerprint_status("large.txt"), Some("too_large"));
+        assert_eq!(fingerprint_status(".env"), Some("forbidden"));
+        assert_eq!(fingerprint_status("missing.txt"), Some("missing"));
+        let safe_fingerprint = first_snapshot
+            .target_file_fingerprints
+            .iter()
+            .find(|fingerprint| fingerprint.path == "safe.txt")
+            .expect("safe fingerprint");
+        let forbidden_fingerprint = first_snapshot
+            .target_file_fingerprints
+            .iter()
+            .find(|fingerprint| fingerprint.path == ".env")
+            .expect("forbidden fingerprint");
+        assert_eq!(
+            safe_fingerprint.content_sha256.as_deref(),
+            Some("5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03")
+        );
+        assert!(forbidden_fingerprint.content_sha256.is_none());
+        let first_digest = first_snapshot
+            .repository_snapshot_digest
+            .expect("first snapshot digest");
+
+        fs::write(repository_path.join("safe.txt"), "changed\n").expect("change safe file");
+        let second_snapshot = load_repository_validation_snapshot(RepositorySnapshotInput {
+            repository_id: "repo-test".to_string(),
+            repository_path: repository_path.to_string_lossy().to_string(),
+            artifact_digest: "b".repeat(64),
+            relevant_file_paths: vec![
+                "safe.txt".to_string(),
+                "binary.bin".to_string(),
+                "large.txt".to_string(),
+                ".env".to_string(),
+                "missing.txt".to_string(),
+            ],
+        })
+        .expect("capture second repository snapshot");
+
+        assert_ne!(
+            first_digest,
+            second_snapshot
+                .repository_snapshot_digest
+                .expect("second snapshot digest")
+        );
+        let traversal_result = load_repository_validation_snapshot(RepositorySnapshotInput {
+            repository_id: "repo-test".to_string(),
+            repository_path: repository_path.to_string_lossy().to_string(),
+            artifact_digest: "b".repeat(64),
+            relevant_file_paths: vec!["../outside.txt".to_string()],
+        });
+        let absolute_result = load_repository_validation_snapshot(RepositorySnapshotInput {
+            repository_id: "repo-test".to_string(),
+            repository_path: repository_path.to_string_lossy().to_string(),
+            artifact_digest: "b".repeat(64),
+            relevant_file_paths: vec!["/tmp/outside.txt".to_string()],
+        });
+
+        assert!(traversal_result.is_err());
+        assert!(absolute_result.is_err());
+        remove_temp_dir(&repository_path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_snapshot_does_not_follow_target_symlinks_outside_root() {
+        use std::os::unix::fs::symlink;
+
+        let repository_path = create_temp_dir("repository-fingerprint-symlink");
+        let outside_path = create_temp_dir("repository-fingerprint-outside");
+        init_git_repo(&repository_path);
+        fs::write(outside_path.join("secret.txt"), "outside secret").expect("write outside file");
+        symlink(
+            outside_path.join("secret.txt"),
+            repository_path.join("linked.txt"),
+        )
+        .expect("create target symlink");
+
+        let snapshot = load_repository_validation_snapshot(RepositorySnapshotInput {
+            repository_id: "repo-test".to_string(),
+            repository_path: repository_path.to_string_lossy().to_string(),
+            artifact_digest: "c".repeat(64),
+            relevant_file_paths: vec!["linked.txt".to_string()],
+        })
+        .expect("capture symlink snapshot");
+        let fingerprint = &snapshot.target_file_fingerprints[0];
+
+        assert_eq!(fingerprint.status, "unavailable");
+        assert!(fingerprint.content_sha256.is_none());
+        remove_temp_dir(&repository_path);
+        remove_temp_dir(&outside_path);
     }
 
     #[test]
@@ -2238,6 +2619,7 @@ pub fn run() {
             load_git_file_diff,
             load_git_status_summary,
             load_repository_git_metadata,
+            load_repository_validation_snapshot,
             preview_repository_file,
             scan_repository_file_tree,
             test_openai_connection,

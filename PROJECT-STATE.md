@@ -51,7 +51,12 @@ size, artifact-digest, validation-snapshot, and repository-staleness state.
 Retained patch text receives a normalized SHA-256 digest. Validation persists
 the checked digest plus a read-only snapshot of repository ID, branch, short
 HEAD, clean state, changed-file count, relevant proposal paths, and capture
-time. Digest or repository changes block readiness until revalidation.
+time. Native validation now adds bounded target-file fingerprints and an
+authoritative snapshot digest over repository identity, Git state, artifact
+digest, relevant paths, and sorted fingerprints. Existing safe UTF-8 files up
+to 256 KiB are content-hashed; missing, binary, oversized, forbidden, symlink,
+and unavailable targets receive typed states without exposing file content.
+Digest or repository changes block readiness until revalidation.
 `Apply unavailable` is always disabled and has no handler; approval, digest,
 snapshot, and dry-run evidence remain review signals only.
 

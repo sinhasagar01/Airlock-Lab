@@ -14,6 +14,7 @@ import { previewRepositoryFile } from "./storage/filePreview";
 import { scanRepositoryFileTree } from "./storage/fileTreeScanner";
 import { loadGitFileDiff, loadGitStatusSummary } from "./storage/gitChanges";
 import { dryRunGeneratedPatch } from "./storage/patchValidation";
+import { loadRepositoryValidationSnapshot } from "./storage/repositoryValidationSnapshot";
 import {
   saveApprovalRequest,
   updateApprovalRequestStatus,
@@ -430,11 +431,52 @@ vi.mock("./storage/patchValidation", () => ({
       isClean: false,
       changedFileCount: 3,
       relevantFilePaths: args[5] as string[],
+      artifactDigest: args[4] as string,
+      targetFileFingerprints: (args[5] as string[]).map((path) => ({
+        path,
+        exists: true,
+        sizeBytes: 120,
+        modifiedAt: "1783532000",
+        contentSha256: "f".repeat(64),
+        status: "captured" as const,
+      })),
+      repositorySnapshotDigest: "a".repeat(64),
       capturedAt: "1783532400",
+      fingerprintedAt: "1783532400",
     },
     validatedAt: "1783532400",
     dryRunAt: "1783532400",
   })),
+}));
+
+vi.mock("./storage/repositoryValidationSnapshot", () => ({
+  loadRepositoryValidationSnapshot: vi.fn(
+    async (
+      repositoryId: string,
+      _repositoryPath: string,
+      artifactDigest: string,
+      relevantFilePaths: string[],
+    ) => ({
+      repositoryId,
+      branch: "main",
+      headSha: "abc1234",
+      isClean: false,
+      changedFileCount: 3,
+      relevantFilePaths,
+      artifactDigest,
+      targetFileFingerprints: relevantFilePaths.map((path) => ({
+        path,
+        exists: true,
+        sizeBytes: 120,
+        modifiedAt: "1783532000",
+        contentSha256: "f".repeat(64),
+        status: "captured" as const,
+      })),
+      repositorySnapshotDigest: "a".repeat(64),
+      capturedAt: "1783532400",
+      fingerprintedAt: "1783532400",
+    }),
+  ),
 }));
 
 vi.mock("./storage/approvalRequestStore", () => ({
@@ -557,7 +599,18 @@ beforeEach(() => {
       isClean: false,
       changedFileCount: 3,
       relevantFilePaths: args[5],
+      artifactDigest: args[4],
+      targetFileFingerprints: args[5].map((path) => ({
+        path,
+        exists: true,
+        sizeBytes: 120,
+        modifiedAt: "1783532000",
+        contentSha256: "f".repeat(64),
+        status: "captured" as const,
+      })),
+      repositorySnapshotDigest: "a".repeat(64),
       capturedAt: "1783532400",
+      fingerprintedAt: "1783532400",
     },
     validatedAt: "1783532400",
     dryRunAt: "1783532400",
@@ -1515,10 +1568,17 @@ describe("App smoke tests", () => {
       screen.getByText("Artifact digest matches validation"),
     ).toBeInTheDocument();
     expect(screen.getByText("Validation snapshot captured")).toBeInTheDocument();
+    expect(screen.getByText("Target files fingerprinted")).toBeInTheDocument();
     expect(screen.getByText("Repository state unchanged")).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Apply unavailable" }),
     ).toBeDisabled();
+    expect(loadRepositoryValidationSnapshot).toHaveBeenCalledWith(
+      "repo-workspace",
+      "/workspace",
+      expect.stringMatching(/^[a-f0-9]{64}$/),
+      ["src/App.tsx"],
+    );
     await waitFor(() => {
       expect(saveProposedChange).toHaveBeenLastCalledWith(
         expect.objectContaining({

@@ -122,14 +122,17 @@ Show **Apply Readiness** and walk through passed, blocked, not-checked, and
 future-only gates. Point out the artifact digest, validation snapshot, and
 repository-state comparison. The SHA-256 digest binds validation to the exact
 normalized patch text, while the snapshot records branch, short HEAD, clean
-state, changed-file count, relevant paths, and capture time without storing file
-contents. Select the disabled **Apply unavailable** control and explain that it
-has no action behind it.
+state, changed-file count, relevant paths, bounded target-file fingerprints,
+and capture time without storing file contents. Existing safe text targets get
+content hashes; missing, binary, oversized, forbidden, or unavailable targets
+show typed states. Select the disabled **Apply unavailable** control and explain
+that it has no action behind it.
 
 If the digest or repository state changes, show the blocked copy and explain:
 "Stale review evidence must be revalidated. The app still cannot apply the
-patch." Missing native branch or HEAD data stays explicitly unavailable rather
-than being treated as a pass.
+patch." The current native snapshot digest is recomputed for comparison, while
+capture timestamps are excluded from that digest. Missing authoritative native
+evidence stays explicitly unavailable rather than being treated as a pass.
 
 The seeded generated sample always demonstrates structure validation. Native
 dry-run proceeds only when the selected repository is the proposal's linked

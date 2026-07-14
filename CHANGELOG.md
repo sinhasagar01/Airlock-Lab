@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Added native bounded target-file fingerprints for patch validation evidence,
+  including captured, missing, binary, too-large, forbidden, and unavailable
+  states without returning file content to React.
+- Added a canonical SHA-256 repository snapshot digest over repository identity,
+  branch, HEAD, Git state, artifact digest, relevant paths, and sorted target
+  fingerprints, with capture timestamps excluded for stable comparison.
+- Added a read-only native current-snapshot refresh and readiness blocking when
+  authoritative validation and current snapshot digests differ.
+- Added native safety coverage for fingerprint limits, sensitive paths,
+  traversal, absolute paths, outside-root symlinks, and target changes that do
+  not alter Git changed-file counts.
 - Added normalized SHA-256 digests for retained generated patch content and
   persisted the digest checked by validation.
 - Added read-only validation snapshots with repository ID, branch, short HEAD,

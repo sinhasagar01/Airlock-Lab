@@ -196,6 +196,24 @@ export type PatchValidationStatus =
   | "dry_run_failed"
   | "unavailable";
 
+export type TargetFileFingerprintStatus =
+  | "captured"
+  | "missing"
+  | "too_large"
+  | "binary"
+  | "forbidden"
+  | "unavailable";
+
+export type TargetFileFingerprint = {
+  path: string;
+  exists: boolean;
+  sizeBytes?: number;
+  modifiedAt?: string;
+  contentSha256?: string;
+  status: TargetFileFingerprintStatus;
+  reason?: string;
+};
+
 export type RepositoryValidationSnapshot = {
   repositoryId: string;
   branch?: string;
@@ -203,7 +221,11 @@ export type RepositoryValidationSnapshot = {
   isClean: boolean;
   changedFileCount: number;
   relevantFilePaths: string[];
+  artifactDigest?: string;
+  targetFileFingerprints?: TargetFileFingerprint[];
+  repositorySnapshotDigest?: string;
   capturedAt: string;
+  fingerprintedAt?: string;
 };
 
 export type PatchValidationResult = {

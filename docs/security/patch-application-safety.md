@@ -54,10 +54,10 @@ The current product can:
 - Run read-only `git apply --check --whitespace=nowarn -` inside the selected
   repository.
 - Persist validation results, normalized SHA-256 artifact digests, and a
-  lightweight repository snapshot containing branch, short HEAD, clean state,
-  changed-file count, relevant paths, and capture time.
+  repository snapshot containing branch, short HEAD, clean state, changed-file
+  count, relevant paths, bounded target-file fingerprints, and capture time.
 - Recompute artifact digests when retained patch content changes and compare
-  validation evidence with the latest read-only Git status snapshot.
+  validation evidence with a fresh read-only native snapshot digest.
 - Record approval or rejection without applying a patch.
 - Read real local Git status and diffs separately from generated artifacts.
 - Derive informational apply-readiness gates in Agent Runs and Approval Review.
@@ -86,18 +86,36 @@ The current UI evaluates only data already available to the review surfaces:
 - Binary and size-limit state.
 - Current artifact digest compared with the digest bound to validation.
 - Native validation snapshot availability.
-- Current branch, HEAD, clean state, and changed-file count compared with the
-  validation snapshot.
+- Target-file fingerprint availability and policy status.
+- Current authoritative snapshot digest compared with the validation snapshot
+  digest.
 
 Readiness results are `closer to ready`, `blocked`, or `checks pending`. They do
 not grant authority and are not consumed by a native write command. A digest
 mismatch blocks readiness with a revalidation instruction. A repository
 snapshot mismatch also blocks readiness. Missing native branch or HEAD data is
 labeled `Requires future apply implementation`; validation that has not run is
-`Not checked yet`. These lightweight checks do not include target-file content
-fingerprints or an authoritative status digest, so all readiness checks must be
-repeated by the future native authority rather than trusted as frontend
-security decisions.
+`Not checked yet`. The native snapshot digest binds repository identity,
+branch, HEAD, Git state, relevant paths, artifact digest, and sorted target-file
+fingerprints. Capture timestamps are stored but intentionally excluded from the
+comparison digest. All readiness checks must still be repeated by the future
+native apply authority rather than trusted as frontend security decisions.
+
+### Current Target Fingerprint Boundary
+
+- Only safe repository-relative paths supplied by the persisted proposal are
+  accepted.
+- Existing regular UTF-8 files up to 256 KiB receive a SHA-256 content hash,
+  byte size, and modified timestamp.
+- A snapshot accepts at most 64 persisted proposal paths, each no longer than
+  320 characters.
+- Missing files receive a typed `missing` fingerprint without a content read.
+- Binary, oversized, symlink, unreadable, forbidden, and outside-root targets
+  receive typed non-hashable states.
+- `.git` paths, `.env` files, private-key names/extensions, credential files,
+  and secret-like files are never content-read or hashed.
+- File bytes never cross the native boundary. React receives metadata and
+  digests only.
 
 ## Goals
 

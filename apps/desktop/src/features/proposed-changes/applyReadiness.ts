@@ -25,6 +25,7 @@ export type ApplyReadinessGate = {
     | "size"
     | "artifact_digest"
     | "validation_snapshot"
+    | "target_fingerprints"
     | "repository_staleness";
   label: string;
   detail: string;
@@ -96,19 +97,6 @@ function shortDigest(digest: string) {
   return `SHA-256 ${digest.slice(0, 12)}...`;
 }
 
-function repositorySnapshotMatches(
-  validationSnapshot: RepositoryValidationSnapshot,
-  currentSnapshot: RepositoryValidationSnapshot,
-) {
-  return (
-    validationSnapshot.repositoryId === currentSnapshot.repositoryId &&
-    validationSnapshot.branch === currentSnapshot.branch &&
-    validationSnapshot.headSha === currentSnapshot.headSha &&
-    validationSnapshot.isClean === currentSnapshot.isClean &&
-    validationSnapshot.changedFileCount === currentSnapshot.changedFileCount
-  );
-}
-
 export function evaluateApplyReadiness(
   artifact: ProposedPatchArtifact,
   context: ApplyReadinessContext,
@@ -130,13 +118,21 @@ export function evaluateApplyReadiness(
     artifact.artifactDigest === artifact.validatedArtifactDigest;
   const validationSnapshot = artifact.validationRepositorySnapshot;
   const currentSnapshot = context.currentRepositorySnapshot;
+  const targetFileFingerprints =
+    validationSnapshot?.targetFileFingerprints ?? [];
+  const unavailableTargetFingerprints = targetFileFingerprints.filter(
+    (fingerprint) =>
+      fingerprint.status !== "captured" && fingerprint.status !== "missing",
+  );
   const hasComparableNativeSnapshot = Boolean(
-    validationSnapshot?.headSha && currentSnapshot?.headSha,
+    validationSnapshot?.repositorySnapshotDigest &&
+      currentSnapshot?.repositorySnapshotDigest,
   );
   const repositoryIsUnchanged = Boolean(
     validationSnapshot &&
       currentSnapshot &&
-      repositorySnapshotMatches(validationSnapshot, currentSnapshot),
+      validationSnapshot.repositorySnapshotDigest ===
+        currentSnapshot.repositorySnapshotDigest,
   );
 
   const gates: ApplyReadinessGate[] = [
@@ -281,8 +277,30 @@ export function evaluateApplyReadiness(
       !validationHasRun
         ? "Run validation to capture repository state."
         : validationSnapshot
-          ? `Captured ${validationSnapshot.branch ?? "detached or unknown branch"} at ${validationSnapshot.headSha ?? "an unavailable HEAD"} with ${validationSnapshot.changedFileCount} changed file${validationSnapshot.changedFileCount === 1 ? "" : "s"}.`
+          ? `Captured ${validationSnapshot.branch ?? "detached or unknown branch"} at ${validationSnapshot.headSha ?? "an unavailable HEAD"} with ${validationSnapshot.changedFileCount} changed file${validationSnapshot.changedFileCount === 1 ? "" : "s"} and ${validationSnapshot.targetFileFingerprints?.length ?? 0} target fingerprint${validationSnapshot.targetFileFingerprints?.length === 1 ? "" : "s"}.`
           : "The native repository snapshot was unavailable during validation.",
+    ),
+    gate(
+      "target_fingerprints",
+      "Target files fingerprinted",
+      !validationHasRun
+        ? "not_checked"
+        : !validationSnapshot?.targetFileFingerprints ||
+            targetFileFingerprints.length === 0 ||
+            !validationSnapshot.repositorySnapshotDigest
+          ? "future"
+          : unavailableTargetFingerprints.length > 0
+            ? "blocked"
+            : "passed",
+      !validationHasRun
+        ? "Run validation to fingerprint the proposed target paths."
+        : !validationSnapshot?.targetFileFingerprints ||
+            targetFileFingerprints.length === 0 ||
+            !validationSnapshot.repositorySnapshotDigest
+          ? "Authoritative native fingerprint evidence is unavailable."
+          : unavailableTargetFingerprints.length > 0
+            ? `${unavailableTargetFingerprints.length} target fingerprint${unavailableTargetFingerprints.length === 1 ? " is" : "s are"} unavailable, forbidden, binary, or too large.`
+            : `${targetFileFingerprints.length} target path${targetFileFingerprints.length === 1 ? " is" : "s are"} bound to snapshot ${shortDigest(validationSnapshot.repositorySnapshotDigest)}.`,
     ),
     gate(
       "repository_staleness",
@@ -298,10 +316,10 @@ export function evaluateApplyReadiness(
         ? "Repository staleness cannot be checked before validation."
         : !validationSnapshot || !currentSnapshot
           ? "A validation or current repository snapshot is unavailable."
-          : !hasComparableNativeSnapshot
-            ? "Branch or HEAD metadata is unavailable for a complete comparison."
+        : !hasComparableNativeSnapshot
+            ? "An authoritative current or validation snapshot digest is unavailable."
             : repositoryIsUnchanged
-              ? "Branch, HEAD, clean state, and changed-file count match validation."
+              ? "Branch, HEAD, Git state, artifact digest, relevant paths, and target fingerprints match validation."
               : "Repository state changed after validation. Re-run validation before future apply.",
     ),
   ];
