@@ -43,7 +43,6 @@ import {
   changeFeatureBlocks,
   dashboardActivity,
   emptyRepository,
-  maintenanceActions,
   mockApprovalRequests,
   mockProposedChanges,
   mockRepositories,
@@ -51,6 +50,7 @@ import {
   provider,
   quickStartItems,
   sectionEyebrows,
+  sectionHeaders,
   settingsRows,
   statusTone,
   workspace,
@@ -144,6 +144,15 @@ export function App() {
     null,
   );
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [maintenanceReindexState, setMaintenanceReindexState] = useState<
+    "idle" | "running" | "success" | "error"
+  >("idle");
+  const [maintenanceReindexMessage, setMaintenanceReindexMessage] = useState(
+    "Ready to refresh indexed file facts for the selected repository.",
+  );
+  const [maintenanceReindexLastRunAt, setMaintenanceReindexLastRunAt] =
+    useState<string | null>(null);
+  const [resetConfirmationText, setResetConfirmationText] = useState("");
 
   const hasActiveRepository = repositories.length > 0;
   const activeRepository = repositories[0] ?? emptyRepository;
@@ -749,6 +758,7 @@ export function App() {
       setRepositories(nextRepositories);
       await saveIndexingJob(completedJob);
       await saveRepositories(nextRepositories);
+      return true;
     } catch {
       const failedJob: IndexingJob = {
         ...job,
@@ -764,7 +774,42 @@ export function App() {
         ),
       );
       await saveIndexingJob(failedJob);
+      return false;
     }
+  }
+
+  async function runMaintenanceReindex() {
+    if (!hasActiveRepository) {
+      setMaintenanceReindexState("error");
+      setMaintenanceReindexMessage("Choose a repository before reindexing.");
+      return;
+    }
+
+    setMaintenanceReindexState("running");
+    setMaintenanceReindexMessage(
+      "Reindexing repository facts through the safe indexing boundary.",
+    );
+
+    const didReindex = await startIndexingJob(activeRepository);
+
+    if (didReindex) {
+      setMaintenanceReindexState("success");
+      setMaintenanceReindexMessage(
+        "Repository intelligence refreshed from indexed file facts.",
+      );
+      setMaintenanceReindexLastRunAt(
+        new Date().toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+      );
+      return;
+    }
+
+    setMaintenanceReindexState("error");
+    setMaintenanceReindexMessage(
+      "Reindex failed. No repository files were changed.",
+    );
   }
 
   async function updateApprovalStatus(
@@ -827,6 +872,11 @@ export function App() {
 
   return (
     <AppShell
+      workspaceClassName={
+        activeSection === "overview"
+          ? "workspace--overview"
+          : "workspace--feature"
+      }
       sidebar={
         <Sidebar
           activeSection={activeSection}
@@ -836,15 +886,21 @@ export function App() {
       }
     >
         <AppHeader
-          description={workspace.summary.description}
+          compact={activeSection !== "overview"}
+          description={sectionHeaders[activeSection].description}
           eyebrow={sectionEyebrows[activeSection]}
           onChooseRepository={selectRepositories}
           pendingApprovalCount={pendingApprovalCount}
           providerName={provider.displayName}
-          title={workspace.summary.name}
+          title={sectionHeaders[activeSection].title}
         />
 
-        <section className="overview-grid" aria-label="Workspace metrics">
+        <section
+          className={`overview-grid${
+            activeSection === "overview" ? "" : " overview-grid--compact"
+          }`}
+          aria-label="Workspace metrics"
+        >
           <SummaryCard
             detail={`Last indexed ${workspace.summary.lastIndexedAt}`}
             icon="database"
@@ -1590,7 +1646,7 @@ export function App() {
                     </ol>
                   </section>
 
-                  <section className="plan-section">
+                  <section className="plan-section plan-files-section">
                     <div className="plan-section__header">
                       <IconBadge icon="file" tone="accent" size="md" />
                       <div>
@@ -1627,7 +1683,7 @@ export function App() {
                     </div>
                   </section>
 
-                  <section className="plan-section">
+                  <section className="plan-section plan-artifacts-section">
                     <div className="plan-section__header">
                       <IconBadge icon="changes" tone="agent" size="md" />
                       <div>
@@ -1653,7 +1709,7 @@ export function App() {
                     <PatchArtifactDetail artifact={selectedAgentPatchArtifact} />
                   </section>
 
-                  <section className="plan-section">
+                  <section className="plan-section plan-risk-section">
                     <div className="plan-section__header">
                       <IconBadge icon="approval" tone="warning" size="md" />
                       <div>
@@ -1680,7 +1736,7 @@ export function App() {
                     </div>
                   </section>
 
-                  <section className="plan-section">
+                  <section className="plan-section plan-validation-section">
                     <div className="plan-section__header">
                       <IconBadge icon="search" tone="agent" size="md" />
                       <div>
@@ -2563,12 +2619,14 @@ export function App() {
                         : row.title === "Indexing policy"
                           ? scanTarget.includes.join(", ")
                           : `${pendingApprovalCount} pending`;
-                  const action =
-                    row.title === "Indexing policy"
-                      ? () => startIndexingJob(activeRepository)
-                      : row.title === "Approval defaults"
-                        ? () => setActiveSection("approvals")
-                        : undefined;
+                  const isIndexingPolicy = row.title === "Indexing policy";
+                  const action = isIndexingPolicy
+                    ? () => {
+                        void runMaintenanceReindex();
+                      }
+                    : row.title === "Approval defaults"
+                      ? () => setActiveSection("approvals")
+                      : undefined;
 
                   return (
                     <div className="settings-row" key={row.title}>
@@ -2579,7 +2637,7 @@ export function App() {
                       </div>
                       <span className="settings-row__value">{value}</span>
                       <SecondaryButton
-                        disabled={!action}
+                        disabled={!action || (isIndexingPolicy && !hasActiveRepository)}
                         onClick={action}
                       >
                         {row.action}
@@ -2599,41 +2657,114 @@ export function App() {
               </div>
 
               <div className="maintenance-action-list">
-                {maintenanceActions.map((action) => {
-                  const isReindex = action.title === "Reindex repositories";
-                  const isDanger = action.title === "Reset workspace";
-
-                  return (
-                    <div
-                      className={`maintenance-action${
-                        isDanger ? " maintenance-action--danger" : ""
-                      }`}
-                      key={action.title}
-                    >
-                      <IconBadge
-                        icon={action.icon}
-                        tone={isDanger ? "danger" : "accent"}
-                        size="md"
-                      />
-                      <div>
-                        <h3>{action.title}</h3>
-                        <p>{action.description}</p>
-                      </div>
-                      <SecondaryButton
-                        className={isDanger ? "danger-action" : ""}
-                        disabled={!isReindex}
-                        icon={isReindex ? "index" : undefined}
-                        onClick={
-                          isReindex
-                            ? () => startIndexingJob(activeRepository)
-                            : undefined
+                <div className="maintenance-action">
+                  <IconBadge icon="index" tone="accent" size="md" />
+                  <div className="maintenance-action__body">
+                    <div className="maintenance-action__title-row">
+                      <h3>Reindex selected repository</h3>
+                      <StatusPill
+                        tone={
+                          maintenanceReindexState === "success"
+                            ? "success"
+                            : maintenanceReindexState === "error"
+                              ? "danger"
+                              : maintenanceReindexState === "running"
+                                ? "warning"
+                                : "neutral"
                         }
+                        size="sm"
                       >
-                        {isReindex ? "Run" : "Unavailable"}
-                      </SecondaryButton>
+                        {maintenanceReindexState === "running"
+                          ? "running"
+                          : maintenanceReindexState}
+                      </StatusPill>
                     </div>
-                  );
-                })}
+                    <p>
+                      Refresh indexed file facts and repository intelligence for
+                      the selected repository without writing to project files.
+                    </p>
+                    <p className="maintenance-action__note">
+                      {maintenanceReindexMessage}
+                      {maintenanceReindexLastRunAt
+                        ? ` Last run ${maintenanceReindexLastRunAt}.`
+                        : ""}
+                    </p>
+                  </div>
+                  <PrimaryButton
+                    disabled={
+                      !hasActiveRepository ||
+                      maintenanceReindexState === "running"
+                    }
+                    icon="index"
+                    onClick={() => {
+                      void runMaintenanceReindex();
+                    }}
+                  >
+                    {maintenanceReindexState === "running"
+                      ? "Reindexing..."
+                      : "Reindex repository"}
+                  </PrimaryButton>
+                </div>
+
+                <div className="maintenance-action">
+                  <IconBadge icon="database" tone="neutral" size="md" />
+                  <div className="maintenance-action__body">
+                    <div className="maintenance-action__title-row">
+                      <h3>Clear workspace caches</h3>
+                      <StatusPill tone="neutral" size="sm">
+                        unavailable
+                      </StatusPill>
+                    </div>
+                    <p>
+                      Cache clearing is unavailable until cache boundaries are
+                      formalized.
+                    </p>
+                    <p className="maintenance-action__note">
+                      No local cache delete command exists yet, so this action
+                      stays disabled instead of guessing what data is safe to
+                      remove.
+                    </p>
+                  </div>
+                  <SecondaryButton disabled icon="database">
+                    Clear workspace caches
+                  </SecondaryButton>
+                </div>
+
+                <div className="maintenance-action maintenance-action--danger">
+                  <IconBadge icon="settings" tone="danger" size="md" />
+                  <div className="maintenance-action__body">
+                    <div className="maintenance-action__title-row">
+                      <h3>Reset workspace</h3>
+                      <StatusPill tone="danger" size="sm">
+                        guarded
+                      </StatusPill>
+                    </div>
+                    <p>
+                      Reset workspace is destructive app-local maintenance only;
+                      it must never touch repository files or mutate Git state.
+                    </p>
+                    <label className="maintenance-confirmation">
+                      <span>Type RESET WORKSPACE to confirm</span>
+                      <input
+                        aria-label="Type RESET WORKSPACE to confirm reset"
+                        autoComplete="off"
+                        onChange={(event) =>
+                          setResetConfirmationText(event.target.value)
+                        }
+                        placeholder="RESET WORKSPACE"
+                        value={resetConfirmationText}
+                      />
+                    </label>
+                    <p className="maintenance-action__note">
+                      Reset is unavailable until app-local delete boundaries are
+                      formalized. The confirmation phrase is shown now so the
+                      future destructive path is explicitly gated.
+                    </p>
+                  </div>
+                  <SecondaryButton className="danger-action" disabled>
+                    Reset workspace
+                  </SecondaryButton>
+                </div>
               </div>
             </article>
           </section>

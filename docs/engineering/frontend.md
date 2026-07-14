@@ -84,8 +84,12 @@ The desktop MVP uses Tauri, React, TypeScript, and Vite. Styling is plain CSS wi
 - Approvals may present matching local repository diffs for affected files, but
   generated patch diffs remain planned until approval-specific diff attachment
   exists. Do not label local Git diffs as agent-generated diffs.
-- Settings must not add destructive behavior unless it is implemented with an
-  explicit confirmation gate.
+- Settings maintenance actions must distinguish implemented safe operations
+  from unavailable destructive operations. Reindex can call the existing safe
+  indexing boundary for the selected repository. Cache clearing and reset remain
+  disabled until explicit app-local delete boundaries exist; reset UI still
+  shows the required `RESET WORKSPACE` confirmation phrase so the future path is
+  visibly gated.
 
 ## File Preview Rules
 

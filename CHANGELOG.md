@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Rebuilt the Agent Runs and Approval Review desktop grids at the 1512px app
+  viewport, replacing cramped three-column auto-placement with deliberate
+  master/detail, full-width plan, balanced support, artifact, and diff regions.
+- Repaired the five non-Overview desktop pages with page-specific compact
+  headers, compact context metrics, width-safe Agent Runs and Approval Review
+  workspaces, overflow-safe card content, and height-aware sidebar spacing.
+- Added smoke assertions for the distinct Repository Intelligence, Agent Runs,
+  Approval Review, Workspace Changes, and Workspace Settings page headings.
+- Added confirmation-gated Settings maintenance actions: safe selected-repo
+  reindexing with loading/success/error states, disabled cache clearing until
+  cache boundaries are formalized, and disabled reset workspace with visible
+  `RESET WORKSPACE` confirmation copy.
+- Added smoke coverage for Settings maintenance actions, including no-repo
+  reindex disabled state, reindex success/error feedback, disabled cache
+  clearing, and reset remaining disabled after confirmation text.
 - Split desktop `App.tsx` into focused component, feature, and helper modules
   for shell, seed data, UI-state helpers, file preview, Git diff preview,
   generated patch artifacts, and demo workflow constants without changing

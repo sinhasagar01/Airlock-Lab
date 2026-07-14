@@ -8,10 +8,11 @@ The desktop app now has an initial Vitest/jsdom smoke suite covering six-tab
 rendering, sidebar navigation, approval actions, pending approval count updates,
 visible safe file preview states, outside-repository blocking, and selected-file
 preview updates. It also covers the seeded demo workflow path from Repository
-Intelligence to Agent Runs, Approval Review, and Changes. The desktop test
-script also runs Rust native boundary tests for path safety, safe preview
-rejection, Git status parsing, Git diff parsing, non-Git handling, and unsafe
-Git diff path rejection.
+Intelligence to Agent Runs, Approval Review, and Changes, plus Settings
+maintenance states for safe reindexing and disabled destructive controls. The
+desktop test script also runs Rust native boundary tests for path safety, safe
+preview rejection, Git status parsing, Git diff parsing, non-Git handling, and
+unsafe Git diff path rejection.
 
 `App.tsx` remains the top-level state orchestrator, but stable seed data,
 desktop shell components, UI-state helpers, generated patch artifact panels,
@@ -41,6 +42,11 @@ source of truth.
   premium dashboard card system while preserving repository picker, indexing,
   Git metadata, agent run state, approval persistence, approve/reject actions,
   indexed-file browsing, and safe file previews.
+- Non-Overview tabs use compact, page-specific headers and context metrics so
+  their primary workflows remain in the first viewport. Agent Runs and Approval
+  Review reflow around the usable width beside the fixed sidebar, and the
+  sidebar compacts vertically in shorter desktop windows without dropping its
+  upgrade card or user footer.
 - Repositories now includes a Repository Intelligence view that derives
   repository overview, Git/index state, top file extensions, important folders,
   key files, and path-based framework hints from safe repository metadata and
@@ -68,9 +74,19 @@ source of truth.
 - The indexed-file browser and preview panel now use the dashboard design system
   with premium file rows, selected-file metadata, designed state panels, and a
   polished code preview frame.
-- Settings now presents workspace settings rows and maintenance actions while
-  keeping unavailable destructive behavior disabled.
+- Settings now presents workspace settings rows and confirmation-gated
+  maintenance actions. Reindexing the selected repository is enabled through
+  the existing safe indexing boundary with loading, success, and error states.
+  Cache clearing is disabled until cache boundaries are formalized. Reset
+  workspace shows the `RESET WORKSPACE` confirmation guard but remains disabled
+  until app-local delete boundaries exist.
 
 ## Active Safety Boundary
 
 Safe file preview remains local-first and path-bounded to the selected repository. Repository Intelligence prefers persisted/indexed facts over new filesystem reads. Git status, local diff preview, and approval-attached matching local diffs are read-only, use fixed native Git arguments, validate repository-relative paths, and do not expose arbitrary Git execution. File preview and Git diff paths reject traversal, absolute paths, empty paths, and null-byte paths before native reads or Git diff commands. Persisted proposed changes and generated patch artifact records are durable review metadata only. Agent run and approval detail do not write files, execute patches, stage, reset, checkout, commit, or generate patch diffs. The demo workflow is seeded review state plus real read-only repository state; it does not claim real agent execution happened. Generated artifact previews render stored `rawDiff` only and failed/unavailable/not-generated states do not fake diff content. Visual changes do not weaken size limits, binary handling, or outside-repository blocking.
+
+Settings maintenance keeps the same boundary: reindex refreshes derived indexed
+facts for the selected repository, while cache clearing and reset do not execute
+until scoped app-local delete commands and tests exist. Reset confirmation UI is
+present, but the disabled action cannot delete workspace state or repository
+data.

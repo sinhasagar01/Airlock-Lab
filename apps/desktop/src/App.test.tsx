@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ApprovalRequest, PersistedProposedChange } from "@ai-dev/ai";
 import type { GitFileDiff, GitStatusSummary } from "@ai-dev/core";
@@ -11,6 +11,7 @@ import type {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { previewRepositoryFile } from "./storage/filePreview";
+import { scanRepositoryFileTree } from "./storage/fileTreeScanner";
 import { loadGitFileDiff, loadGitStatusSummary } from "./storage/gitChanges";
 import { updateApprovalRequestStatus } from "./storage/approvalRequestStore";
 import { saveProposedChanges } from "./storage/proposedChangeStore";
@@ -467,6 +468,12 @@ beforeEach(() => {
       kind: file.stage === "staged" ? "staged" : mockState.gitDiff.kind,
     };
   });
+  vi.mocked(scanRepositoryFileTree).mockImplementation(async () => ({
+    repositoryPath: mockState.repositories[0]?.path ?? "/workspace",
+    scannedFiles: mockState.files.length,
+    skippedEntries: 0,
+    files: mockState.files,
+  }));
   mockState.files = [...defaultFiles];
   mockState.gitDiff = defaultGitDiff;
   mockState.gitStatus = defaultGitStatus;
@@ -491,15 +498,27 @@ describe("App smoke tests", () => {
 
     await user.click(screen.getByRole("button", { name: "Repositories" }));
     expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "Repository Intelligence",
+      }),
+    ).toBeInTheDocument();
+    expect(
       await screen.findByText(
         "Workspace context derived from saved repository metadata, Git state, and indexed file facts.",
       ),
     ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Agent Runs" }),
+    ).toBeInTheDocument();
     expect(await screen.findByText("Provider Context")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Approvals" }));
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Approval Review" }),
+    ).toBeInTheDocument();
     expect(
       await screen.findByRole("heading", { name: "2 pending approvals" }),
     ).toBeInTheDocument();
@@ -507,11 +526,23 @@ describe("App smoke tests", () => {
     await user.click(screen.getByRole("button", { name: "Changes" }));
     expect(
       await screen.findByRole("heading", {
+        level: 1,
+        name: "Workspace Changes",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", {
         name: "3 local changes waiting for review",
       }),
     ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Settings" }));
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "Workspace Settings",
+      }),
+    ).toBeInTheDocument();
     expect(
       await screen.findByRole("heading", {
         name: "Local-first workspace controls",
@@ -538,6 +569,93 @@ describe("App smoke tests", () => {
     expect(screen.getByText("TypeScript")).toBeInTheDocument();
     expect(screen.getByText("Tauri")).toBeInTheDocument();
     expect(screen.getByText("Package scripts unavailable")).toBeInTheDocument();
+  });
+
+  it("renders confirmation-gated Settings maintenance actions", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Keep local intelligence current",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Reindex repository" }),
+    ).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Clear workspace caches" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByText(
+        "Cache clearing is unavailable until cache boundaries are formalized.",
+      ),
+    ).toBeInTheDocument();
+
+    const resetButton = screen.getByRole("button", {
+      name: "Reset workspace",
+    });
+    expect(resetButton).toBeDisabled();
+    await user.type(
+      screen.getByLabelText("Type RESET WORKSPACE to confirm reset"),
+      "RESET WORKSPACE",
+    );
+    expect(resetButton).toBeDisabled();
+    expect(
+      screen.getByText(
+        /Reset is unavailable until app-local delete boundaries are formalized/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("disables reindex maintenance when no repository is selected", async () => {
+    const { user } = renderApp({ files: [], repositories: [] });
+
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Reindex repository" }),
+      ).toBeDisabled();
+    });
+  });
+
+  it("runs the Settings reindex action through the indexing boundary", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Reindex repository" }),
+    );
+
+    expect(
+      await screen.findByText(
+        /Repository intelligence refreshed from indexed file facts/,
+      ),
+    ).toBeInTheDocument();
+    expect(scanRepositoryFileTree).toHaveBeenCalledWith(
+      "repo-workspace",
+      "/workspace",
+    );
+  });
+
+  it("shows a safe Settings reindex error without mutating project files", async () => {
+    vi.mocked(scanRepositoryFileTree).mockRejectedValueOnce(
+      new Error("scan unavailable"),
+    );
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Reindex repository" }),
+    );
+
+    expect(
+      await screen.findByText(
+        "Reindex failed. No repository files were changed.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("connects the seeded demo workflow across repository intelligence, agent run, approval, and changes", async () => {

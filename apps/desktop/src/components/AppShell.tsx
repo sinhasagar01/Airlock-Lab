@@ -12,13 +12,20 @@ import { navigationIcons } from "../lib/appData";
 type AppShellProps = {
   sidebar: ReactNode;
   children: ReactNode;
+  workspaceClassName?: string;
 };
 
-export function AppShell({ sidebar, children }: AppShellProps) {
+export function AppShell({
+  sidebar,
+  children,
+  workspaceClassName = "",
+}: AppShellProps) {
   return (
     <main className="app-shell">
       {sidebar}
-      <section className="workspace">{children}</section>
+      <section className={`workspace ${workspaceClassName}`.trim()}>
+        {children}
+      </section>
     </main>
   );
 }
@@ -116,6 +123,7 @@ function UpgradeCard() {
 }
 
 type AppHeaderProps = {
+  compact?: boolean;
   description: string;
   eyebrow: string;
   pendingApprovalCount: number;
@@ -125,6 +133,7 @@ type AppHeaderProps = {
 };
 
 export function AppHeader({
+  compact = false,
   description,
   eyebrow,
   pendingApprovalCount,
@@ -133,7 +142,7 @@ export function AppHeader({
   onChooseRepository,
 }: AppHeaderProps) {
   return (
-    <header className="app-header">
+    <header className={`app-header${compact ? " app-header--compact" : ""}`}>
       <div className="app-header__copy">
         <p className="eyebrow">{eyebrow}</p>
         <h1>{title}</h1>

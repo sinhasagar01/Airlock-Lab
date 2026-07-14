@@ -166,6 +166,41 @@ export const sectionEyebrows: Record<NavigationSection, string> = {
   settings: "Workspace settings",
 };
 
+export const sectionHeaders: Record<
+  NavigationSection,
+  { title: string; description: string }
+> = {
+  overview: {
+    title: workspace.summary.name,
+    description: workspace.summary.description,
+  },
+  repositories: {
+    title: "Repository Intelligence",
+    description:
+      "Understand the selected repository through indexed facts, project structure, and safe local context.",
+  },
+  agents: {
+    title: "Agent Runs",
+    description:
+      "Inspect requested work, repository context, proposed plans, and the approval handoff.",
+  },
+  approvals: {
+    title: "Approval Review",
+    description:
+      "Review proposed work, risks, artifacts, and matching local changes before making a decision.",
+  },
+  changes: {
+    title: "Workspace Changes",
+    description:
+      "Inspect read-only Git status and file diffs without mutating repository state.",
+  },
+  settings: {
+    title: "Workspace Settings",
+    description:
+      "Manage local workspace controls and confirmation-gated maintenance boundaries.",
+  },
+};
+
 export const statusTone: Record<
   DomainStatus,
   "neutral" | "success" | "warning" | "danger"
