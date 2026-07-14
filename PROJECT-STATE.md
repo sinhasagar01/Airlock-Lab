@@ -27,8 +27,12 @@ The native desktop app also supports optional OpenAI plan generation when
 `OPENAI_API_KEY` is configured in the Tauri process environment. OpenAI receives
 only bounded task, repository, index, folder/file-name, extension, and Git
 summary facts; it receives no arbitrary file contents. Strict schema and app
-validation run before any run, proposal, or approval is persisted. Patch
-generation, file writes, tools, streaming, and Git mutation remain unavailable.
+validation run before any run, proposal, or approval is persisted. OpenAI may
+now return review-only generated patch artifact data alongside the plan.
+Artifact paths must match proposed files, text previews must be single-file
+unified diffs, counts are derived locally, and oversized raw content is not
+retained. Patch application, file writes, tools, streaming, and Git mutation
+remain unavailable.
 
 Settings now reports whether OpenAI is configured through the native process
 and can run a read-only connection test for the configured model. The test sends
@@ -106,7 +110,7 @@ source of truth.
 
 ## Active Safety Boundary
 
-Safe file preview remains local-first and path-bounded to the selected repository. Repository Intelligence prefers persisted/indexed facts over new filesystem reads. Git status, local diff preview, and approval-attached matching local diffs are read-only, use fixed native Git arguments, validate repository-relative paths, and do not expose arbitrary Git execution. File preview and Git diff paths reject traversal, absolute paths, empty paths, and null-byte paths before native reads or Git diff commands. Persisted proposed changes and generated patch artifact records are durable review metadata only. Provider-backed runs persist review records only after validated plan output and never write files, generate patches, use tools, or mutate Git. OpenAI credentials remain in the native process and sensitive paths are excluded from its bounded planning context. Agent run and approval detail do not write files, execute patches, stage, reset, checkout, commit, or generate patch diffs. The demo workflow is seeded review state plus real read-only repository state; it does not claim real agent execution happened. Generated artifact previews render stored `rawDiff` only and failed/unavailable/not-generated states do not fake diff content. Visual changes do not weaken size limits, binary handling, or outside-repository blocking.
+Safe file preview remains local-first and path-bounded to the selected repository. Repository Intelligence prefers persisted/indexed facts over new filesystem reads. Git status, local diff preview, and approval-attached matching local diffs are read-only, use fixed native Git arguments, validate repository-relative paths, and do not expose arbitrary Git execution. File preview and Git diff paths reject traversal, absolute paths, empty paths, and null-byte paths before native reads or Git diff commands. Persisted proposed changes and generated patch artifact records are durable review metadata only. Provider-backed runs persist review records only after validated plan and artifact output and never write or apply files, use tools, or mutate Git. OpenAI credentials remain in the native process and sensitive paths are excluded from its bounded planning context. Agent run and approval detail do not write files, execute patches, stage, reset, checkout, or commit. The demo workflow is seeded review state plus real read-only repository state; it does not claim real agent execution happened. Generated artifact previews render stored `rawDiff` only and failed/unavailable/not-generated states do not fake diff content. Visual changes do not weaken size limits, binary handling, or outside-repository blocking.
 
 Settings maintenance keeps the same boundary: reindex refreshes derived indexed
 facts for the selected repository, while cache clearing and reset do not execute

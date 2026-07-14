@@ -81,6 +81,7 @@ export type CreateAgentPlanResult = {
   affectedFiles: ProposedChangeFile[];
   risks: ProposedRisk[];
   validation: ProposedValidationCheck[];
+  patchArtifacts: ProviderPatchArtifact[];
   approvalRequired: boolean;
 };
 
@@ -212,6 +213,15 @@ export type ProposedPatchArtifact = {
   rawDiff?: string;
   createdAt?: string;
 };
+
+export type ProviderPatchArtifact = {
+  filePath: string;
+  status: Exclude<ProposedPatchArtifactStatus, "not_generated">;
+  isBinary: boolean;
+  rawDiff?: string;
+};
+
+export const MAX_GENERATED_PATCH_ARTIFACT_BYTES = 64 * 1024;
 
 export type PersistedProposedChange = {
   id: string;
@@ -394,6 +404,7 @@ export function createMockAgentProviderAdapter(): AgentProviderAdapter {
           { label: "Confirm repository context", status: "planned" },
           { label: "Approve or reject request", status: "planned" },
         ],
+        patchArtifacts: [],
       };
     },
   };
@@ -689,6 +700,7 @@ function validateOpenAiPlanResult(
       status: "planned",
     };
   });
+  const affectedFilePaths = new Set<string>();
   const affectedFiles = requireBoundedArray(
     value.affectedFiles,
     "affected files",
@@ -715,6 +727,7 @@ function validateOpenAiPlanResult(
 
     if (
       !isSafeProviderFilePath(path) ||
+      affectedFilePaths.has(path) ||
       typeof file.operation !== "string" ||
       !operations.includes(file.operation as ProposedChangeFileOperation) ||
       typeof file.riskLevel !== "string" ||
@@ -726,6 +739,8 @@ function validateOpenAiPlanResult(
         "OpenAI returned an unsafe or invalid affected file. No review records were created.",
       );
     }
+
+    affectedFilePaths.add(path);
 
     return {
       id: `${input.runId}-provider-file-${index + 1}`,
@@ -789,6 +804,96 @@ function validateOpenAiPlanResult(
       status: "planned",
     };
   });
+  const artifactPaths = new Set<string>();
+  const patchArtifacts = requireBoundedArray(
+    value.patchArtifacts,
+    "patch artifacts",
+    0,
+    affectedFiles.length,
+  ).map((artifact): ProviderPatchArtifact => {
+    if (!isRecord(artifact)) {
+      throw new AgentProviderError(
+        "invalid_output",
+        "openai",
+        "OpenAI returned invalid patch artifacts. No review records were created.",
+      );
+    }
+
+    const filePath = requireBoundedString(
+      artifact.filePath,
+      "patch artifact path",
+      320,
+    );
+    const statuses: ProviderPatchArtifact["status"][] = [
+      "generated",
+      "failed",
+      "unavailable",
+    ];
+
+    if (
+      !isSafeProviderFilePath(filePath) ||
+      !affectedFilePaths.has(filePath) ||
+      artifactPaths.has(filePath) ||
+      typeof artifact.status !== "string" ||
+      !statuses.includes(artifact.status as ProviderPatchArtifact["status"]) ||
+      typeof artifact.isBinary !== "boolean" ||
+      typeof artifact.rawDiff !== "string"
+    ) {
+      throw new AgentProviderError(
+        "invalid_output",
+        "openai",
+        "OpenAI returned an unsafe or mismatched patch artifact. No review records were created.",
+      );
+    }
+
+    const status = artifact.status as ProviderPatchArtifact["status"];
+    const rawDiff = artifact.rawDiff.trim();
+
+    if (status === "generated" && !artifact.isBinary) {
+      const expectedHeader = `diff --git a/${filePath} b/${filePath}`;
+      const diffHeaders = rawDiff
+        .split("\n")
+        .filter((line) => line.startsWith("diff --git "));
+
+      if (
+        !rawDiff ||
+        rawDiff.includes("\0") ||
+        diffHeaders.length !== 1 ||
+        diffHeaders[0] !== expectedHeader ||
+        !rawDiff
+          .split("\n")
+          .some(
+            (line) => line === `--- a/${filePath}` || line === "--- /dev/null",
+          ) ||
+        !rawDiff
+          .split("\n")
+          .some(
+            (line) => line === `+++ b/${filePath}` || line === "+++ /dev/null",
+          )
+      ) {
+        throw new AgentProviderError(
+          "invalid_output",
+          "openai",
+          "OpenAI returned an invalid single-file patch artifact. No review records were created.",
+        );
+      }
+    } else if (rawDiff) {
+      throw new AgentProviderError(
+        "invalid_output",
+        "openai",
+        "OpenAI returned patch content for a non-previewable artifact. No review records were created.",
+      );
+    }
+
+    artifactPaths.add(filePath);
+
+    return {
+      filePath,
+      status,
+      isBinary: artifact.isBinary,
+      rawDiff: rawDiff || undefined,
+    };
+  });
 
   return {
     providerId: "openai",
@@ -798,6 +903,7 @@ function validateOpenAiPlanResult(
     affectedFiles,
     risks,
     validation,
+    patchArtifacts,
     approvalRequired: true,
   };
 }
@@ -810,7 +916,7 @@ export function createOpenAiAgentProviderAdapter(
     name: "OpenAI",
     capabilities: {
       supportsPlanGeneration: true,
-      supportsPatchGeneration: false,
+      supportsPatchGeneration: true,
       supportsStreaming: false,
       supportsToolUse: false,
     },
@@ -896,6 +1002,41 @@ export async function executeAgentRun(
       patchArtifactStatus: file.patchArtifactStatus,
     }),
   );
+  const filesByPath = new Map(files.map((file) => [file.path, file]));
+  const patchArtifacts: ProposedPatchArtifact[] =
+    providerResult.patchArtifacts.map((artifact, index) => {
+      const rawDiff = artifact.rawDiff;
+      const isTooLarge = rawDiff
+        ? new TextEncoder().encode(rawDiff).byteLength >
+          MAX_GENERATED_PATCH_ARTIFACT_BYTES
+        : false;
+      const previewDiff = isTooLarge ? undefined : rawDiff;
+      const diffLines = previewDiff?.split("\n") ?? [];
+      const additions = diffLines.filter(
+        (line) => line.startsWith("+") && !line.startsWith("+++"),
+      ).length;
+      const deletions = diffLines.filter(
+        (line) => line.startsWith("-") && !line.startsWith("---"),
+      ).length;
+      const linkedFile = filesByPath.get(artifact.filePath);
+
+      if (linkedFile) {
+        linkedFile.patchArtifactStatus = artifact.status;
+      }
+
+      return {
+        id: `${proposedChangeId}-artifact-${index + 1}`,
+        proposedChangeId,
+        filePath: artifact.filePath,
+        status: artifact.status,
+        isBinary: artifact.isBinary,
+        isTooLarge,
+        additions: previewDiff ? additions : undefined,
+        deletions: previewDiff ? deletions : undefined,
+        rawDiff: previewDiff,
+        createdAt: request.startedAt,
+      };
+    });
   const proposedChange = ensureProposedPatchArtifacts({
     id: proposedChangeId,
     runId: request.id,
@@ -905,7 +1046,7 @@ export async function executeAgentRun(
     summary: plan.summary,
     status: "ready_for_review",
     files,
-    patchArtifacts: [],
+    patchArtifacts,
     createdAt: request.startedAt,
     updatedAt: request.startedAt,
   });

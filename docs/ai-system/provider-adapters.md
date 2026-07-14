@@ -10,9 +10,10 @@ The Agent Run composer supports two planning providers behind the shared
 - **OpenAI** is available only in the native Tauri app when
   `OPENAI_API_KEY` is present in the native process environment.
 
-Both providers generate structured plans only. Neither provider generates or
-applies patches, writes files, uses tools, or mutates Git state. Generated patch
-artifact records remain `not_generated`.
+Both providers generate structured plans. OpenAI can also return review-only
+patch artifact records alongside its plan; Mock Provider leaves every artifact
+as `not_generated`. Neither provider applies patches, writes files, uses tools,
+or mutates Git state.
 
 ## Credential Boundary
 
@@ -79,6 +80,12 @@ internal run/repository IDs, environment files, private-key paths, credential
 files, or secret files. Both TypeScript and Rust enforce size/count limits and
 safe relative paths.
 
+Because full file content is intentionally absent, OpenAI must return
+`unavailable` when a truthful patch would require guessing existing content.
+It may return a generated single-file unified diff only when bounded task and
+repository metadata are sufficient, such as a proposed new file. Generated
+content is a proposal, not current repository state or permission to apply.
+
 ## Output Validation
 
 OpenAI output must include:
@@ -88,13 +95,17 @@ OpenAI output must include:
 - Up to twenty safe repository-relative affected-file paths
 - One to ten risks
 - One to twelve validation checks
+- Zero to one patch artifact per proposed file
 - `approvalRequired: true`
 
-Provider-supplied execution statuses and patch states are not trusted. The app
-assigns plan/check statuses locally and creates every patch artifact as
-`not_generated`. Malformed, oversized, unsafe, mismatched, or incomplete output
-is rejected before a run, proposed change, or approval request is added to app
-state or persistence.
+Provider-supplied execution statuses are not trusted. The app assigns
+plan/check statuses locally. Artifact paths must be safe, unique, and exactly
+match proposed files. Text artifacts must contain one matching single-file
+unified diff; failed, unavailable, and binary records cannot carry preview
+text. The app derives addition/deletion counts and strips raw content above the
+64 KiB inline-review limit while retaining a `generated`/`isTooLarge` record.
+Malformed, unsafe, mismatched, or incomplete output is rejected before a run,
+proposed change, or approval request is persisted.
 
 ## Error Handling
 
@@ -106,9 +117,9 @@ to Mock Provider.
 
 ## Deferred Capabilities
 
-The OpenAI adapter currently reports these capabilities as unsupported:
+The OpenAI adapter reports patch proposal generation as supported. These
+capabilities remain unsupported:
 
-- Patch generation
 - Streaming
 - Tool use
 - File writes

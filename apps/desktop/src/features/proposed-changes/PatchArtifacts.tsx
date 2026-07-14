@@ -28,6 +28,30 @@ function patchArtifactStateTitle(artifact: ProposedPatchArtifact | null) {
   return "Patch not generated";
 }
 
+function patchArtifactSummary(artifact: ProposedPatchArtifact) {
+  if (artifact.status === "generated") {
+    if (artifact.isBinary) {
+      return "Binary proposal · inline preview unavailable";
+    }
+
+    if (artifact.isTooLarge) {
+      return "Generated proposal · inline preview size limit exceeded";
+    }
+
+    return `${artifact.additions ?? 0} additions · ${artifact.deletions ?? 0} deletions`;
+  }
+
+  if (artifact.status === "failed") {
+    return "Provider could not produce reviewable patch content";
+  }
+
+  if (artifact.status === "unavailable") {
+    return "Bounded context was insufficient for safe generation";
+  }
+
+  return "No generated patch content is stored";
+}
+
 export function PatchArtifactList({
   artifacts,
   onSelectArtifact,
@@ -63,13 +87,7 @@ export function PatchArtifactList({
             </StatusPill>
             <div>
               <strong>{artifact.filePath}</strong>
-              <span>
-                {artifact.status === "generated"
-                  ? `${artifact.additions ?? 0} additions · ${
-                      artifact.deletions ?? 0
-                    } deletions`
-                  : "Generated patch artifact placeholder only"}
-              </span>
+              <span>{patchArtifactSummary(artifact)}</span>
             </div>
           </>
         );
@@ -106,7 +124,10 @@ type PatchArtifactDetailProps = {
 
 export function PatchArtifactDetail({ artifact }: PatchArtifactDetailProps) {
   return (
-    <section className="patch-artifact-detail" aria-label="Patch artifact detail">
+    <section
+      className="patch-artifact-detail"
+      aria-label="Patch artifact detail"
+    >
       <div className="patch-artifact-detail__header">
         <div>
           <p className="card-eyebrow">Generated Patch Artifact</p>
@@ -145,7 +166,9 @@ export function PatchArtifactDetail({ artifact }: PatchArtifactDetailProps) {
           <IconBadge icon="changes" tone="neutral" size="md" />
           <div>
             <h4>No artifact selected</h4>
-            <p>Select an artifact record to inspect its generated patch state.</p>
+            <p>
+              Select an artifact record to inspect its generated patch state.
+            </p>
           </div>
         </div>
       ) : artifact.status === "not_generated" ? (
@@ -200,12 +223,9 @@ export function PatchArtifactDetail({ artifact }: PatchArtifactDetailProps) {
       ) : artifact.rawDiff ? (
         <div className="generated-patch-preview">
           <div className="generated-patch-preview__label">
-            Generated patch artifact preview
+            Provider-generated proposal · not applied
           </div>
           <pre className="git-diff-code" tabIndex={0}>
-            <code className="git-diff-line git-diff-line--metadata">
-              Sample/demo generated artifact data
-            </code>
             {artifact.rawDiff.split("\n").map((line, index) => (
               <code
                 className={`git-diff-line ${

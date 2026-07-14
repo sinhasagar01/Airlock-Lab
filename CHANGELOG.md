@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Extended the provider plan contract and strict OpenAI response schema with
+  review-only patch artifact records linked to proposed affected files.
+- Added validation for safe unique artifact paths, matching single-file unified
+  diffs, non-previewable states, binary records, and a 64 KiB inline-preview
+  limit before any run, proposal, or approval is persisted.
+- Persisted generated, failed, unavailable, binary, and too-large artifact
+  states with locally derived additions/deletions while keeping missing Mock
+  Provider artifacts in `not_generated`.
+- Updated Agent Run and Approval Review artifact copy to distinguish provider
+  proposals from local Git diffs and applied repository changes.
+- Added provider contract, persistence, UI workflow, and native schema tests for
+  generated artifacts without adding patch apply, file writes, tools, shell
+  execution, or Git mutation.
 - Added a native OpenAI connection test that performs a fixed read-only model
   lookup with a short timeout and sends no repository or task context.
 - Added sanitized connection diagnostics for configured, connected,

@@ -15,14 +15,14 @@ effects exist.
 - Each proposed change links to an agent run, repository, and optionally an
   approval request.
 - Each proposed change records title, summary, status, proposed files, and
-  future patch artifact slots.
+  patch artifact slots and validated provider-generated proposal artifacts.
 - Proposed files include path, optional old path, operation, reason, risk level,
   and patch artifact status.
 - Every proposed file has a placeholder `ProposedPatchArtifact` record. Existing
   saved rows are normalized on load so older proposed changes gain placeholder
   artifacts without generating patch content.
-- Placeholder artifacts are usually `not_generated` until a future patch
-  generation workflow stores real diff content.
+- Mock and missing artifacts remain `not_generated`. OpenAI-backed runs may
+  persist validated `generated`, `failed`, or `unavailable` artifact records.
 - Agent Runs and Approval Review render generated patch artifacts as selectable
   records with detail states for `not_generated`, `generated`, `failed`, and
   `unavailable`.
@@ -41,15 +41,14 @@ effects exist.
 
 This feature does not:
 
-- Generate patches
 - Write files
 - Apply diffs
 - Stage or commit changes
 - Run real agent execution
 
-Generated patch artifacts are represented as data contracts only. Local Git
-diffs remain separate read-only repository state and must not be labeled as
-agent-generated patch diffs.
+Generated patch artifacts are provider-produced, persisted review contracts
+only. Local Git diffs remain separate read-only repository state and must not
+be labeled as agent-generated patch diffs.
 
 The demo workflow may show sample generated artifact content, but that content
 is seeded review data. It is not produced by real agent execution.
@@ -77,6 +76,11 @@ changes with future generated patch output.
 - `unavailable`: shows that the artifact cannot be reviewed yet.
 - Binary or too-large artifacts use dedicated states and do not inline unsafe or
   oversized content.
+
+Provider artifact paths must match proposed files exactly. Text previews are
+accepted only for one matching single-file unified diff. Addition/deletion
+counts are derived locally, and raw previews above 64 KiB are discarded while
+the too-large review state is retained.
 
 ## Data Model
 

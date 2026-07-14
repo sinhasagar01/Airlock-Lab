@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AgentProviderError,
+  MAX_GENERATED_PATCH_ARTIFACT_BYTES,
   createMockAgentProviderAdapter,
   createOpenAiAgentProviderAdapter,
   executeAgentRun,
@@ -32,6 +33,21 @@ const validOpenAiPlan = {
     },
   ],
   validation: [{ label: "Run provider contract tests" }],
+  patchArtifacts: [
+    {
+      filePath: "src/App.tsx",
+      status: "generated",
+      isBinary: false,
+      rawDiff: [
+        "diff --git a/src/App.tsx b/src/App.tsx",
+        "--- a/src/App.tsx",
+        "+++ b/src/App.tsx",
+        "@@ -1 +1 @@",
+        "-const provider = 'mock';",
+        "+const provider = 'openai';",
+      ].join("\n"),
+    },
+  ],
   approvalRequired: true,
 };
 
@@ -77,6 +93,7 @@ describe("AgentProviderAdapter", () => {
         (file) => file.patchArtifactStatus === "not_generated",
       ),
     ).toBe(true);
+    expect(result.patchArtifacts).toEqual([]);
   });
 });
 
@@ -192,6 +209,12 @@ describe("OpenAI provider adapter", () => {
     expect(result.steps[0].status).toBe("planned");
     expect(result.affectedFiles[0].patchArtifactStatus).toBe("not_generated");
     expect(result.validation[0].status).toBe("planned");
+    expect(result.patchArtifacts).toEqual([
+      expect.objectContaining({
+        filePath: "src/App.tsx",
+        status: "generated",
+      }),
+    ]);
   });
 
   it("rejects malformed or unsafe output before creating records", async () => {
@@ -211,6 +234,28 @@ describe("OpenAI provider adapter", () => {
         ],
       }),
     });
+    const mismatchedArtifactAdapter = createOpenAiAgentProviderAdapter({
+      model: "test-model",
+      requestPlan: async () => ({
+        ...validOpenAiPlan,
+        patchArtifacts: [
+          {
+            ...validOpenAiPlan.patchArtifacts[0],
+            filePath: "src/Other.tsx",
+          },
+        ],
+      }),
+    });
+    const duplicateFileAdapter = createOpenAiAgentProviderAdapter({
+      model: "test-model",
+      requestPlan: async () => ({
+        ...validOpenAiPlan,
+        affectedFiles: [
+          validOpenAiPlan.affectedFiles[0],
+          validOpenAiPlan.affectedFiles[0],
+        ],
+      }),
+    });
     const input = {
       runId: "run-openai",
       repositoryId: "repo-test",
@@ -224,6 +269,12 @@ describe("OpenAI provider adapter", () => {
       code: "invalid_output",
     });
     await expect(unsafeAdapter.createPlan(input)).rejects.toMatchObject({
+      code: "invalid_output",
+    });
+    await expect(
+      mismatchedArtifactAdapter.createPlan(input),
+    ).rejects.toMatchObject({ code: "invalid_output" });
+    await expect(duplicateFileAdapter.createPlan(input)).rejects.toMatchObject({
       code: "invalid_output",
     });
   });
@@ -281,10 +332,119 @@ describe("OpenAI provider adapter", () => {
       result.approvalRequest.id,
     );
     expect(result.approvalRequest.agentRunId).toBe(result.run.id);
-    expect(
-      result.proposedChange.patchArtifacts.every(
-        (artifact) => artifact.status === "not_generated",
-      ),
-    ).toBe(true);
+    expect(result.proposedChange.patchArtifacts).toEqual([
+      expect.objectContaining({
+        filePath: "src/App.tsx",
+        status: "generated",
+        isBinary: false,
+        isTooLarge: false,
+        additions: 1,
+        deletions: 1,
+        rawDiff: validOpenAiPlan.patchArtifacts[0].rawDiff,
+      }),
+    ]);
+    expect(result.proposedChange.files[0].patchArtifactStatus).toBe(
+      "generated",
+    );
+  });
+
+  it("persists binary and unavailable artifact states without fake diff content", async () => {
+    const adapter = createOpenAiAgentProviderAdapter({
+      model: "test-model",
+      requestPlan: async () => ({
+        ...validOpenAiPlan,
+        affectedFiles: [
+          validOpenAiPlan.affectedFiles[0],
+          {
+            path: "assets/logo.png",
+            reason: "Replace the product mark.",
+            operation: "modify",
+            riskLevel: "low",
+          },
+        ],
+        patchArtifacts: [
+          {
+            filePath: "src/App.tsx",
+            status: "unavailable",
+            isBinary: false,
+            rawDiff: "",
+          },
+          {
+            filePath: "assets/logo.png",
+            status: "generated",
+            isBinary: true,
+            rawDiff: "",
+          },
+        ],
+      }),
+    });
+    const result = await executeAgentRun(
+      {
+        id: "run-artifact-states",
+        repositoryId: "repo-test",
+        repositoryName: "workspace",
+        task: "Prepare review artifacts.",
+        context: { branch: "main", indexedFilePaths: [] },
+        startedAt: "Today, 12:00",
+        createdAt: "2026-07-14T06:30:00.000Z",
+      },
+      adapter,
+    );
+
+    expect(result.proposedChange.patchArtifacts).toEqual([
+      expect.objectContaining({
+        filePath: "src/App.tsx",
+        status: "unavailable",
+        rawDiff: undefined,
+      }),
+      expect.objectContaining({
+        filePath: "assets/logo.png",
+        status: "generated",
+        isBinary: true,
+        rawDiff: undefined,
+      }),
+    ]);
+  });
+
+  it("stores oversized generated artifacts without retaining inline diff content", async () => {
+    const oversizedDiff = [
+      "diff --git a/src/App.tsx b/src/App.tsx",
+      "--- a/src/App.tsx",
+      "+++ b/src/App.tsx",
+      "@@ -1 +1 @@",
+      `+${"x".repeat(MAX_GENERATED_PATCH_ARTIFACT_BYTES)}`,
+    ].join("\n");
+    const adapter = createOpenAiAgentProviderAdapter({
+      model: "test-model",
+      requestPlan: async () => ({
+        ...validOpenAiPlan,
+        patchArtifacts: [
+          {
+            ...validOpenAiPlan.patchArtifacts[0],
+            rawDiff: oversizedDiff,
+          },
+        ],
+      }),
+    });
+    const result = await executeAgentRun(
+      {
+        id: "run-oversized-artifact",
+        repositoryId: "repo-test",
+        repositoryName: "workspace",
+        task: "Prepare an oversized review artifact.",
+        context: { branch: "main", indexedFilePaths: [] },
+        startedAt: "Today, 12:00",
+        createdAt: "2026-07-14T06:30:00.000Z",
+      },
+      adapter,
+    );
+
+    expect(result.proposedChange.patchArtifacts[0]).toMatchObject({
+      status: "generated",
+      isTooLarge: true,
+      rawDiff: undefined,
+      additions: undefined,
+      deletions: undefined,
+    });
   });
 });

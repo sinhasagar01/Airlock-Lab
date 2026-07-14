@@ -451,6 +451,7 @@ fn openai_plan_schema() -> Value {
             "affectedFiles",
             "risks",
             "validation",
+            "patchArtifacts",
             "approvalRequired"
         ],
         "properties": {
@@ -511,6 +512,23 @@ fn openai_plan_schema() -> Value {
                     }
                 }
             },
+            "patchArtifacts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["filePath", "status", "isBinary", "rawDiff"],
+                    "properties": {
+                        "filePath": { "type": "string" },
+                        "status": {
+                            "type": "string",
+                            "enum": ["generated", "failed", "unavailable"]
+                        },
+                        "isBinary": { "type": "boolean" },
+                        "rawDiff": { "type": "string" }
+                    }
+                }
+            },
             "approvalRequired": { "type": "boolean" }
         }
     })
@@ -532,7 +550,7 @@ fn build_openai_plan_request(input: &OpenAiPlanInput, model: &str) -> Value {
     json!({
         "model": model,
         "store": false,
-        "instructions": "Create a reviewable implementation plan only. Use only the supplied repository summary. Do not request or infer file contents, secrets, tools, shell commands, patches, or file writes. Every result requires human approval.",
+        "instructions": "Create a reviewable implementation plan and optional proposed patch artifacts using only the supplied repository summary. Patch artifacts are review-only data: never apply them, invoke tools, run commands, or claim they reflect current repository contents. Return one artifact at most for each affected file. Use generated only for a single-file unified diff you can produce without guessing existing content (normally a create operation); otherwise use unavailable or failed with an empty rawDiff. Binary artifacts must use an empty rawDiff. Every result requires human approval.",
         "input": [{
             "role": "user",
             "content": [{
@@ -1555,6 +1573,14 @@ mod tests {
             false
         );
         assert!(request.get("tools").is_none());
+        assert!(request["text"]["format"]["schema"]["required"]
+            .as_array()
+            .expect("required fields")
+            .contains(&json!("patchArtifacts")));
+        assert!(request["instructions"]
+            .as_str()
+            .expect("instructions")
+            .contains("never apply them"));
     }
 
     #[test]

@@ -107,12 +107,18 @@ converted into one durable run record, a structured proposed plan, a persisted
 proposed change, and a linked pending approval request. The Mock Provider is the
 default and remains deterministic. OpenAI generates plans only from bounded
 repository metadata and indexed summaries; it receives no arbitrary file
-contents. Neither path writes files, generates patch content, uses tools, or
-mutates Git, and every patch artifact begins in `not_generated` state.
+contents. OpenAI may return review-only patch artifact records with generated,
+failed, unavailable, binary, or too-large presentation states. Missing records
+remain `not_generated`. Neither path writes or applies files, uses tools, or
+mutates Git.
 
 Provider output is validated before any linked records are created. Invalid or
 unsafe output leaves the run composer in an error state and does not persist a
 partial run, proposed change, or approval request.
+
+Generated artifacts are persisted proposal data only. They are displayed
+separately from read-only local Git diffs, cannot trigger repository writes,
+and do not become more trusted when an approval status changes.
 
 ## Run Lifecycle
 
@@ -245,12 +251,13 @@ The current runtime supports:
 
 - Creating a run from a user task against the selected repository
 - Building a deterministic Mock Provider plan from indexed repository context
-- Building a real OpenAI plan from bounded repository facts when native
-  credentials are configured
+- Building a real OpenAI plan and optional review-only patch artifacts from
+  bounded repository facts when native credentials are configured
 - Persisting the run and plan in SQLite
 - Persisting a linked proposed change and pending approval request
 - Opening the new run immediately in the existing plan-review surface
-- Preserving generated patch artifacts as `not_generated`
+- Validating and persisting provider patch artifacts while preserving missing
+  records as `not_generated`
 
 The production runtime should additionally support:
 

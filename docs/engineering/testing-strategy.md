@@ -144,6 +144,8 @@ Current desktop smoke coverage includes:
   Runs, Approval Review, and Changes.
 - Mock-provider run creation, including the linked durable run, review-only
   proposed change, pending approval, and `not_generated` patch artifacts.
+- OpenAI contract output for generated, unavailable, binary, oversized,
+  unsafe, and mismatched patch artifacts before persistence.
 - Safe file preview panel states for no file selected, loading, text preview,
   binary content, too-large files, outside-repository blocking, preview errors,
   and selected-file changes.

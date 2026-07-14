@@ -32,9 +32,9 @@ not expose filesystem handles, arbitrary read commands, persistence engines,
 approval mutation, or Git mutation.
 
 The normalized result contains provider/model identity, summary, ordered
-steps, proposed affected files, risks, validation checks, and the approval
-requirement. It is planning data, not a generated patch and not permission to
-write files.
+steps, proposed affected files, risks, validation checks, optional review-only
+patch artifacts, and the approval requirement. Artifact data is never
+permission to write files or mutate Git.
 
 The current Mock Provider implements this interface with these capabilities:
 
@@ -42,6 +42,11 @@ The current Mock Provider implements this interface with these capabilities:
 - Patch generation: not supported
 - Streaming: not supported
 - Tool use: not supported
+
+The OpenAI adapter supports plan generation and validated patch proposal
+artifacts. It receives no full file contents, so it must use `unavailable` when
+existing content would have to be guessed. Generated artifacts remain separate
+from local Git diffs and cannot be applied by this contract.
 
 The existing mock Agent Run workflow now consumes the adapter result before it
 creates the same durable run, proposed change, approval request, and

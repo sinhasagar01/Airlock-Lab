@@ -83,10 +83,11 @@ that only the displayed repository summary is sent: repository name, branch,
 indexed count, key files, project folders, extension counts, Git summary, and
 the task. Full file contents and secret/environment files are not sent.
 
-The successful result follows the same persisted run, proposed-change, pending
-approval, and `not_generated` patch-artifact workflow. If OpenAI is unavailable
-or returns malformed output, show the error state and confirm that no partial
-review records were created.
+The successful result follows the same persisted run, proposed-change, and
+pending-approval workflow. OpenAI may attach generated, unavailable, failed,
+binary, or too-large review-only artifact states; missing artifacts remain
+`not_generated`. If OpenAI is unavailable or returns malformed output, show the
+error state and confirm that no partial review records were created.
 
 Before this variant, open **Settings**, locate **Provider adapters**, and select
 **Test connection**. Show the configured model and sanitized result. Explain
@@ -102,10 +103,11 @@ In the selected Agent Run, walk through:
 - Expected affected files
 - Risk summary
 - Validation checks
-- Generated patch artifact placeholders
+- Generated patch artifact review states
 
 Say: "Affected files are proposed scope. They are not proof that a file was
-changed. Patch artifacts are a separate model and begin as `not generated`."
+changed. Patch artifacts are provider proposals, not local Git state, and none
+of them has been applied."
 
 If no affected files appear, explain that the selected repository has no
 indexed file facts in the current session and reindex before repeating the run.

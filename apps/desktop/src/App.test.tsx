@@ -1162,9 +1162,9 @@ describe("App smoke tests", () => {
     expect(screen.getAllByText("proposal-mvp-shell").length).toBeGreaterThan(0);
     expect(screen.getAllByText("ready for review").length).toBeGreaterThan(0);
     expect(screen.getByText("Generated Patch Artifacts")).toBeInTheDocument();
-    expect(screen.getByText("Artifact placeholders")).toBeInTheDocument();
+    expect(screen.getByText("Reviewable patch proposals")).toBeInTheDocument();
     expect(
-      screen.getByText(/No patch content has been generated or applied/),
+      screen.getByText(/nothing here has been written or applied/),
     ).toBeInTheDocument();
     expect(screen.getAllByText("Patch not generated").length).toBeGreaterThan(
       0,
@@ -1185,22 +1185,21 @@ describe("App smoke tests", () => {
     );
     expect(screen.getByText("Generated patch artifact")).toBeInTheDocument();
     expect(
-      screen.getByText("Generated patch artifact preview"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("Sample/demo generated artifact data"),
+      screen.getByText("Provider-generated proposal · not applied"),
     ).toBeInTheDocument();
     expect(
       screen.getByText("+export type PatchArtifact = string;"),
     ).toBeInTheDocument();
-    expect(screen.getByText(/real Git diffs yet/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Mock runs do not generate patch content/),
+    ).toBeInTheDocument();
     expect(screen.getByText(String(defaultFiles.length))).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Review approval" }),
     ).toBeEnabled();
     expect(
-      screen.getByRole("button", { name: "Diffs not generated yet" }),
-    ).toBeDisabled();
+      screen.queryByRole("button", { name: "Diffs not generated yet" }),
+    ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Review approval" }));
 
@@ -1302,6 +1301,21 @@ describe("App smoke tests", () => {
         },
       ],
       validation: [{ label: "Run provider contract tests" }],
+      patchArtifacts: [
+        {
+          filePath: "src/App.tsx",
+          status: "generated",
+          isBinary: false,
+          rawDiff: [
+            "diff --git a/src/App.tsx b/src/App.tsx",
+            "--- a/src/App.tsx",
+            "+++ b/src/App.tsx",
+            "@@ -1 +1 @@",
+            "-const provider = 'mock';",
+            "+const provider = 'openai';",
+          ].join("\n"),
+        },
+      ],
       approvalRequired: true,
     });
     const { user } = renderApp();
@@ -1326,7 +1340,7 @@ describe("App smoke tests", () => {
 
     expect(
       await screen.findByText(
-        "OpenAI run created and saved. Review the structured plan before approving it.",
+        "OpenAI run created and saved with 1 generated patch artifact. Review every proposal before approval.",
       ),
     ).toBeInTheDocument();
     expect(requestOpenAiPlan).toHaveBeenCalledWith(
@@ -1351,12 +1365,26 @@ describe("App smoke tests", () => {
     expect(saveProposedChange).toHaveBeenCalledWith(
       expect.objectContaining({
         files: [expect.objectContaining({ path: "src/App.tsx" })],
-        patchArtifacts: [expect.objectContaining({ status: "not_generated" })],
+        patchArtifacts: [
+          expect.objectContaining({
+            status: "generated",
+            additions: 1,
+            deletions: 1,
+          }),
+        ],
       }),
     );
     expect(saveApprovalRequest).toHaveBeenCalledWith(
       expect.objectContaining({ status: "pending" }),
     );
+    expect(
+      await screen.findByText("Provider-generated proposal · not applied"),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
+    expect(
+      await screen.findByText("Provider-generated proposal · not applied"),
+    ).toBeInTheDocument();
   });
 
   it("rejects malformed OpenAI output without creating review records", async () => {
@@ -1510,11 +1538,9 @@ describe("App smoke tests", () => {
     expect(screen.getByText("Plan attached to approval")).toBeInTheDocument();
     expect(screen.getByText("Proposal Status")).toBeInTheDocument();
     expect(screen.getByText("Patch Artifacts")).toBeInTheDocument();
-    expect(screen.getByText("Patch artifact placeholders")).toBeInTheDocument();
+    expect(screen.getByText("Patch artifact review")).toBeInTheDocument();
     expect(
-      screen.getByText(
-        /They are not local Git diffs and no patch has been written/,
-      ),
+      screen.getByText(/They are not local Git diffs, and no patch has been/),
     ).toBeInTheDocument();
     await user.click(
       screen.getAllByRole("button", {

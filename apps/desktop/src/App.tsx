@@ -497,7 +497,9 @@ export function App() {
 
     setAgentExecutionState("running");
     setAgentExecutionMessage(
-      `${selectedProviderName} is creating a structured review plan. No files will be written.`,
+      selectedAgentProviderId === "openai"
+        ? "OpenAI is creating a structured plan and review-only patch artifact states. No files will be written."
+        : "Mock Provider is creating a structured review plan. No files will be written.",
     );
 
     const createdAt = new Date();
@@ -585,10 +587,16 @@ export function App() {
       }
 
       setAgentExecutionState("success");
+      const generatedArtifactCount =
+        result.proposedChange.patchArtifacts.filter(
+          (artifact) => artifact.status === "generated",
+        ).length;
       setAgentExecutionMessage(
         persistenceUnavailable
           ? `${runLabel} run created for this session. Native persistence is unavailable in the web preview.`
-          : `${runLabel} run created and saved. Review the structured plan before approving it.`,
+          : selectedAgentProviderId === "openai"
+            ? `OpenAI run created and saved with ${generatedArtifactCount} generated patch artifact${generatedArtifactCount === 1 ? "" : "s"}. Review every proposal before approval.`
+            : "Mock run created and saved. Review the structured plan before approving it.",
       );
     } catch (error) {
       setAgentExecutionState("error");
@@ -2015,9 +2023,9 @@ export function App() {
                 </StatusPill>
               </div>
               <p>
-                Structured-output mock provider is connected for local planning,
-                approval, and safe implementation dry-runs. This run has not
-                produced real Git diffs yet.
+                {activeAgentRun.providerId === "openai"
+                  ? "OpenAI produced validated review records from bounded repository context. Generated artifacts are proposals only and remain separate from local Git diffs."
+                  : "The deterministic mock provider is connected for local planning and approval rehearsal. Mock runs do not generate patch content."}
               </p>
             </div>
           </article>
@@ -2149,13 +2157,13 @@ export function App() {
                     <IconBadge icon="changes" tone="agent" size="md" />
                     <div>
                       <p className="card-eyebrow">Generated Patch Artifacts</p>
-                      <h3>Artifact placeholders</h3>
+                      <h3>Reviewable patch proposals</h3>
                     </div>
                   </div>
                   <p className="patch-artifact-copy">
-                    These records reserve generated patch slots for each
-                    proposed file. No patch content has been generated or
-                    applied.
+                    Provider-generated artifacts are persisted review data only.
+                    Missing records remain placeholders; nothing here has been
+                    written or applied to the repository.
                   </p>
                   <PatchArtifactList
                     artifacts={
@@ -2305,9 +2313,6 @@ export function App() {
                 >
                   Review approval
                 </PrimaryButton>
-                <SecondaryButton disabled icon="changes">
-                  Diffs not generated yet
-                </SecondaryButton>
                 {activeAgentRun.id === demoWorkflow.runId ? (
                   <SecondaryButton
                     icon="changes"
@@ -2712,7 +2717,7 @@ export function App() {
                 <div className="overview-card__header">
                   <div>
                     <p className="card-eyebrow">Generated Patch Artifacts</p>
-                    <h3>Patch artifact placeholders</h3>
+                    <h3>Patch artifact review</h3>
                   </div>
                   <StatusPill tone="neutral" size="sm" showDot={false}>
                     {selectedApprovalProposedChange?.patchArtifacts.length ?? 0}{" "}
@@ -2720,9 +2725,9 @@ export function App() {
                   </StatusPill>
                 </div>
                 <p>
-                  These records are reserved for future generated diffs. They
-                  are not local Git diffs and no patch has been written or
-                  applied.
+                  These are provider-generated proposals or honest placeholder
+                  states. They are not local Git diffs, and no patch has been
+                  written or applied.
                 </p>
                 <PatchArtifactList
                   artifacts={

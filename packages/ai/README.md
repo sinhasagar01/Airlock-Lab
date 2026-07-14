@@ -72,10 +72,11 @@ Adapters receive a task plus pre-derived indexed repository context and return
 a normalized plan result. They do not own persistence, approvals, filesystem
 access, Git commands, patch application, or UI state.
 
-`createMockAgentProviderAdapter()` is the only implemented adapter. It supports
-plan generation and explicitly reports patch generation, streaming, and tool
-use as unsupported. `executeMockAgentRun()` consumes that adapter while
-preserving the current durable mock-run workflow.
+`createMockAgentProviderAdapter()` provides deterministic plan generation and
+leaves patch artifacts as `not_generated`. The native OpenAI adapter supports
+validated plan and review-only patch artifact output from bounded repository
+metadata. Streaming, tools, patch application, filesystem writes, and Git
+mutation remain outside the adapter boundary.
 
 ## Acceptance Criteria
 
