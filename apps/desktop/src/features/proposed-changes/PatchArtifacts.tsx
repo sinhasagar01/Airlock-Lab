@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   initialPatchValidationStatus,
+  type PatchApplyAttempt,
   type PatchValidationStatus,
   type ProposedPatchArtifact,
 } from "@ai-dev/ai";
@@ -157,6 +158,7 @@ export function PatchArtifactList({
 }
 
 type PatchArtifactDetailProps = {
+  applyAttempt?: PatchApplyAttempt | null;
   applyReadinessContext: ApplyReadinessContext;
   applyFeedback?: {
     status: "success" | "error";
@@ -200,6 +202,7 @@ function readinessGateTone(status: ApplyReadinessGateStatus) {
 }
 
 export function PatchArtifactDetail({
+  applyAttempt = null,
   applyReadinessContext,
   applyFeedback = null,
   artifact,
@@ -223,6 +226,9 @@ export function PatchArtifactDetail({
     ? evaluateApplyReadiness(artifact, applyReadinessContext)
     : null;
   const canApply = Boolean(applyReadiness?.canApply && onApply);
+  const requiresManualInspection =
+    applyAttempt?.status === "interrupted" ||
+    applyAttempt?.status === "needs_inspection";
 
   useEffect(() => {
     setIsConfirmingApply(false);
@@ -301,6 +307,50 @@ export function PatchArtifactDetail({
             {isValidating ? "Checking patch" : "Validate & dry-run"}
           </SecondaryButton>
         </div>
+      ) : null}
+
+      {requiresManualInspection ? (
+        <section
+          aria-live="polite"
+          className="patch-apply-recovery"
+          role="status"
+        >
+          <div className="patch-apply-recovery__header">
+            <IconBadge icon="changes" tone="warning" size="md" />
+            <div>
+              <p className="card-eyebrow">Interrupted Apply</p>
+              <h4>Manual inspection required</h4>
+            </div>
+            <StatusPill tone="warning" size="sm" showDot={false}>
+              {applyAttempt.status.replaceAll("_", " ")}
+            </StatusPill>
+          </div>
+          <p>{applyAttempt.message}</p>
+          <dl className="patch-apply-recovery__facts">
+            <div>
+              <dt>Attempt</dt>
+              <dd>{applyAttempt.applyAttemptId}</dd>
+            </div>
+            <div>
+              <dt>Backup</dt>
+              <dd>{applyAttempt.backupId ?? "Not available"}</dd>
+            </div>
+            <div>
+              <dt>Current Git status</dt>
+              <dd>
+                {applyAttempt.currentGitStatusChanged === true
+                  ? "Changed after apply started"
+                  : applyAttempt.currentGitStatusChanged === false
+                    ? "No change detected"
+                    : "Not enough evidence"}
+              </dd>
+            </div>
+          </dl>
+          <p className="patch-apply-recovery__boundary">
+            No patch was retried or rolled back. Inspect the working tree and
+            backup evidence before taking any manual action.
+          </p>
+        </section>
       ) : null}
 
       {applyReadiness ? (

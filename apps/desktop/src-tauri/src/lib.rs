@@ -211,10 +211,39 @@ struct ApplyPatchBackupFile {
     content: Option<String>,
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PatchApplyEvidence {
+    artifact_digest: String,
+    repository_snapshot: Option<RepositoryValidationSnapshot>,
+    git_status: Option<Value>,
+    captured_at: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PatchApplyAttemptRecord {
+    apply_attempt_id: String,
+    repository_id: String,
+    proposed_change_id: String,
+    approval_request_id: String,
+    patch_artifact_id: String,
+    backup_id: Option<String>,
+    status: String,
+    started_at: String,
+    completed_at: Option<String>,
+    sanitized_error: Option<String>,
+    pre_apply_evidence: Option<PatchApplyEvidence>,
+    post_apply_evidence: Option<PatchApplyEvidence>,
+    current_git_status_changed: Option<bool>,
+    message: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ApplyApprovedPatchArtifactResult {
     status: String,
+    apply_attempt_id: String,
     proposed_change_id: String,
     patch_artifact_id: String,
     backup_id: String,
@@ -795,10 +824,26 @@ fn normalized_patch_text(raw_diff: &str) -> String {
 }
 
 fn run_fixed_git_apply(repository_path: &str, patch: &str, check_only: bool) -> Result<bool, ()> {
+    run_fixed_git_apply_command(repository_path, patch, check_only, false)
+}
+
+fn run_fixed_git_reverse_check(repository_path: &str, patch: &str) -> Result<bool, ()> {
+    run_fixed_git_apply_command(repository_path, patch, true, true)
+}
+
+fn run_fixed_git_apply_command(
+    repository_path: &str,
+    patch: &str,
+    check_only: bool,
+    reverse: bool,
+) -> Result<bool, ()> {
     let mut command = Command::new("git");
     command.arg("apply");
     if check_only {
         command.arg("--check");
+    }
+    if reverse {
+        command.arg("--reverse");
     }
     let mut child = command
         .args(["--whitespace=nowarn", "-"])
@@ -841,6 +886,45 @@ fn git_status_summary_json(summary: &GitStatusSummary) -> Value {
         })).collect::<Vec<_>>(),
         "refreshedAt": &summary.refreshed_at,
     })
+}
+
+fn patch_apply_evidence(
+    artifact_digest: &str,
+    repository_snapshot: Option<RepositoryValidationSnapshot>,
+    git_status: Option<&GitStatusSummary>,
+) -> PatchApplyEvidence {
+    PatchApplyEvidence {
+        artifact_digest: artifact_digest.to_string(),
+        repository_snapshot,
+        git_status: git_status.map(git_status_summary_json),
+        captured_at: now_unix_seconds(),
+    }
+}
+
+fn git_status_changed_from_evidence(
+    evidence: &PatchApplyEvidence,
+    current_status: &GitStatusSummary,
+) -> Option<bool> {
+    let previous = evidence.git_status.as_ref()?;
+    let current = git_status_summary_json(current_status);
+    Some(git_status_evidence_changed(previous, &current))
+}
+
+fn git_status_evidence_changed(previous: &Value, current: &Value) -> bool {
+    [
+        "branch",
+        "headSha",
+        "isGitRepository",
+        "isClean",
+        "changedFileCount",
+        "stagedCount",
+        "unstagedCount",
+        "untrackedCount",
+        "conflictedCount",
+        "files",
+    ]
+    .iter()
+    .any(|key| previous.get(key) != current.get(key))
 }
 
 fn set_artifact_apply_metadata(
@@ -903,7 +987,7 @@ async fn ensure_patch_apply_tables(pool: &SqlitePool) -> Result<(), ApplyPatchEr
         )
     })?;
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS patch_apply_attempts (id TEXT PRIMARY KEY, proposed_change_id TEXT NOT NULL, patch_artifact_id TEXT NOT NULL, approval_request_id TEXT NOT NULL, repository_id TEXT NOT NULL, status TEXT NOT NULL, error_code TEXT, backup_id TEXT, started_at TEXT NOT NULL, completed_at TEXT, post_apply_git_status_json TEXT)",
+        "CREATE TABLE IF NOT EXISTS patch_apply_attempts (id TEXT PRIMARY KEY, proposed_change_id TEXT NOT NULL, patch_artifact_id TEXT NOT NULL, approval_request_id TEXT NOT NULL, repository_id TEXT NOT NULL, status TEXT NOT NULL, error_code TEXT, sanitized_error TEXT, backup_id TEXT, started_at TEXT NOT NULL, completed_at TEXT, pre_apply_evidence_json TEXT, post_apply_evidence_json TEXT, post_apply_git_status_json TEXT)",
     )
     .execute(pool)
     .await
@@ -911,6 +995,53 @@ async fn ensure_patch_apply_tables(pool: &SqlitePool) -> Result<(), ApplyPatchEr
         apply_patch_error(
             "storage_unavailable",
             "Native apply audit storage is unavailable. The patch was not applied.",
+        )
+    })?;
+
+    let table_columns = sqlx::query("PRAGMA table_info(patch_apply_attempts)")
+        .fetch_all(pool)
+        .await
+        .map_err(|_| {
+            apply_patch_error(
+                "storage_unavailable",
+                "Native apply audit storage could not be inspected.",
+            )
+        })?
+        .into_iter()
+        .filter_map(|row| row.try_get::<String, _>("name").ok())
+        .collect::<Vec<_>>();
+    for (column, statement) in [
+        (
+            "sanitized_error",
+            "ALTER TABLE patch_apply_attempts ADD COLUMN sanitized_error TEXT",
+        ),
+        (
+            "pre_apply_evidence_json",
+            "ALTER TABLE patch_apply_attempts ADD COLUMN pre_apply_evidence_json TEXT",
+        ),
+        (
+            "post_apply_evidence_json",
+            "ALTER TABLE patch_apply_attempts ADD COLUMN post_apply_evidence_json TEXT",
+        ),
+    ] {
+        if !table_columns.iter().any(|existing| existing == column) {
+            sqlx::query(statement).execute(pool).await.map_err(|_| {
+                apply_patch_error(
+                    "storage_unavailable",
+                    "Native apply audit storage could not be upgraded safely.",
+                )
+            })?;
+        }
+    }
+    sqlx::query(
+        "UPDATE patch_apply_attempts SET status = 'failed', sanitized_error = COALESCE(sanitized_error, 'Patch application failed before completion.') WHERE status = 'apply_failed'",
+    )
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "Legacy apply attempt state could not be normalized safely.",
         )
     })?;
     Ok(())
@@ -2395,6 +2526,21 @@ async fn apply_approved_patch_artifact_with_pool(
             "Repository state changed during apply preparation. Re-run validation before applying.",
         ));
     }
+    let pre_apply_git_status = load_git_status_summary(
+        input.repository_id.clone(),
+        canonical_repository_path.clone(),
+    );
+    let pre_apply_evidence = patch_apply_evidence(
+        &computed_artifact_digest,
+        Some(final_snapshot.clone()),
+        Some(&pre_apply_git_status),
+    );
+    let pre_apply_evidence_json = serde_json::to_string(&pre_apply_evidence).map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "Pre-apply safety evidence could not be serialized. The patch was not applied.",
+        )
+    })?;
 
     let started_at = now_unix_seconds();
     let unique_suffix = SystemTime::now()
@@ -2427,7 +2573,7 @@ async fn apply_approved_patch_artifact_with_pool(
         )
     })?;
     sqlx::query(
-        "INSERT INTO patch_apply_attempts (id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, backup_id, started_at) VALUES (?, ?, ?, ?, ?, 'applying', ?, ?)",
+        "INSERT INTO patch_apply_attempts (id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, backup_id, started_at, pre_apply_evidence_json) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
     )
     .bind(&attempt_id)
     .bind(&input.proposed_change_id)
@@ -2436,6 +2582,7 @@ async fn apply_approved_patch_artifact_with_pool(
     .bind(&input.repository_id)
     .bind(&backup_id)
     .bind(&started_at)
+    .bind(pre_apply_evidence_json)
     .execute(pool)
     .await
     .map_err(|_| {
@@ -2479,6 +2626,24 @@ async fn apply_approved_patch_artifact_with_pool(
             "The apply state could not be persisted. The patch was not applied.",
         ));
     }
+    let attempt_update = sqlx::query(
+        "UPDATE patch_apply_attempts SET status = 'applying' WHERE id = ? AND status = 'pending'",
+    )
+    .bind(&attempt_id)
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "The native apply attempt could not be started safely. The patch was not applied.",
+        )
+    })?;
+    if attempt_update.rows_affected() != 1 {
+        return Err(apply_patch_error(
+            "storage_unavailable",
+            "The native apply attempt could not be started safely. The patch was not applied.",
+        ));
+    }
 
     let apply_succeeded =
         run_fixed_git_apply(&canonical_repository_path, &patch_for_git, false).unwrap_or(false);
@@ -2505,8 +2670,9 @@ async fn apply_approved_patch_artifact_with_pool(
             .await;
         }
         let _ = sqlx::query(
-            "UPDATE patch_apply_attempts SET status = 'apply_failed', error_code = 'git_apply_failed', completed_at = ? WHERE id = ?",
+            "UPDATE patch_apply_attempts SET status = 'failed', error_code = 'git_apply_failed', sanitized_error = ?, completed_at = ? WHERE id = ?",
         )
+        .bind(failure_message)
         .bind(&completed_at)
         .bind(&attempt_id)
         .execute(pool)
@@ -2515,8 +2681,10 @@ async fn apply_approved_patch_artifact_with_pool(
     }
 
     let applied_at = now_unix_seconds();
-    let post_apply_git_status =
-        load_git_status_summary(input.repository_id.clone(), canonical_repository_path);
+    let post_apply_git_status = load_git_status_summary(
+        input.repository_id.clone(),
+        canonical_repository_path.clone(),
+    );
     set_artifact_apply_metadata(
         &mut artifacts,
         &input.patch_artifact_id,
@@ -2554,10 +2722,25 @@ async fn apply_approved_patch_artifact_with_pool(
     }
     let post_apply_status_json =
         serde_json::to_string(&git_status_summary_json(&post_apply_git_status)).ok();
+    let post_apply_snapshot = capture_repository_validation_snapshot(
+        &input.repository_id,
+        &repository_root,
+        &canonical_repository_path,
+        &computed_artifact_digest,
+        &relevant_file_paths,
+    )
+    .ok();
+    let post_apply_evidence = patch_apply_evidence(
+        &computed_artifact_digest,
+        post_apply_snapshot,
+        Some(&post_apply_git_status),
+    );
+    let post_apply_evidence_json = serde_json::to_string(&post_apply_evidence).ok();
     let _ = sqlx::query(
-        "UPDATE patch_apply_attempts SET status = 'applied', completed_at = ?, post_apply_git_status_json = ? WHERE id = ?",
+        "UPDATE patch_apply_attempts SET status = 'applied', completed_at = ?, post_apply_evidence_json = ?, post_apply_git_status_json = ? WHERE id = ?",
     )
     .bind(&applied_at)
+    .bind(post_apply_evidence_json)
     .bind(post_apply_status_json)
     .bind(&attempt_id)
     .execute(pool)
@@ -2565,6 +2748,7 @@ async fn apply_approved_patch_artifact_with_pool(
 
     Ok(ApplyApprovedPatchArtifactResult {
         status: "applied".to_string(),
+        apply_attempt_id: attempt_id,
         proposed_change_id: input.proposed_change_id,
         patch_artifact_id: input.patch_artifact_id,
         backup_id,
@@ -2574,6 +2758,593 @@ async fn apply_approved_patch_artifact_with_pool(
             "The approved patch was applied to the working tree. No files were staged or committed."
                 .to_string(),
     })
+}
+
+fn apply_attempt_message(status: &str) -> String {
+    match status {
+        "applied" => "Reconciliation found clear evidence that the expected patch was applied. No patch was re-applied.".to_string(),
+        "failed" => "The interrupted attempt did not change the working tree and was not retried.".to_string(),
+        "interrupted" => "The apply process stopped before complete recovery evidence was available. Manual inspection is required.".to_string(),
+        "needs_inspection" => "Repository evidence is ambiguous after an interrupted apply. Manual inspection is required.".to_string(),
+        "pending" => "The patch apply attempt was recorded but has not started writing files.".to_string(),
+        "applying" => "The patch apply attempt has not recorded a terminal result.".to_string(),
+        _ => "The patch apply attempt has a recorded terminal state.".to_string(),
+    }
+}
+
+async fn persist_reconciled_attempt(
+    pool: &SqlitePool,
+    attempt_id: &str,
+    status: &str,
+    sanitized_error: Option<&str>,
+    post_apply_evidence: Option<&PatchApplyEvidence>,
+    post_apply_git_status: Option<&GitStatusSummary>,
+) -> Result<(), ApplyPatchError> {
+    let completed_at = now_unix_seconds();
+    let post_evidence_json =
+        post_apply_evidence.and_then(|evidence| serde_json::to_string(evidence).ok());
+    let post_status_json = post_apply_git_status
+        .and_then(|summary| serde_json::to_string(&git_status_summary_json(summary)).ok());
+    sqlx::query(
+        "UPDATE patch_apply_attempts SET status = ?, error_code = ?, sanitized_error = ?, completed_at = ?, post_apply_evidence_json = ?, post_apply_git_status_json = ? WHERE id = ?",
+    )
+    .bind(status)
+    .bind(if sanitized_error.is_some() {
+        Some(status)
+    } else {
+        None
+    })
+    .bind(sanitized_error)
+    .bind(completed_at)
+    .bind(post_evidence_json)
+    .bind(post_status_json)
+    .bind(attempt_id)
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "Interrupted apply state could not be reconciled safely.",
+        )
+    })?;
+    Ok(())
+}
+
+async fn persist_reconciled_artifact(
+    pool: &SqlitePool,
+    proposal_id: &str,
+    artifact_id: &str,
+    status: &str,
+    backup_id: Option<&str>,
+    message: Option<&str>,
+    post_apply_git_status: Option<&GitStatusSummary>,
+) -> Result<(), ApplyPatchError> {
+    let row = sqlx::query("SELECT patch_artifacts_json FROM proposed_changes WHERE id = ? LIMIT 1")
+        .bind(proposal_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|_| {
+            apply_patch_error(
+                "storage_unavailable",
+                "The interrupted proposal state could not be loaded.",
+            )
+        })?
+        .ok_or_else(|| {
+            apply_patch_error(
+                "proposal_not_found",
+                "The interrupted proposal record is unavailable.",
+            )
+        })?;
+    let artifacts_json: String = row.try_get("patch_artifacts_json").unwrap_or_default();
+    let mut artifacts: Value = serde_json::from_str(&artifacts_json).map_err(|_| {
+        apply_patch_error(
+            "invalid_persisted_record",
+            "The interrupted patch artifact record is invalid.",
+        )
+    })?;
+    let completed_at = now_unix_seconds();
+    set_artifact_apply_metadata(
+        &mut artifacts,
+        artifact_id,
+        status,
+        backup_id,
+        (status == "applied").then_some(completed_at.as_str()),
+        message,
+        post_apply_git_status,
+    )?;
+    let next_artifacts_json = serde_json::to_string(&artifacts).map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "The reconciled patch artifact state could not be serialized.",
+        )
+    })?;
+    let proposal_status = if status == "applied" {
+        Some("applied")
+    } else {
+        None
+    };
+    if let Some(proposal_status) = proposal_status {
+        sqlx::query(
+            "UPDATE proposed_changes SET status = ?, patch_artifacts_json = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(proposal_status)
+        .bind(next_artifacts_json)
+        .bind(&completed_at)
+        .bind(proposal_id)
+        .execute(pool)
+        .await
+        .map_err(|_| {
+            apply_patch_error(
+                "storage_unavailable",
+                "The reconciled applied state could not be persisted.",
+            )
+        })?;
+    } else {
+        sqlx::query(
+            "UPDATE proposed_changes SET patch_artifacts_json = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(next_artifacts_json)
+        .bind(&completed_at)
+        .bind(proposal_id)
+        .execute(pool)
+        .await
+        .map_err(|_| {
+            apply_patch_error(
+                "storage_unavailable",
+                "The reconciled interrupted state could not be persisted.",
+            )
+        })?;
+    }
+    Ok(())
+}
+
+async fn classify_unfinished_apply_attempt(
+    pool: &SqlitePool,
+    row: &sqlx::sqlite::SqliteRow,
+) -> Result<(), ApplyPatchError> {
+    let attempt_id: String = row.try_get("id").unwrap_or_default();
+    let proposal_id: String = row.try_get("proposed_change_id").unwrap_or_default();
+    let artifact_id: String = row.try_get("patch_artifact_id").unwrap_or_default();
+    let repository_id: String = row.try_get("repository_id").unwrap_or_default();
+    let backup_id: Option<String> = row.try_get("backup_id").unwrap_or(None);
+    let pre_evidence_json: Option<String> = row.try_get("pre_apply_evidence_json").unwrap_or(None);
+
+    let proposal_row = sqlx::query(
+        "SELECT status, files_json, patch_artifacts_json FROM proposed_changes WHERE id = ? LIMIT 1",
+    )
+    .bind(&proposal_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "The interrupted proposal could not be inspected.",
+        )
+    })?;
+    let Some(proposal_row) = proposal_row else {
+        let message = apply_attempt_message("interrupted");
+        return persist_reconciled_attempt(
+            pool,
+            &attempt_id,
+            "interrupted",
+            Some(&message),
+            None,
+            None,
+        )
+        .await;
+    };
+    let proposal_status: String = proposal_row.try_get("status").unwrap_or_default();
+    let files_json: String = proposal_row.try_get("files_json").unwrap_or_default();
+    let artifacts_json: String = proposal_row
+        .try_get("patch_artifacts_json")
+        .unwrap_or_default();
+    let files: Value = match serde_json::from_str(&files_json) {
+        Ok(files) => files,
+        Err(_) => {
+            let message = apply_attempt_message("needs_inspection");
+            return persist_reconciled_attempt(
+                pool,
+                &attempt_id,
+                "needs_inspection",
+                Some(&message),
+                None,
+                None,
+            )
+            .await;
+        }
+    };
+    let artifacts: Value = match serde_json::from_str(&artifacts_json) {
+        Ok(artifacts) => artifacts,
+        Err(_) => {
+            let message = apply_attempt_message("needs_inspection");
+            return persist_reconciled_attempt(
+                pool,
+                &attempt_id,
+                "needs_inspection",
+                Some(&message),
+                None,
+                None,
+            )
+            .await;
+        }
+    };
+    let Some(artifact) = artifacts.as_array().and_then(|items| {
+        items
+            .iter()
+            .find(|item| item.get("id").and_then(Value::as_str) == Some(artifact_id.as_str()))
+    }) else {
+        let message = apply_attempt_message("interrupted");
+        return persist_reconciled_attempt(
+            pool,
+            &attempt_id,
+            "interrupted",
+            Some(&message),
+            None,
+            None,
+        )
+        .await;
+    };
+    let file_path = artifact
+        .get("filePath")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let raw_diff = artifact
+        .get("rawDiff")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let operation = files
+        .as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|file| file.get("path").and_then(Value::as_str) == Some(file_path))
+        })
+        .and_then(|file| file.get("operation"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let artifact_digest = sha256_hex(normalized_patch_text(raw_diff).as_bytes());
+
+    let repository_row = sqlx::query("SELECT path FROM repositories WHERE id = ? LIMIT 1")
+        .bind(&repository_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|_| {
+            apply_patch_error(
+                "storage_unavailable",
+                "The interrupted repository could not be inspected.",
+            )
+        })?;
+    let pre_evidence = pre_evidence_json
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<PatchApplyEvidence>(value).ok());
+    let backup_exists = if let Some(backup_id) = backup_id.as_deref() {
+        sqlx::query(
+            "SELECT id FROM patch_apply_backups WHERE id = ? AND proposed_change_id = ? AND patch_artifact_id = ? AND repository_id = ? LIMIT 1",
+        )
+        .bind(backup_id)
+        .bind(&proposal_id)
+        .bind(&artifact_id)
+        .bind(&repository_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|_| {
+            apply_patch_error(
+                "storage_unavailable",
+                "Interrupted apply backup evidence could not be inspected.",
+            )
+        })?
+        .is_some()
+    } else {
+        false
+    };
+
+    if proposal_status == "applied"
+        || artifact.get("applyStatus").and_then(Value::as_str) == Some("applied")
+    {
+        let current_status = repository_row
+            .as_ref()
+            .and_then(|repository| repository.try_get::<String, _>("path").ok())
+            .and_then(|path| canonical_selected_git_root(&path).ok())
+            .map(|(_, path)| load_git_status_summary(repository_id.clone(), path));
+        let post_evidence = patch_apply_evidence(&artifact_digest, None, current_status.as_ref());
+        persist_reconciled_artifact(
+            pool,
+            &proposal_id,
+            &artifact_id,
+            "applied",
+            backup_id.as_deref(),
+            None,
+            current_status.as_ref(),
+        )
+        .await?;
+        return persist_reconciled_attempt(
+            pool,
+            &attempt_id,
+            "applied",
+            None,
+            Some(&post_evidence),
+            current_status.as_ref(),
+        )
+        .await;
+    }
+
+    let (pre_evidence, repository_row) = match (pre_evidence, repository_row) {
+        (Some(pre_evidence), Some(repository_row)) if backup_exists => {
+            (pre_evidence, repository_row)
+        }
+        _ => {
+            let message = apply_attempt_message("interrupted");
+            persist_reconciled_artifact(
+                pool,
+                &proposal_id,
+                &artifact_id,
+                "interrupted",
+                backup_id.as_deref(),
+                Some(&message),
+                None,
+            )
+            .await?;
+            return persist_reconciled_attempt(
+                pool,
+                &attempt_id,
+                "interrupted",
+                Some(&message),
+                None,
+                None,
+            )
+            .await;
+        }
+    };
+    if raw_diff.is_empty()
+        || !is_safe_relative_git_path(file_path)
+        || is_forbidden_fingerprint_path(file_path)
+        || pre_evidence.artifact_digest != artifact_digest
+    {
+        let message = apply_attempt_message("needs_inspection");
+        persist_reconciled_artifact(
+            pool,
+            &proposal_id,
+            &artifact_id,
+            "needs_inspection",
+            backup_id.as_deref(),
+            Some(&message),
+            None,
+        )
+        .await?;
+        return persist_reconciled_attempt(
+            pool,
+            &attempt_id,
+            "needs_inspection",
+            Some(&message),
+            None,
+            None,
+        )
+        .await;
+    }
+
+    let Some(pre_snapshot) = pre_evidence.repository_snapshot.as_ref() else {
+        let message = apply_attempt_message("interrupted");
+        persist_reconciled_artifact(
+            pool,
+            &proposal_id,
+            &artifact_id,
+            "interrupted",
+            backup_id.as_deref(),
+            Some(&message),
+            None,
+        )
+        .await?;
+        return persist_reconciled_attempt(
+            pool,
+            &attempt_id,
+            "interrupted",
+            Some(&message),
+            None,
+            None,
+        )
+        .await;
+    };
+    let repository_path: String = repository_row.try_get("path").unwrap_or_default();
+    let (repository_root, canonical_repository_path) =
+        match canonical_selected_git_root(&repository_path) {
+            Ok(repository) => repository,
+            Err(_) => {
+                let message = apply_attempt_message("needs_inspection");
+                persist_reconciled_artifact(
+                    pool,
+                    &proposal_id,
+                    &artifact_id,
+                    "needs_inspection",
+                    backup_id.as_deref(),
+                    Some(&message),
+                    None,
+                )
+                .await?;
+                return persist_reconciled_attempt(
+                    pool,
+                    &attempt_id,
+                    "needs_inspection",
+                    Some(&message),
+                    None,
+                    None,
+                )
+                .await;
+            }
+        };
+    let current_status =
+        load_git_status_summary(repository_id.clone(), canonical_repository_path.clone());
+    let relevant_paths = pre_snapshot.relevant_file_paths.clone();
+    let current_snapshot = capture_repository_validation_snapshot(
+        &repository_id,
+        &repository_root,
+        &canonical_repository_path,
+        &artifact_digest,
+        &relevant_paths,
+    )
+    .ok();
+    let post_evidence = patch_apply_evidence(
+        &artifact_digest,
+        current_snapshot.clone(),
+        Some(&current_status),
+    );
+    let reconciliation_validation_input = PatchValidationInput {
+        repository_id: repository_id.clone(),
+        repository_path: canonical_repository_path.clone(),
+        file_path: file_path.to_string(),
+        operation: operation.to_string(),
+        is_binary: false,
+        raw_diff: Some(raw_diff.to_string()),
+        artifact_digest: Some(artifact_digest.clone()),
+        relevant_file_paths: relevant_paths.clone(),
+    };
+    if validate_generated_patch_structure(&reconciliation_validation_input).is_err() {
+        let message = apply_attempt_message("needs_inspection");
+        persist_reconciled_artifact(
+            pool,
+            &proposal_id,
+            &artifact_id,
+            "needs_inspection",
+            backup_id.as_deref(),
+            Some(&message),
+            None,
+        )
+        .await?;
+        return persist_reconciled_attempt(
+            pool,
+            &attempt_id,
+            "needs_inspection",
+            Some(&message),
+            Some(&post_evidence),
+            Some(&current_status),
+        )
+        .await;
+    }
+    let fingerprints_match = current_snapshot.as_ref().is_some_and(|snapshot| {
+        snapshot.target_file_fingerprints == pre_snapshot.target_file_fingerprints
+    });
+    let git_status_changed = git_status_changed_from_evidence(&pre_evidence, &current_status);
+    let patch_for_git = normalized_patch_text(raw_diff);
+    let forward_check = run_fixed_git_apply(&canonical_repository_path, &patch_for_git, true).ok();
+    let reverse_check =
+        run_fixed_git_reverse_check(&canonical_repository_path, &patch_for_git).ok();
+    let target_changed = current_status
+        .files
+        .iter()
+        .any(|file| file.path == file_path || file.old_path.as_deref() == Some(file_path));
+
+    let (status, artifact_status, message) =
+        if fingerprints_match && git_status_changed == Some(false) && forward_check == Some(true) {
+            ("failed", "apply_failed", apply_attempt_message("failed"))
+        } else if !fingerprints_match
+            && target_changed
+            && reverse_check == Some(true)
+            && forward_check == Some(false)
+        {
+            ("applied", "applied", apply_attempt_message("applied"))
+        } else {
+            (
+                "needs_inspection",
+                "needs_inspection",
+                apply_attempt_message("needs_inspection"),
+            )
+        };
+    let artifact_message = (status != "applied").then_some(message.as_str());
+    persist_reconciled_artifact(
+        pool,
+        &proposal_id,
+        &artifact_id,
+        artifact_status,
+        backup_id.as_deref(),
+        artifact_message,
+        (status == "applied").then_some(&current_status),
+    )
+    .await?;
+    persist_reconciled_attempt(
+        pool,
+        &attempt_id,
+        status,
+        artifact_message,
+        Some(&post_evidence),
+        Some(&current_status),
+    )
+    .await
+}
+
+async fn load_patch_apply_attempt_records(
+    pool: &SqlitePool,
+) -> Result<Vec<PatchApplyAttemptRecord>, ApplyPatchError> {
+    let rows = sqlx::query(
+        "SELECT id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, sanitized_error, backup_id, started_at, completed_at, pre_apply_evidence_json, post_apply_evidence_json FROM patch_apply_attempts ORDER BY started_at DESC LIMIT 100",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "Apply attempt history could not be loaded safely.",
+        )
+    })?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let status: String = row.try_get("status").unwrap_or_default();
+            let pre_apply_evidence: Option<PatchApplyEvidence> = row
+                .try_get::<Option<String>, _>("pre_apply_evidence_json")
+                .unwrap_or(None)
+                .and_then(|value| serde_json::from_str(&value).ok());
+            let post_apply_evidence: Option<PatchApplyEvidence> = row
+                .try_get::<Option<String>, _>("post_apply_evidence_json")
+                .unwrap_or(None)
+                .and_then(|value| serde_json::from_str(&value).ok());
+            let current_git_status_changed = match (&pre_apply_evidence, &post_apply_evidence) {
+                (Some(pre), Some(post)) => post.git_status.as_ref().and_then(|current| {
+                    pre.git_status
+                        .as_ref()
+                        .map(|previous| git_status_evidence_changed(previous, current))
+                }),
+                _ => None,
+            };
+            PatchApplyAttemptRecord {
+                apply_attempt_id: row.try_get("id").unwrap_or_default(),
+                repository_id: row.try_get("repository_id").unwrap_or_default(),
+                proposed_change_id: row.try_get("proposed_change_id").unwrap_or_default(),
+                approval_request_id: row.try_get("approval_request_id").unwrap_or_default(),
+                patch_artifact_id: row.try_get("patch_artifact_id").unwrap_or_default(),
+                backup_id: row.try_get("backup_id").unwrap_or(None),
+                status: status.clone(),
+                started_at: row.try_get("started_at").unwrap_or_default(),
+                completed_at: row.try_get("completed_at").unwrap_or(None),
+                sanitized_error: row.try_get("sanitized_error").unwrap_or(None),
+                pre_apply_evidence,
+                post_apply_evidence,
+                current_git_status_changed,
+                message: apply_attempt_message(&status),
+            }
+        })
+        .collect())
+}
+
+async fn reconcile_interrupted_patch_apply_attempts_with_pool(
+    pool: &SqlitePool,
+) -> Result<Vec<PatchApplyAttemptRecord>, ApplyPatchError> {
+    let _apply_guard = PATCH_APPLY_LOCK.lock().await;
+    ensure_patch_apply_tables(pool).await?;
+    let unfinished_rows = sqlx::query(
+        "SELECT id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, backup_id, pre_apply_evidence_json FROM patch_apply_attempts WHERE status IN ('pending', 'applying') ORDER BY started_at ASC",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "Unfinished apply attempts could not be inspected safely.",
+        )
+    })?;
+    for row in &unfinished_rows {
+        classify_unfinished_apply_attempt(pool, row).await?;
+    }
+    load_patch_apply_attempt_records(pool).await
 }
 
 #[tauri::command]
@@ -2594,6 +3365,25 @@ async fn apply_approved_patch_artifact(
     drop(instances);
 
     apply_approved_patch_artifact_with_pool(&pool, input).await
+}
+
+#[tauri::command]
+async fn reconcile_interrupted_patch_apply_attempts(
+    database_instances: tauri::State<'_, DbInstances>,
+) -> Result<Vec<PatchApplyAttemptRecord>, ApplyPatchError> {
+    let instances = database_instances.0.read().await;
+    let pool = match instances.get(WORKSPACE_DATABASE_URL) {
+        Some(DbPool::Sqlite(pool)) => pool.clone(),
+        _ => {
+            return Err(apply_patch_error(
+                "storage_unavailable",
+                "Native workspace storage is unavailable for apply reconciliation.",
+            ));
+        }
+    };
+    drop(instances);
+
+    reconcile_interrupted_patch_apply_attempts_with_pool(&pool).await
 }
 
 #[tauri::command]
@@ -3170,6 +3960,50 @@ mod tests {
         .expect("update artifact fixture");
     }
 
+    async fn reset_successful_apply_to_unfinished(
+        pool: &SqlitePool,
+        result: &ApplyApprovedPatchArtifactResult,
+        remove_pre_evidence: bool,
+        remove_backup: bool,
+    ) {
+        mutate_apply_artifact(pool, |artifacts| {
+            let artifact = artifacts[0].as_object_mut().unwrap();
+            artifact.insert("applyStatus".to_string(), json!("applying"));
+            artifact.remove("appliedAt");
+            artifact.remove("appliedBy");
+            artifact.remove("applyError");
+            artifact.remove("postApplyGitStatus");
+        })
+        .await;
+        sqlx::query("UPDATE proposed_changes SET status = 'approved'")
+            .execute(pool)
+            .await
+            .expect("reset proposal status");
+        sqlx::query(
+            "UPDATE patch_apply_attempts SET status = 'applying', completed_at = NULL, sanitized_error = NULL, post_apply_evidence_json = NULL, post_apply_git_status_json = NULL WHERE id = ?",
+        )
+        .bind(&result.apply_attempt_id)
+        .execute(pool)
+        .await
+        .expect("reset attempt status");
+        if remove_pre_evidence {
+            sqlx::query(
+                "UPDATE patch_apply_attempts SET pre_apply_evidence_json = NULL WHERE id = ?",
+            )
+            .bind(&result.apply_attempt_id)
+            .execute(pool)
+            .await
+            .expect("remove pre-apply evidence");
+        }
+        if remove_backup {
+            sqlx::query("DELETE FROM patch_apply_backups WHERE id = ?")
+                .bind(&result.backup_id)
+                .execute(pool)
+                .await
+                .expect("remove backup fixture");
+        }
+    }
+
     #[test]
     fn openai_plan_input_accepts_bounded_repository_summary() {
         assert_eq!(
@@ -3634,6 +4468,152 @@ mod tests {
     }
 
     #[test]
+    fn reconciliation_repairs_clearly_applied_disposable_repository_attempt() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("reconcile-clearly-applied");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let head_before = git_output(repository_path.to_str().unwrap(), &["rev-parse", "HEAD"]);
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+            let result = apply_approved_patch_artifact_with_pool(&pool, input)
+                .await
+                .expect("apply fixture patch");
+            reset_successful_apply_to_unfinished(&pool, &result, false, false).await;
+
+            let attempts = reconcile_interrupted_patch_apply_attempts_with_pool(&pool)
+                .await
+                .expect("reconcile applied attempt");
+            let attempt = attempts
+                .iter()
+                .find(|attempt| attempt.apply_attempt_id == result.apply_attempt_id)
+                .expect("reconciled attempt");
+
+            assert_eq!(attempt.status, "applied");
+            assert_eq!(attempt.current_git_status_changed, Some(true));
+            assert_eq!(
+                fs::read_to_string(repository_path.join("generated.txt")).unwrap(),
+                "safe generated content\n"
+            );
+            assert_eq!(
+                git_output(
+                    repository_path.to_str().unwrap(),
+                    &["diff", "--cached", "--name-only"],
+                )
+                .unwrap_or_default(),
+                ""
+            );
+            assert_eq!(
+                git_output(repository_path.to_str().unwrap(), &["rev-parse", "HEAD"]),
+                head_before
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    #[test]
+    fn reconciliation_marks_untouched_disposable_repository_attempt_failed() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("reconcile-untouched");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+            let result = apply_approved_patch_artifact_with_pool(&pool, input)
+                .await
+                .expect("apply fixture patch");
+            fs::remove_file(repository_path.join("generated.txt")).unwrap();
+            reset_successful_apply_to_unfinished(&pool, &result, false, false).await;
+
+            let attempts = reconcile_interrupted_patch_apply_attempts_with_pool(&pool)
+                .await
+                .expect("reconcile untouched attempt");
+            let attempt = attempts
+                .iter()
+                .find(|attempt| attempt.apply_attempt_id == result.apply_attempt_id)
+                .expect("reconciled attempt");
+
+            assert_eq!(attempt.status, "failed");
+            assert_eq!(attempt.current_git_status_changed, Some(false));
+            assert!(!repository_path.join("generated.txt").exists());
+            let proposal_row = sqlx::query(
+                "SELECT patch_artifacts_json FROM proposed_changes WHERE id = 'proposal-apply'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            let artifacts_json: String = proposal_row.try_get("patch_artifacts_json").unwrap();
+            assert!(artifacts_json.contains("\"applyStatus\":\"apply_failed\""));
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    #[test]
+    fn reconciliation_marks_incomplete_evidence_interrupted_without_retry() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("reconcile-incomplete");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+            let result = apply_approved_patch_artifact_with_pool(&pool, input)
+                .await
+                .expect("apply fixture patch");
+            fs::remove_file(repository_path.join("generated.txt")).unwrap();
+            reset_successful_apply_to_unfinished(&pool, &result, true, true).await;
+
+            let attempts = reconcile_interrupted_patch_apply_attempts_with_pool(&pool)
+                .await
+                .expect("reconcile incomplete attempt");
+            let attempt = attempts
+                .iter()
+                .find(|attempt| attempt.apply_attempt_id == result.apply_attempt_id)
+                .expect("reconciled attempt");
+
+            assert_eq!(attempt.status, "interrupted");
+            assert!(attempt.message.contains("Manual inspection"));
+            assert!(!repository_path.join("generated.txt").exists());
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    #[test]
+    fn reconciliation_defaults_ambiguous_disposable_repository_to_manual_inspection() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("reconcile-ambiguous");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+            let result = apply_approved_patch_artifact_with_pool(&pool, input)
+                .await
+                .expect("apply fixture patch");
+            fs::write(
+                repository_path.join("generated.txt"),
+                "ambiguous manual content\n",
+            )
+            .unwrap();
+            reset_successful_apply_to_unfinished(&pool, &result, false, false).await;
+
+            let attempts = reconcile_interrupted_patch_apply_attempts_with_pool(&pool)
+                .await
+                .expect("reconcile ambiguous attempt");
+            let attempt = attempts
+                .iter()
+                .find(|attempt| attempt.apply_attempt_id == result.apply_attempt_id)
+                .expect("reconciled attempt");
+
+            assert_eq!(attempt.status, "needs_inspection");
+            assert_eq!(attempt.current_git_status_changed, Some(true));
+            assert_eq!(
+                fs::read_to_string(repository_path.join("generated.txt")).unwrap(),
+                "ambiguous manual content\n"
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    #[test]
     fn repository_snapshot_fingerprints_are_bounded_and_detect_target_changes() {
         let repository_path = create_temp_dir("repository-fingerprints");
         init_git_repo(&repository_path);
@@ -3965,6 +4945,7 @@ pub fn run() {
             load_repository_git_metadata,
             load_repository_validation_snapshot,
             preview_repository_file,
+            reconcile_interrupted_patch_apply_attempts,
             scan_repository_file_tree,
             test_openai_connection,
             validate_generated_patch

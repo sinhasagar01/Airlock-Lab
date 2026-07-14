@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { GitStatusSummary } from "@ai-dev/core";
+import type { PatchApplyAttempt } from "@ai-dev/ai";
 
 export const APPLY_PATCH_CONFIRMATION = "APPLY PATCH";
 
@@ -27,6 +28,7 @@ type NativeGitStatusSummary = {
 
 type NativeApplyPatchResult = {
   status: "applied";
+  applyAttemptId: string;
   proposedChangeId: string;
   patchArtifactId: string;
   backupId: string;
@@ -119,6 +121,30 @@ export async function applyApprovedPatchArtifact(
       postApplyGitStatus: normalizeGitStatus(result.postApplyGitStatus),
     };
   } catch (error) {
+    throw normalizeNativeError(error);
+  }
+}
+
+export async function reconcileInterruptedPatchApplyAttempts(): Promise<
+  PatchApplyAttempt[]
+> {
+  try {
+    const attempts = await invoke<PatchApplyAttempt[]>(
+      "reconcile_interrupted_patch_apply_attempts",
+    );
+
+    if (!Array.isArray(attempts)) {
+      throw new PatchApplicationError(
+        "invalid_reconciliation_result",
+        "Native apply reconciliation returned an invalid result.",
+      );
+    }
+
+    return attempts;
+  } catch (error) {
+    if (error instanceof PatchApplicationError) {
+      throw error;
+    }
     throw normalizeNativeError(error);
   }
 }

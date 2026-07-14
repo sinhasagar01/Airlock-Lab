@@ -52,12 +52,16 @@ dedicated native command.
 - React sends durable IDs only; native code reloads persisted patch content and
   runs fixed `git apply --whitespace=nowarn -` over stdin.
 - A bounded backup is persisted before the working-tree write.
+- Interrupted native attempts are reconciled conservatively on startup and
+  review entry; ambiguous state requires manual inspection and is never retried.
 - No Git add, commit, reset, checkout, clean, or staging operation is exposed.
 - Approval means the review record was approved. It does not itself write.
 - Generated patch artifacts and local Git diffs are displayed as separate data.
 
 See [Safe Patch Application Design](docs/security/patch-application-safety.md)
-for the implemented boundary and remaining rollback/concurrency gaps.
+for the implemented boundary and remaining rollback/concurrency gaps. Candidate
+builds should follow the
+[disposable repository apply QA](docs/qa/disposable-repository-apply-qa.md).
 
 ## Prerequisites
 

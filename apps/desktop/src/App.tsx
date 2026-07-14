@@ -11,6 +11,7 @@ import {
   ensureProposedPatchArtifactDigests,
   executeAgentRun,
   type PersistedProposedChange,
+  type PatchApplyAttempt,
   type PatchValidationResult,
   type ProposedPatchArtifact,
   type ProposedChangePlan,
@@ -102,6 +103,7 @@ import { loadRepositoriesGitMetadata } from "./storage/gitMetadata";
 import {
   applyApprovedPatchArtifact,
   PatchApplicationError,
+  reconcileInterruptedPatchApplyAttempts,
 } from "./storage/patchApplication";
 import { dryRunGeneratedPatch } from "./storage/patchValidation";
 import { loadRepositoryValidationSnapshot } from "./storage/repositoryValidationSnapshot";
@@ -237,6 +239,9 @@ export function App() {
     status: "success" | "error";
     message: string;
   } | null>(null);
+  const [patchApplyAttempts, setPatchApplyAttempts] = useState<
+    PatchApplyAttempt[]
+  >([]);
   const [currentFingerprintSnapshot, setCurrentFingerprintSnapshot] = useState<{
     artifactId: string;
     snapshot: RepositoryValidationSnapshot;
@@ -444,6 +449,18 @@ export function App() {
     ) ??
     selectedApprovalProposedChange?.patchArtifacts[0] ??
     null;
+  const selectedAgentPatchApplyAttempt =
+    patchApplyAttempts.find(
+      (attempt) =>
+        attempt.patchArtifactId === selectedAgentPatchArtifact?.id &&
+        attempt.proposedChangeId === activePersistedProposedChange?.id,
+    ) ?? null;
+  const selectedApprovalPatchApplyAttempt =
+    patchApplyAttempts.find(
+      (attempt) =>
+        attempt.patchArtifactId === selectedApprovalPatchArtifact?.id &&
+        attempt.proposedChangeId === selectedApprovalProposedChange?.id,
+    ) ?? null;
   const selectedReadinessArtifact =
     activeSection === "approvals"
       ? selectedApprovalPatchArtifact
@@ -875,10 +892,12 @@ export function App() {
       });
 
       try {
+        const attempts = await reconcileInterruptedPatchApplyAttempts();
         const savedChanges = await loadProposedChanges();
         const hydratedChanges = await Promise.all(
           savedChanges.map(ensureProposedPatchArtifactDigests),
         );
+        setPatchApplyAttempts(attempts);
         setPersistedProposedChanges(hydratedChanges);
       } catch {
         // The native result remains visible even if the follow-up reload fails.
@@ -1275,8 +1294,21 @@ export function App() {
         const hydratedProposedChanges = await Promise.all(
           mergedProposedChanges.map(ensureProposedPatchArtifactDigests),
         );
-        setPersistedProposedChanges(hydratedProposedChanges);
         await saveProposedChanges(hydratedProposedChanges);
+        let reconciledProposedChanges = hydratedProposedChanges;
+        if (hasNativeRuntime) {
+          try {
+            const attempts = await reconcileInterruptedPatchApplyAttempts();
+            const savedAfterReconciliation = await loadProposedChanges();
+            reconciledProposedChanges = await Promise.all(
+              savedAfterReconciliation.map(ensureProposedPatchArtifactDigests),
+            );
+            setPatchApplyAttempts(attempts);
+          } catch {
+            setPatchApplyAttempts([]);
+          }
+        }
+        setPersistedProposedChanges(reconciledProposedChanges);
 
         if (savedRepositories.length > 0) {
           const repositoriesWithGitMetadata =
@@ -1313,6 +1345,41 @@ export function App() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (
+      !hasNativeRuntime ||
+      storageStatus !== "ready" ||
+      !["agents", "approvals"].includes(activeSection)
+    ) {
+      return;
+    }
+
+    let isMounted = true;
+
+    async function reconcileApplyAttemptsForReview() {
+      try {
+        const attempts = await reconcileInterruptedPatchApplyAttempts();
+        const savedChanges = await loadProposedChanges();
+        const hydratedChanges = await Promise.all(
+          savedChanges.map(ensureProposedPatchArtifactDigests),
+        );
+
+        if (isMounted) {
+          setPatchApplyAttempts(attempts);
+          setPersistedProposedChanges(hydratedChanges);
+        }
+      } catch {
+        // Existing persisted state remains visible when diagnostics are unavailable.
+      }
+    }
+
+    void reconcileApplyAttemptsForReview();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [activeSection, hasNativeRuntime, storageStatus]);
 
   async function selectRepositories() {
     setRepositoryPickerError(null);
@@ -2555,6 +2622,7 @@ export function App() {
 
                 <section className="plan-section patch-artifact-detail-section">
                   <PatchArtifactDetail
+                    applyAttempt={selectedAgentPatchApplyAttempt}
                     applyReadinessContext={{
                       approvalStatus: activeRunApproval?.status ?? null,
                       hasDurableStorage: storageStatus === "ready",
@@ -3170,6 +3238,7 @@ export function App() {
                   selectedArtifactId={selectedApprovalPatchArtifact?.id}
                 />
                 <PatchArtifactDetail
+                  applyAttempt={selectedApprovalPatchApplyAttempt}
                   applyReadinessContext={{
                     approvalStatus: selectedApprovalRequest?.status ?? null,
                     hasDurableStorage: storageStatus === "ready",

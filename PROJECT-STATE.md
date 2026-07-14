@@ -73,11 +73,16 @@ and rejects stale, forbidden, binary, oversized, browser, dirty-tree, or replay
 states.
 
 Before the write, native code persists a bounded backup and an `applying` audit
-record. It then runs fixed `git apply --whitespace=nowarn -` with the persisted
-patch over stdin, reloads Git status, and persists `applied` or `apply_failed`
-state. Successful application leaves changes unstaged and uncommitted. Backup
-rollback, multi-artifact transactions, crash reconciliation, cross-process
-locking, and broader packaged security QA remain future work.
+record with pre-apply evidence. It then runs fixed
+`git apply --whitespace=nowarn -` with the persisted patch over stdin, reloads
+Git status, and persists applied or failed evidence. Startup and the Agent
+Runs/Approval Review surfaces reconcile attempts left in `pending` or
+`applying`: clearly applied state is repaired without reapplying, unchanged
+state becomes failed, incomplete evidence becomes interrupted, and ambiguity
+becomes needs inspection. Successful application leaves changes unstaged and
+uncommitted. Backup rollback, multi-artifact transactions, cross-process
+locking, child-process timeouts, and retained packaged QA evidence remain
+future work.
 
 Settings now reports whether OpenAI is configured through the native process
 and can run a read-only connection test for the configured model. The test sends
@@ -114,8 +119,10 @@ The release decision is deliberately split:
 - Safe Patch Application v1: implemented for one locally reviewed artifact with
   authoritative native lookup, same-request revalidation, backup persistence,
   typed confirmation, and post-apply Git status.
-- Recovery and broader distribution: not ready until packaged disposable-repo
-  QA, crash reconciliation, cross-process locking, and rollback are complete.
+- Recovery and broader distribution: interrupted-attempt reconciliation and a
+  disposable-repository QA protocol are implemented, but release-specific QA
+  evidence, cross-process locking, child-process timeouts, and rollback remain
+  incomplete.
 
 ## Current UI Direction
 

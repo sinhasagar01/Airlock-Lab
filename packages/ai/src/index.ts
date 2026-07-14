@@ -196,7 +196,17 @@ export type PatchApplyStatus =
   | "applying"
   | "applied"
   | "apply_failed"
+  | "interrupted"
+  | "needs_inspection"
   | "blocked";
+
+export type PatchApplyAttemptStatus =
+  | "pending"
+  | "applying"
+  | "applied"
+  | "failed"
+  | "interrupted"
+  | "needs_inspection";
 
 export type PatchValidationStatus =
   | "not_validated"
@@ -231,6 +241,30 @@ export type RepositoryValidationSnapshot = {
   repositorySnapshotDigest?: string;
   capturedAt: string;
   fingerprintedAt?: string;
+};
+
+export type PatchApplyEvidence = {
+  artifactDigest: string;
+  repositorySnapshot?: RepositoryValidationSnapshot;
+  gitStatus?: GitStatusSummary;
+  capturedAt: string;
+};
+
+export type PatchApplyAttempt = {
+  applyAttemptId: string;
+  repositoryId: string;
+  proposedChangeId: string;
+  approvalRequestId: string;
+  patchArtifactId: string;
+  backupId?: string;
+  status: PatchApplyAttemptStatus;
+  startedAt: string;
+  completedAt?: string;
+  sanitizedError?: string;
+  preApplyEvidence?: PatchApplyEvidence;
+  postApplyEvidence?: PatchApplyEvidence;
+  currentGitStatusChanged?: boolean;
+  message: string;
 };
 
 export type PatchValidationResult = {

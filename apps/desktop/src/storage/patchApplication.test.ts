@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyApprovedPatchArtifact,
   PatchApplicationError,
+  reconcileInterruptedPatchApplyAttempts,
 } from "./patchApplication";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -17,6 +18,7 @@ describe("applyApprovedPatchArtifact", () => {
   it("passes durable IDs and confirmation without accepting patch content", async () => {
     vi.mocked(invoke).mockResolvedValue({
       status: "applied",
+      applyAttemptId: "attempt-1",
       proposedChangeId: "proposal-1",
       patchArtifactId: "artifact-1",
       backupId: "backup-1",
@@ -67,6 +69,40 @@ describe("applyApprovedPatchArtifact", () => {
       "rawDiff",
     );
     expect(result.postApplyGitStatus.files[0].statusCode).toBe(" M");
+  });
+
+  it("loads reconciliation records without repository paths or patch input", async () => {
+    vi.mocked(invoke).mockResolvedValue([
+      {
+        applyAttemptId: "attempt-1",
+        repositoryId: "repo-1",
+        proposedChangeId: "proposal-1",
+        approvalRequestId: "approval-1",
+        patchArtifactId: "artifact-1",
+        backupId: "backup-1",
+        status: "needs_inspection",
+        startedAt: "1783532400",
+        completedAt: "1783532500",
+        sanitizedError: "Manual inspection is required.",
+        currentGitStatusChanged: true,
+        message: "Manual inspection is required.",
+      },
+    ]);
+
+    const attempts = await reconcileInterruptedPatchApplyAttempts();
+
+    expect(invoke).toHaveBeenCalledWith(
+      "reconcile_interrupted_patch_apply_attempts",
+    );
+    expect(attempts[0]).toEqual(
+      expect.objectContaining({
+        applyAttemptId: "attempt-1",
+        status: "needs_inspection",
+      }),
+    );
+    expect(JSON.stringify(vi.mocked(invoke).mock.calls[0])).not.toContain(
+      "rawDiff",
+    );
   });
 
   it("preserves typed native errors and sanitizes unknown failures", async () => {

@@ -108,6 +108,9 @@ export function evaluateApplyReadiness(
   context: ApplyReadinessContext,
 ): ApplyReadinessResult {
   const validationStatus = initialPatchValidationStatus(artifact);
+  const unresolvedApplyAttempt =
+    artifact.applyStatus === "interrupted" ||
+    artifact.applyStatus === "needs_inspection";
   const pathAllowed = hasAllowedRelativePath(artifact.filePath);
   const forbiddenPath = isForbiddenPath(artifact.filePath);
   const structurePassed =
@@ -161,14 +164,18 @@ export function evaluateApplyReadiness(
     gate(
       "apply_state",
       "Artifact has not already been applied",
-      artifact.applyStatus === "applied" || artifact.applyStatus === "applying"
+      artifact.applyStatus === "applied" ||
+        artifact.applyStatus === "applying" ||
+        unresolvedApplyAttempt
         ? "blocked"
         : "passed",
       artifact.applyStatus === "applied"
         ? "This artifact has already been applied to the working tree."
         : artifact.applyStatus === "applying"
           ? "A native application attempt is already in progress."
-          : "No completed or in-progress application attempt blocks this artifact.",
+          : unresolvedApplyAttempt
+            ? "An interrupted application attempt requires manual inspection before any future retry."
+            : "No completed or in-progress application attempt blocks this artifact.",
     ),
     gate(
       "approval",

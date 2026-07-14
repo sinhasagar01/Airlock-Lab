@@ -14,7 +14,10 @@ import { previewRepositoryFile } from "./storage/filePreview";
 import { scanRepositoryFileTree } from "./storage/fileTreeScanner";
 import { loadGitFileDiff, loadGitStatusSummary } from "./storage/gitChanges";
 import { dryRunGeneratedPatch } from "./storage/patchValidation";
-import { applyApprovedPatchArtifact } from "./storage/patchApplication";
+import {
+  applyApprovedPatchArtifact,
+  reconcileInterruptedPatchApplyAttempts,
+} from "./storage/patchApplication";
 import { loadRepositoryValidationSnapshot } from "./storage/repositoryValidationSnapshot";
 import {
   saveApprovalRequest,
@@ -459,6 +462,7 @@ vi.mock("./storage/patchApplication", async (importOriginal) => {
   return {
     ...actual,
     applyApprovedPatchArtifact: vi.fn(),
+    reconcileInterruptedPatchApplyAttempts: vi.fn(async () => []),
   };
 });
 
@@ -506,8 +510,20 @@ vi.mock("./storage/agentRunStore", () => ({
 
 vi.mock("./storage/proposedChangeStore", () => ({
   loadProposedChanges: vi.fn(async () => mockState.proposedChanges),
-  saveProposedChange: vi.fn(async () => undefined),
-  saveProposedChanges: vi.fn(async () => undefined),
+  saveProposedChange: vi.fn(async (change: PersistedProposedChange) => {
+    const existingIndex = mockState.proposedChanges.findIndex(
+      (candidate) => candidate.id === change.id,
+    );
+    mockState.proposedChanges =
+      existingIndex >= 0
+        ? mockState.proposedChanges.map((candidate) =>
+            candidate.id === change.id ? change : candidate,
+          )
+        : [change, ...mockState.proposedChanges];
+  }),
+  saveProposedChanges: vi.fn(async (changes: PersistedProposedChange[]) => {
+    mockState.proposedChanges = [...changes];
+  }),
 }));
 
 vi.mock("./storage/filePreview", () => ({
@@ -568,6 +584,8 @@ beforeEach(() => {
   vi.mocked(isTauriRuntime).mockReturnValue(true);
   vi.mocked(pickRepositoryDirectories).mockResolvedValue(null);
   vi.mocked(applyApprovedPatchArtifact).mockReset();
+  vi.mocked(reconcileInterruptedPatchApplyAttempts).mockReset();
+  vi.mocked(reconcileInterruptedPatchApplyAttempts).mockResolvedValue([]);
   vi.mocked(saveRepositories).mockResolvedValue(undefined);
   vi.mocked(loadOpenAiProviderConfiguration).mockResolvedValue({
     configured: false,
@@ -1393,6 +1411,66 @@ describe("App smoke tests", () => {
     ).toBeDisabled();
   });
 
+  it("shows reconciled interrupted attempts and keeps apply unavailable", async () => {
+    const interruptedChanges = defaultProposedChanges.map((change) =>
+      change.id === "proposal-mvp-shell"
+        ? {
+            ...change,
+            patchArtifacts: change.patchArtifacts.map((artifact) =>
+              artifact.id === "proposal-file-ai-patch-artifact"
+                ? { ...artifact, applyStatus: "needs_inspection" as const }
+                : artifact,
+            ),
+          }
+        : change,
+    );
+    vi.mocked(reconcileInterruptedPatchApplyAttempts).mockResolvedValue([
+      {
+        applyAttemptId: "apply-interrupted-1",
+        repositoryId: "repo-workspace",
+        proposedChangeId: "proposal-mvp-shell",
+        approvalRequestId: "approval-provider-rfc",
+        patchArtifactId: "proposal-file-ai-patch-artifact",
+        backupId: "backup-interrupted-1",
+        status: "needs_inspection",
+        startedAt: "1783532400",
+        completedAt: "1783532500",
+        sanitizedError: "Manual inspection is required.",
+        currentGitStatusChanged: true,
+        message:
+          "Repository evidence is ambiguous after an interrupted apply. Manual inspection is required.",
+      },
+    ]);
+    const { user } = renderApp({ proposedChanges: interruptedChanges });
+
+    await waitFor(() =>
+      expect(reconcileInterruptedPatchApplyAttempts).toHaveBeenCalledTimes(1),
+    );
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(
+      screen.getByRole("button", {
+        name: /generated packages\/ai\/src\/index\.ts/,
+      }),
+    );
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Manual inspection required",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("backup-interrupted-1")).toBeInTheDocument();
+    expect(screen.getByText("Changed after apply started")).toBeInTheDocument();
+    expect(
+      screen.getByText(/No patch was retried or rolled back/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Apply unavailable" }),
+    ).toBeDisabled();
+    await waitFor(() =>
+      expect(reconcileInterruptedPatchApplyAttempts).toHaveBeenCalledTimes(2),
+    );
+  });
+
   it("requires typed confirmation and applies only through the ID-only native boundary", async () => {
     const cleanGitStatus: GitStatusSummary = {
       ...defaultGitStatus,
@@ -1452,6 +1530,7 @@ describe("App smoke tests", () => {
 
           return {
             status: "applied",
+            applyAttemptId: "apply-artifact-1",
             proposedChangeId,
             patchArtifactId,
             backupId: "backup-1",

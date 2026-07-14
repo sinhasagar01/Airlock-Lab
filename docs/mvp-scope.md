@@ -103,6 +103,8 @@ The workflow ends at a review decision. No action applies a patch.
 - Frontend smoke and workflow tests
 - Provider-contract tests
 - Native path, Git parser, dry-run, fingerprint, and safety tests
+- Conservative interrupted-attempt reconciliation and a disposable-repository
+  packaged-app QA protocol
 - Production web build, native application build, and macOS ARM64 DMG packaging
 
 ## Explicitly Out Of Scope
@@ -137,6 +139,8 @@ The checkpoint is ready for a recorded demo when:
 - Approve/reject updates persist across restart.
 - One eligible artifact can be applied in a disposable repository only after
   exact confirmation, and it remains unstaged and uncommitted.
+- Unfinished attempts reconcile without automatic retry or rollback; ambiguous
+  evidence requires manual inspection and keeps Apply disabled.
 - Changes shows real read-only Git status and diff data.
 - Settings shows provider diagnostics and guarded maintenance actions.
 - Typecheck, lint, tests, native tests, build, and diff checks pass.
@@ -153,7 +157,8 @@ and broad platform support are not part of this release.
 ## Next Product Boundary
 
 The next major capability is Safe Patch Recovery and Application Hardening:
-packaged disposable-repository QA, crash reconciliation, cross-process locking,
-unexpected-path post-verification, and explicit user-driven rollback from the
-persisted backups. Multi-artifact application remains out of scope until it has
-its own atomicity design and integration coverage.
+execution and retention of packaged disposable-repository QA evidence,
+cross-process locking, Git child-process timeouts, unexpected-path
+post-verification, and explicit user-driven rollback from the persisted
+backups. Multi-artifact application remains out of scope until it has its own
+atomicity design and integration coverage.

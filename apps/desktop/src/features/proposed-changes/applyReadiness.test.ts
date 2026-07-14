@@ -109,6 +109,18 @@ describe("evaluateApplyReadiness", () => {
     expect(gateStatus(result, "apply_state")).toBe("blocked");
   });
 
+  it("blocks artifacts with unresolved interrupted apply evidence", () => {
+    for (const applyStatus of ["interrupted", "needs_inspection"] as const) {
+      const result = evaluateApplyReadiness(
+        generatedArtifact({ applyStatus }),
+        readyContext,
+      );
+
+      expect(result.canApply).toBe(false);
+      expect(gateStatus(result, "apply_state")).toBe("blocked");
+    }
+  });
+
   it("blocks an artifact while approval is pending", () => {
     const result = evaluateApplyReadiness(generatedArtifact(), {
       ...readyContext,

@@ -132,6 +132,12 @@ Approval review should distinguish three related concepts:
   protected request as the write and requires exact `APPLY PATCH` confirmation.
 - `Apply unavailable` remains disabled until every gate passes. Approval alone
   does not enable or trigger application.
+- Native startup and review entry reconcile attempts left in `pending` or
+  `applying`. Clear applied evidence repairs only durable status; no patch is
+  re-applied. Incomplete or conflicting evidence becomes `interrupted` or
+  `needs_inspection` and requires manual working-tree review.
+- Human approval remains valid review history after an interruption, but it
+  does not authorize an automatic retry or rollback.
 - Matching local Git diffs are read-only repository diffs for affected files
   that currently appear in Git status.
 - Generated patch diffs are persisted provider artifacts, separate from the

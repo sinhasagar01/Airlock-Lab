@@ -147,6 +147,22 @@ apply a patch. The native application command independently repeats every
 authoritative check described in the patch application safety design, requires
 typed confirmation, and applies only persisted patch content.
 
+## Interrupted Application State
+
+Native application records `pending` before an artifact enters `applying` and
+stores pre-apply snapshot, fingerprint, digest, Git-status, and backup evidence.
+On startup and when a user opens Agent Runs or Approval Review, a read-only
+native reconciliation command classifies unfinished records without retrying
+the patch.
+
+- Clear reverse-check and target-change evidence repairs state to `applied`.
+- A fully unchanged pre-apply state becomes `failed`.
+- Missing backup or pre-apply evidence becomes `interrupted`.
+- Conflicting or uncertain evidence becomes `needs_inspection`.
+
+Interrupted and needs-inspection artifacts show attempt and backup references
+and keep Apply disabled. There is no automatic retry or rollback action.
+
 ## Data Model
 
 The shared model lives in `packages/ai`:
@@ -162,6 +178,9 @@ The shared model lives in `packages/ai`:
 - `RepositoryValidationSnapshot`
 - `TargetFileFingerprint`
 - `PatchApplyStatus`
+- `PatchApplyAttemptStatus`
+- `PatchApplyAttempt`
+- `PatchApplyEvidence`
 
 Applied artifacts persist `appliedAt`, the `local_user` marker, backup ID,
 sanitized failure text when applicable, and a post-apply Git status summary.

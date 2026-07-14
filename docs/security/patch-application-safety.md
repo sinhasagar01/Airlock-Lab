@@ -7,10 +7,10 @@
   artifact
 - Implementation status: Enabled only after every native safety gate and exact
   typed confirmation pass
-- Recovery status: Pre-apply backups implemented; automated rollback remains
-  future work
-- Release classification: Local MVP capability; packaged security QA still
-  required before broader distribution
+- Recovery status: Pre-apply backups and conservative interrupted-attempt
+  reconciliation implemented; automated rollback remains future work
+- Release classification: Local MVP capability with a documented disposable
+  packaged-app QA protocol; execution evidence is still required per build
 - Last updated: 2026-07-15
 
 This document defines the implemented Safe Patch Application v1 boundary and
@@ -455,21 +455,30 @@ Automatic or user-triggered restore remains future work.
 
 ## Application Attempt And Audit State
 
-Persist an immutable attempt before invoking the mutating command:
+Persist a durable attempt before invoking the mutating command. Reconciliation
+may move an unfinished attempt into a conservative terminal classification,
+but never deletes or retries it:
 
 ```ts
 type PatchApplicationAttempt = {
-  id: string;
+  applyAttemptId: string;
   approvalRequestId: string;
   repositoryId: string;
   proposedChangeId: string;
   patchArtifactId: string;
   backupId: string;
-  status: "applying" | "applied" | "apply_failed";
+  status:
+    | "pending"
+    | "applying"
+    | "applied"
+    | "failed"
+    | "interrupted"
+    | "needs_inspection";
   startedAt: string;
   completedAt?: string;
-  errorCode?: PatchApplicationErrorCode;
-  resultingGitStatusDigest?: string;
+  sanitizedError?: string;
+  preApplyEvidence?: PatchApplyEvidence;
+  postApplyEvidence?: PatchApplyEvidence;
 };
 ```
 
@@ -480,6 +489,35 @@ file contents, provider credentials, raw Git stderr, or environment variables.
 `PersistedProposedChange.status` becomes `applied` only after Git exits
 successfully and refreshed Git status is available. The linked approval remains
 an immutable human decision in v1; artifact apply state prevents replay.
+
+## Interrupted Apply Reconciliation
+
+On native startup and when Agent Runs or Approval Review opens, the app asks a
+dedicated native command to reconcile attempts left in `pending` or `applying`.
+The command shares the process-local apply mutex and reloads the saved
+repository, proposal, artifact, approval link, backup, pre-apply evidence, and
+current Git state.
+
+Reconciliation is read-only with respect to the repository. It may use only
+fixed forward and reverse `git apply --check` probes with persisted patch bytes
+over stdin. It never applies, retries, restores, stages, commits, resets,
+checks out, or cleans.
+
+Classification is intentionally conservative:
+
+- `applied`: durable state already says applied, or target fingerprints changed,
+  the expected target is visible in Git status, forward check fails, and reverse
+  check passes. Native repairs only persisted status; it does not re-apply.
+- `failed`: target fingerprints and complete Git evidence still match the clean
+  pre-apply state, while the forward check still passes.
+- `interrupted`: required recovery evidence such as the backup or pre-apply
+  snapshot is incomplete.
+- `needs_inspection`: evidence conflicts, the repository is unavailable, or no
+  outcome can be proven safely.
+
+Agent Runs and Approval Review show attempt and backup IDs plus a Git-state
+comparison for unresolved outcomes. Apply remains disabled. There is no retry
+or rollback control.
 
 ## Post-Apply Verification
 
@@ -631,7 +669,10 @@ unbounded Git output.
 
 ### Packaged Desktop QA
 
-- Verify the complete flow in a disposable repository.
+- Follow
+  [`docs/qa/disposable-repository-apply-qa.md`](../qa/disposable-repository-apply-qa.md)
+  for every candidate build.
+- Verify the complete flow in a newly created disposable repository.
 - Verify no repository outside the selected root changes.
 - Verify no staged changes or commits are created.
 - Verify restart recovery from prepared, applying, failed, and applied attempt
@@ -643,8 +684,8 @@ unbounded Git output.
 Safe Patch Application v1 is implemented and covered by disposable-repository
 native tests. Before broader distribution, complete:
 
-- Packaged desktop QA against disposable create, modify, and delete fixtures.
-- Crash reconciliation for attempts left in `applying` state.
+- Execute and retain the packaged desktop QA evidence for each release build,
+  including create, modify, and delete fixtures as support expands.
 - Cross-process repository locking beyond the current in-process mutex.
 - Post-apply verification that no unexpected path changed.
 - Automated rollback design using the persisted backup records.

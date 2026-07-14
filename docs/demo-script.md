@@ -278,6 +278,11 @@ and Approval Review to show the same state on both surfaces.
 Say: "Runs, proposals, approvals, validation, and application results are
 durable local records. Restarting does not repeat the application."
 
+If the prepared demo database contains an interrupted attempt, show **Manual
+inspection required** in Agent Runs and Approval Review. Point out the attempt
+and backup IDs, confirm **Apply unavailable** remains disabled, and explain that
+reconciliation classified evidence without retrying or rolling back the patch.
+
 ## Recovery Notes
 
 - **Repository picker does not open:** use the packaged native app, not the web
@@ -350,3 +355,5 @@ Not implemented:
 5. Confirm the recording shows the persisted applied state after restart.
 6. Record the build date, platform, and provider path in the published caption.
 7. Link `docs/release-notes/mvp-demo-v1.md` from the recording description.
+8. Complete and retain the evidence in
+   `docs/qa/disposable-repository-apply-qa.md` for the recorded build.

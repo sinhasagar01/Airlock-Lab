@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Added durable `pending`/`applying` apply evidence and native reconciliation
+  for attempts interrupted before a terminal result was persisted.
+- Added conservative recovery classifications: clearly applied attempts repair
+  persisted state without reapplying, unchanged attempts become failed,
+  incomplete evidence becomes interrupted, and ambiguity requires inspection.
+- Added Agent Run and Approval Review recovery diagnostics with attempt ID,
+  backup ID, Git-state comparison, manual-inspection copy, and disabled Apply.
+- Added disposable-repository native coverage for applied, untouched,
+  incomplete, and ambiguous interruption states plus a packaged-app QA
+  checklist at `docs/qa/disposable-repository-apply-qa.md`.
 - Added Safe Patch Application v1 for one approved, generated, single-file
   artifact through the dedicated native `apply_approved_patch_artifact`
   command. React supplies durable IDs and exact `APPLY PATCH` confirmation, not
