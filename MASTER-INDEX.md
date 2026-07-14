@@ -142,6 +142,7 @@
 - [Screens](docs/screens/README.md)
 - [App Shell Screen](docs/screens/app-shell.md)
 - [Security](docs/security/README.md)
+- [Safe Patch Application Design](docs/security/patch-application-safety.md)
 - [Destructive Actions](docs/security/destructive-actions.md)
 - [Permissions](docs/security/permissions.md)
 - [Secrets](docs/security/secrets.md)
