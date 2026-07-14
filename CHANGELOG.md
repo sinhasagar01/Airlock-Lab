@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added a full native-app demo script with setup checks, presenter talk track,
+  the complete repository-to-approval walkthrough, recovery states, a
+  five-minute version, and explicit real/mock/not-implemented boundaries.
+- Rehearsed all six tabs in the rendered app and clarified demo-facing copy so
+  mock-provider runs, proposed plans, generated patch artifacts, local Git
+  diffs, and approval decisions cannot be mistaken for one another.
 - Added task-driven Agent Run creation through the mock provider, producing a
   structured review-only plan from selected repository metadata and indexed
   file facts.

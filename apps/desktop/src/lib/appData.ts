@@ -66,10 +66,10 @@ export const quickStartItems = [
     title: "Import repository",
   },
   {
-    description: "Execute a task with AI assistance",
+    description: "Create a review-only plan with Mock Provider",
     icon: "play" as IconName,
     tone: "context",
-    title: "Run agent",
+    title: "Start mock agent run",
   },
   {
     description: "Review and approve pending changes",
@@ -88,9 +88,9 @@ export const changeFeatureBlocks = [
   },
   {
     description:
-      "Generated patches will be grouped into readable diffs with file-level context.",
+      "Future generated patch artifacts stay separate from current local Git diffs.",
     icon: "changes" as IconName,
-    title: "Generated diffs",
+    title: "Generated artifacts",
   },
   {
     description:

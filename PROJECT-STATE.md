@@ -14,6 +14,13 @@ desktop test script also runs Rust native boundary tests for path safety, safe
 preview rejection, Git status parsing, Git diff parsing, non-Git handling, and
 unsafe Git diff path rejection.
 
+The current MVP workflow has a presenter-facing rehearsal script covering the
+native repository picker, indexing, Repository Intelligence, mock-provider run
+creation, proposal and approval linkage, generated artifact states, read-only
+local diffs, approval decisions, Changes, and guarded Settings maintenance.
+Entry-point copy explicitly labels the mock run and keeps generated artifacts
+separate from local Git diffs.
+
 `App.tsx` remains the top-level state orchestrator, but stable seed data,
 desktop shell components, UI-state helpers, generated patch artifact panels,
 local Git diff preview, and indexed-file browser/preview now live in focused

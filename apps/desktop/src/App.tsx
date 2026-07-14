@@ -464,18 +464,22 @@ export function App() {
       setSelectedAgentRunId(result.run.id);
       setAgentTask("");
 
-      const persistenceResults = await Promise.allSettled([
-        saveAgentRunRecord({
-          run: result.run,
-          plan: result.plan,
-          createdAt: result.createdAt,
-        }),
-        saveProposedChange(result.proposedChange),
-        saveApprovalRequest(result.approvalRequest),
-      ]);
-      const persistenceUnavailable = persistenceResults.some(
-        (persistenceResult) => persistenceResult.status === "rejected",
-      );
+      let persistenceUnavailable = storageStatus !== "ready";
+
+      if (!persistenceUnavailable) {
+        const persistenceResults = await Promise.allSettled([
+          saveAgentRunRecord({
+            run: result.run,
+            plan: result.plan,
+            createdAt: result.createdAt,
+          }),
+          saveProposedChange(result.proposedChange),
+          saveApprovalRequest(result.approvalRequest),
+        ]);
+        persistenceUnavailable = persistenceResults.some(
+          (persistenceResult) => persistenceResult.status === "rejected",
+        );
+      }
 
       setAgentExecutionState("success");
       setAgentExecutionMessage(
@@ -1085,7 +1089,7 @@ export function App() {
               </div>
 
               <p className="active-work-card__description">
-                Review proposed file edits before execution.
+                Review the proposed plan and artifact states before any execution.
               </p>
 
               <div className="active-work-card__divider" />
@@ -1179,7 +1183,7 @@ export function App() {
                           return;
                         }
 
-                        if (item.title === "Run agent") {
+                        if (item.title === "Start mock agent run") {
                           setActiveSection("agents");
                           return;
                         }
@@ -1445,7 +1449,7 @@ export function App() {
                         icon="play"
                         onClick={() => setActiveSection("agents")}
                       >
-                        Start agent run
+                        Start mock agent run
                       </SecondaryButton>
                       <SecondaryButton
                         icon="changes"
@@ -2498,9 +2502,9 @@ export function App() {
                     </StatusPill>
                   </div>
                   <p>
-                    This shows matching local Git diffs. Generated patch diffs
-                    will be attached after the proposed change model is
-                    connected to file writes.
+                    This shows matching local Git diffs. Generated patch
+                    artifacts remain separate and are not represented by these
+                    repository diffs.
                   </p>
                   <dl className="diff-review-summary">
                     <div>
@@ -2623,7 +2627,7 @@ export function App() {
                   icon="play"
                   onClick={() => setActiveSection("agents")}
                 >
-                  Start an agent run
+                  Start mock agent run
                 </SecondaryButton>
               </div>
             </article>

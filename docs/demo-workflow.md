@@ -5,6 +5,9 @@
 The MVP includes one connected safe demo workflow so the product can show the
 full review path before real agent execution or patch generation exists.
 
+For the presenter-facing rehearsal, click sequence, talk track, and recovery
+states, see [MVP Demo Script](./demo-script.md).
+
 The visible path is:
 
 1. Selected repository
@@ -29,6 +32,14 @@ The demo workflow is seeded from durable local models:
 Saved approval and proposed-change rows are preserved when present. Missing
 seed rows are merged back in so a fresh or older local database still has the
 connected demo path.
+
+## User-Created Mock Runs
+
+The Agent Runs task composer creates deterministic review-only runs through the
+Mock Provider. Each run stores a structured plan, proposed change, and pending
+approval. It does not call a real AI API, generate a patch, write files, or
+mutate Git. Candidate affected files come only from existing indexed facts, so
+the demo should index the selected repository before creating a run.
 
 ## What Is Real
 

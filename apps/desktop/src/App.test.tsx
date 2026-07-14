@@ -22,6 +22,7 @@ import {
   saveProposedChange,
   saveProposedChanges,
 } from "./storage/proposedChangeStore";
+import { loadSavedRepositories } from "./storage/repositoryStore";
 
 const mockState = vi.hoisted(() => {
   const repository: RepositorySummary = {
@@ -564,6 +565,25 @@ describe("App smoke tests", () => {
     ).toBeInTheDocument();
   });
 
+  it("opens the clearly labeled mock-provider composer from Overview", async () => {
+    const { user } = renderApp();
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: /Start mock agent run/,
+      }),
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "Start with Mock Provider" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Describe a task to create a review-only plan with the mock provider.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("renders repository intelligence from indexed file facts", async () => {
     const { user } = renderApp();
 
@@ -713,7 +733,7 @@ describe("App smoke tests", () => {
     expect(screen.getByText("Local repository diffs")).toBeInTheDocument();
     expect(
       screen.getByText(
-        /This shows matching local Git diffs. Generated patch diffs/,
+        /This shows matching local Git diffs. Generated patch artifacts remain separate/,
       ),
     ).toBeInTheDocument();
 
@@ -958,6 +978,29 @@ describe("App smoke tests", () => {
     ).toBe(true);
   });
 
+  it("keeps a mock run in session without invoking persistence in the web fallback", async () => {
+    vi.mocked(loadSavedRepositories).mockRejectedValueOnce(
+      new Error("native storage unavailable"),
+    );
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Agent task request" }),
+      "Document the repository entry points",
+    );
+    await user.click(screen.getByRole("button", { name: "Run mock agent" }));
+
+    expect(
+      await screen.findByText(
+        "Mock run created for this session. Native persistence is unavailable in the web preview.",
+      ),
+    ).toBeInTheDocument();
+    expect(saveAgentRunRecord).not.toHaveBeenCalled();
+    expect(saveProposedChange).not.toHaveBeenCalled();
+    expect(saveApprovalRequest).not.toHaveBeenCalled();
+  });
+
   it("switches the selected agent run from the run list", async () => {
     const { user } = renderApp();
 
@@ -1031,7 +1074,7 @@ describe("App smoke tests", () => {
     expect(screen.getByText("Local repository diffs")).toBeInTheDocument();
     expect(
       screen.getByText(
-        /This shows matching local Git diffs. Generated patch diffs/,
+        /This shows matching local Git diffs. Generated patch artifacts remain separate/,
       ),
     ).toBeInTheDocument();
     expect(screen.getByText("Local Diffs")).toBeInTheDocument();
