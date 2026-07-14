@@ -128,6 +128,26 @@ describe("applyApprovedPatchArtifact", () => {
       }),
     );
 
+    vi.mocked(invoke).mockRejectedValueOnce({
+      code: "git_apply_timeout",
+      message:
+        "Git patch application exceeded 15 seconds and was terminated. The backup was preserved and manual inspection is required.",
+    });
+    await expect(
+      applyApprovedPatchArtifact(
+        "repo-1",
+        "proposal-1",
+        "approval-1",
+        "artifact-1",
+        "APPLY PATCH",
+      ),
+    ).rejects.toEqual(
+      expect.objectContaining({
+        code: "git_apply_timeout",
+        message: expect.stringContaining("manual inspection is required"),
+      }),
+    );
+
     vi.mocked(invoke).mockRejectedValueOnce(
       new Error("private native path and stderr"),
     );

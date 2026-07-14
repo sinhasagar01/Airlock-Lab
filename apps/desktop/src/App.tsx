@@ -903,6 +903,17 @@ export function App() {
         // The native result remains visible even if the follow-up reload fails.
       }
     } catch (error) {
+      try {
+        const attempts = await reconcileInterruptedPatchApplyAttempts();
+        const savedChanges = await loadProposedChanges();
+        const hydratedChanges = await Promise.all(
+          savedChanges.map(ensureProposedPatchArtifactDigests),
+        );
+        setPatchApplyAttempts(attempts);
+        setPersistedProposedChanges(hydratedChanges);
+      } catch {
+        // Keep the sanitized native error visible if recovery state cannot reload.
+      }
       setPatchApplyFeedback({
         artifactId: artifact.id,
         status: "error",

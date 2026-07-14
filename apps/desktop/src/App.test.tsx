@@ -1579,6 +1579,9 @@ describe("App smoke tests", () => {
     await user.clear(confirmation);
     await user.type(confirmation, "APPLY PATCH");
     expect(confirmButton).toBeEnabled();
+    const reconciliationCallsBeforeFailure = vi.mocked(
+      reconcileInterruptedPatchApplyAttempts,
+    ).mock.calls.length;
     await user.click(confirmButton);
     expect(
       await screen.findByText(
@@ -1587,6 +1590,11 @@ describe("App smoke tests", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/private native path/)).not.toBeInTheDocument();
     expect(applyApprovedPatchArtifact).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(
+        vi.mocked(reconcileInterruptedPatchApplyAttempts).mock.calls.length,
+      ).toBeGreaterThan(reconciliationCallsBeforeFailure),
+    );
     await user.click(confirmButton);
 
     await waitFor(() =>

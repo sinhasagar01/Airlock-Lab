@@ -111,6 +111,54 @@ git rev-parse HEAD
 
 The index must remain empty and HEAD must remain unchanged.
 
+## Cross-Process Lock Check
+
+1. Launch two packaged app processes against the same disposable repository.
+2. Prepare one eligible approved artifact in the first process.
+3. Keep the first native apply request active using an instrumented test build
+   or the native lock test fixture.
+4. Attempt application from the second process or another review surface.
+5. Confirm the second request reports that another patch operation is active.
+6. Confirm only one active `patch_apply_locks` record exists for the repository.
+7. Let the first request finish and confirm its durable lock becomes
+   `released`.
+
+Crash/stale-lock variant:
+
+1. Terminate the instrumented holder after it records an active lock.
+2. Restart the app and run reconciliation.
+3. Confirm the abandoned durable lock becomes `stale` after the OS lock is
+   reacquired.
+4. Confirm any unfinished attempt is reconciled before another apply is
+   allowed.
+5. Confirm stale-lock recovery does not apply or reapply a patch.
+
+The automated equivalents are:
+
+```bash
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml repository_apply_lock
+```
+
+## Git Timeout Check
+
+Run the bounded child-process test:
+
+```bash
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml bounded_child_wait
+```
+
+Pass criteria:
+
+- The child exceeds the test deadline and is killed and reaped.
+- The test completes well before the child command's natural exit.
+- Production dry-run and apply commands retain their fixed 15-second deadline.
+- A dry-run timeout reports a sanitized failure without creating an apply
+  attempt.
+- An in-flight apply timeout preserves its backup, becomes `interrupted`, and
+  requires manual inspection.
+- No timeout path retries, rolls back, stages, commits, resets, checks out, or
+  cleans.
+
 ## Restart And Review Check
 
 For a test database containing an unresolved attempt:
@@ -129,6 +177,10 @@ For a test database containing an unresolved attempt:
 ## Negative Safety Checks
 
 - Browser/Vite preview cannot apply or reconcile native records.
+- Apply lock files live in app-local data, never inside the selected repository.
+- A live repository lock blocks concurrent apply and reconciliation rather than
+  misclassifying an active attempt.
+- A stale durable lock never grants permission to bypass an unresolved attempt.
 - A missing backup produces `interrupted`; it never falls through to apply.
 - Mismatched artifact digest or malformed durable records produce
   `needs_inspection`.

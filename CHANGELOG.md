@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Added repository-scoped cross-process apply locking through app-local OS
+  advisory lock files plus durable SQLite lock records containing operation,
+  process, artifact, timing, and stale-state metadata.
+- Added stale-lock recovery that marks abandoned records only after the OS lock
+  is reacquired, skips reconciliation for a live holder, and continues to block
+  application while any attempt remains unresolved.
+- Added a fixed 15-second timeout for Git patch dry-run, reconciliation probes,
+  and application. Timed-out children are killed and reaped; an in-flight apply
+  timeout preserves its backup and becomes an interrupted manual-inspection
+  state without retry or rollback.
+- Added native lock contention, stale-lock, unresolved-attempt, and child
+  termination tests plus expanded disposable-repository QA instructions.
 - Added durable `pending`/`applying` apply evidence and native reconciliation
   for attempts interrupted before a terminal result was persisted.
 - Added conservative recovery classifications: clearly applied attempts repair

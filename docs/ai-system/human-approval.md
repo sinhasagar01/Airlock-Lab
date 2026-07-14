@@ -136,6 +136,12 @@ Approval review should distinguish three related concepts:
   `applying`. Clear applied evidence repairs only durable status; no patch is
   re-applied. Incomplete or conflicting evidence becomes `interrupted` or
   `needs_inspection` and requires manual working-tree review.
+- Repository-scoped app-local OS locks and durable lock records prevent two
+  processes or review surfaces from applying concurrently. Stale-lock recovery
+  never grants permission to bypass an unresolved attempt.
+- Fixed Git dry-run and application children terminate after 15 seconds. A
+  timeout after application starts is durable `interrupted` evidence, not an
+  approval failure and not permission to retry automatically.
 - Human approval remains valid review history after an interruption, but it
   does not authorize an automatic retry or rollback.
 - Matching local Git diffs are read-only repository diffs for affected files

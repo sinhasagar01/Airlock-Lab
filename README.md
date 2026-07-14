@@ -6,8 +6,8 @@ reviewing proposed changes behind explicit human approval and read-only safety
 checks.
 
 This repository is at the **MVP Demo v1** checkpoint. It is suitable for an
-internal recorded demo and engineering review. Patch application is
-intentionally not implemented.
+internal recorded demo and engineering review. Safe Patch Application v1 is
+implemented for one approved generated artifact behind native safety gates.
 
 ## MVP Workflow
 
@@ -19,7 +19,9 @@ Select repository
   -> review the proposed plan and patch artifacts
   -> validate structure and run read-only git apply --check
   -> review approval and matching local Git diffs
-  -> approve or reject without applying files
+  -> approve or reject
+  -> optionally apply one eligible artifact with exact typed confirmation
+  -> review the resulting unstaged local Git change
 ```
 
 ## Current Capabilities
@@ -52,6 +54,10 @@ dedicated native command.
 - React sends durable IDs only; native code reloads persisted patch content and
   runs fixed `git apply --whitespace=nowarn -` over stdin.
 - A bounded backup is persisted before the working-tree write.
+- A repository-scoped app-local OS lock and durable SQLite lock record prevent
+  concurrent application across windows and processes.
+- Fixed Git dry-run and apply children are terminated after 15 seconds; an
+  in-flight timeout becomes an interrupted attempt requiring inspection.
 - Interrupted native attempts are reconciled conservatively on startup and
   review entry; ambiguous state requires manual inspection and is never retried.
 - No Git add, commit, reset, checkout, clean, or staging operation is exposed.
@@ -59,7 +65,7 @@ dedicated native command.
 - Generated patch artifacts and local Git diffs are displayed as separate data.
 
 See [Safe Patch Application Design](docs/security/patch-application-safety.md)
-for the implemented boundary and remaining rollback/concurrency gaps. Candidate
+for the implemented boundary and remaining rollback/recovery gaps. Candidate
 builds should follow the
 [disposable repository apply QA](docs/qa/disposable-repository-apply-qa.md).
 
@@ -154,8 +160,10 @@ docs/               Product, architecture, safety, engineering, and demo docs
 
 ## Known MVP Limitations
 
-- Patch application and repository writes are not implemented.
-- Approval does not consume or apply an artifact.
+- Application is limited to one eligible single-file text artifact; rollback
+  and multi-artifact transactions are not implemented.
+- Approval alone does not apply an artifact; native revalidation and exact
+  typed confirmation remain mandatory.
 - OpenAI requires runtime environment configuration and network access.
 - Native packaging is currently verified for macOS ARM64.
 - Team collaboration, remote repositories, deployment automation, and

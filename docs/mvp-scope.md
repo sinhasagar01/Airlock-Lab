@@ -158,7 +158,7 @@ and broad platform support are not part of this release.
 
 The next major capability is Safe Patch Recovery and Application Hardening:
 execution and retention of packaged disposable-repository QA evidence,
-cross-process locking, Git child-process timeouts, unexpected-path
-post-verification, and explicit user-driven rollback from the persisted
-backups. Multi-artifact application remains out of scope until it has its own
-atomicity design and integration coverage.
+unexpected-path post-verification, and an explicit user-driven rollback design
+using persisted backups. Repository-scoped cross-process locking and bounded
+Git child-process timeouts are implemented. Multi-artifact application remains
+out of scope until it has its own atomicity design and integration coverage.

@@ -299,6 +299,13 @@ reconciliation classified evidence without retrying or rolling back the patch.
 - **Dry-run unavailable after structure validation:** select the proposal's
   linked repository. The app intentionally refuses to dry-run an artifact
   against a different saved repository.
+- **Another patch operation is active:** wait for the first native request to
+  finish. The app-local repository lock prevents concurrent application across
+  windows and processes; do not bypass it.
+- **Git operation timed out:** explain that the fixed child was terminated at
+  15 seconds. A dry-run timeout writes nothing; an in-flight apply timeout
+  preserves its backup and requires manual inspection without retry or
+  rollback.
 - **Non-Git repository:** Repository Intelligence still shows indexed facts;
   Changes should report Git status as unavailable without attempting writes.
 

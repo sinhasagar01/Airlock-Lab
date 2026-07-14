@@ -153,7 +153,10 @@ Native application records `pending` before an artifact enters `applying` and
 stores pre-apply snapshot, fingerprint, digest, Git-status, and backup evidence.
 On startup and when a user opens Agent Runs or Approval Review, a read-only
 native reconciliation command classifies unfinished records without retrying
-the patch.
+the patch. Application is protected by a repository-scoped OS advisory lock in
+app-local data plus a durable SQLite lock audit record. Reconciliation skips a
+repository held by a live process and marks an abandoned lock record stale only
+after reacquiring the OS lock.
 
 - Clear reverse-check and target-change evidence repairs state to `applied`.
 - A fully unchanged pre-apply state becomes `failed`.
@@ -161,7 +164,10 @@ the patch.
 - Conflicting or uncertain evidence becomes `needs_inspection`.
 
 Interrupted and needs-inspection artifacts show attempt and backup references
-and keep Apply disabled. There is no automatic retry or rollback action.
+and keep Apply disabled. Fixed Git dry-run, reconciliation probes, and apply
+children have a 15-second deadline. An in-flight timeout preserves the backup,
+records `interrupted`, and requires manual inspection. There is no automatic
+retry or rollback action.
 
 ## Data Model
 

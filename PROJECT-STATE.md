@@ -80,9 +80,15 @@ Runs/Approval Review surfaces reconcile attempts left in `pending` or
 `applying`: clearly applied state is repaired without reapplying, unchanged
 state becomes failed, incomplete evidence becomes interrupted, and ambiguity
 becomes needs inspection. Successful application leaves changes unstaged and
-uncommitted. Backup rollback, multi-artifact transactions, cross-process
-locking, child-process timeouts, and retained packaged QA evidence remain
-future work.
+uncommitted. Apply now holds a repository-scoped OS advisory lock under the
+app-local data directory and records its lock ID, process, operation, artifact,
+start time, and stale deadline in SQLite. Duplicate windows and processes fail
+closed; abandoned durable locks become stale only after the OS lock is safely
+reacquired. Fixed Git dry-run, reconciliation probes, and application children
+have a 15-second deadline and are killed and reaped on timeout. An in-flight
+apply timeout is persisted as interrupted with its backup and available Git
+evidence. Backup rollback, multi-artifact transactions, unexpected-path
+post-verification, and retained packaged QA evidence remain future work.
 
 Settings now reports whether OpenAI is configured through the native process
 and can run a read-only connection test for the configured model. The test sends
@@ -120,9 +126,9 @@ The release decision is deliberately split:
   authoritative native lookup, same-request revalidation, backup persistence,
   typed confirmation, and post-apply Git status.
 - Recovery and broader distribution: interrupted-attempt reconciliation and a
-  disposable-repository QA protocol are implemented, but release-specific QA
-  evidence, cross-process locking, child-process timeouts, and rollback remain
-  incomplete.
+  disposable-repository QA protocol are implemented, including cross-process
+  locking and bounded Git child-process timeouts. Release-specific QA evidence,
+  unexpected-path post-verification, and rollback remain incomplete.
 
 ## Current UI Direction
 

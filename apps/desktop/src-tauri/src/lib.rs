@@ -1,8 +1,9 @@
 use std::{
     env, fs,
-    io::Write,
+    fs::OpenOptions,
+    io::{Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -10,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{Row, SqlitePool};
+use tauri::Manager;
 use tauri_plugin_sql::{DbInstances, DbPool};
 use tokio::sync::Mutex;
 
@@ -26,6 +28,9 @@ const MAX_FINGERPRINT_BYTES: u64 = 256 * 1024;
 const MAX_FINGERPRINT_TARGETS: usize = 64;
 const WORKSPACE_DATABASE_URL: &str = "sqlite:workspace.db";
 const APPLY_CONFIRMATION_PHRASE: &str = "APPLY PATCH";
+const GIT_APPLY_TIMEOUT: Duration = Duration::from_secs(15);
+const GIT_CHILD_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const APPLY_LOCK_STALE_AFTER_SECONDS: u64 = 5 * 60;
 const DEFAULT_OPENAI_MODEL: &str = "gpt-5.6-luna";
 const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 const OPENAI_MODELS_URL: &str = "https://api.openai.com/v1/models";
@@ -43,6 +48,27 @@ const IGNORED_DIRECTORIES: &[&str] = &[
 ];
 
 static PATCH_APPLY_LOCK: Mutex<()> = Mutex::const_new(());
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FixedGitApplyOutcome {
+    Succeeded,
+    Rejected,
+    TimedOut,
+    Unavailable,
+    Interrupted,
+}
+
+#[derive(Debug)]
+struct RepositoryApplyLock {
+    file: fs::File,
+    lock_id: Option<String>,
+}
+
+impl Drop for RepositoryApplyLock {
+    fn drop(&mut self) {
+        let _ = fs::File::unlock(&self.file);
+    }
+}
 
 #[derive(Serialize)]
 struct RepositoryGitMetadata {
@@ -355,10 +381,14 @@ fn modified_at_iso(metadata: &fs::Metadata) -> Option<String> {
 }
 
 fn now_unix_seconds() -> String {
+    unix_seconds().to_string()
+}
+
+fn unix_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs().to_string())
-        .unwrap_or_else(|_| "0".to_string())
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
 }
 
 fn empty_git_status_summary(
@@ -814,6 +844,32 @@ fn apply_patch_error(code: &str, message: &str) -> ApplyPatchError {
     }
 }
 
+fn apply_failure_details(
+    outcome: FixedGitApplyOutcome,
+) -> Option<(&'static str, &'static str, &'static str, &'static str)> {
+    match outcome {
+        FixedGitApplyOutcome::Succeeded => None,
+        FixedGitApplyOutcome::TimedOut => Some((
+            "interrupted",
+            "interrupted",
+            "git_apply_timeout",
+            "Git patch application exceeded 15 seconds and was terminated. The backup was preserved and manual inspection is required.",
+        )),
+        FixedGitApplyOutcome::Interrupted => Some((
+            "interrupted",
+            "interrupted",
+            "git_apply_interrupted",
+            "Git patch application did not report a reliable terminal result. The backup was preserved and manual inspection is required.",
+        )),
+        FixedGitApplyOutcome::Rejected | FixedGitApplyOutcome::Unavailable => Some((
+            "failed",
+            "apply_failed",
+            "git_apply_failed",
+            "Git could not apply the approved patch. The working tree should be reviewed before retrying.",
+        )),
+    }
+}
+
 fn normalized_patch_text(raw_diff: &str) -> String {
     let normalized = raw_diff.replace("\r\n", "\n").replace('\r', "\n");
     if normalized.ends_with('\n') {
@@ -823,11 +879,38 @@ fn normalized_patch_text(raw_diff: &str) -> String {
     }
 }
 
-fn run_fixed_git_apply(repository_path: &str, patch: &str, check_only: bool) -> Result<bool, ()> {
+fn wait_for_child_with_timeout(child: &mut Child, timeout: Duration) -> FixedGitApplyOutcome {
+    let started_at = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return FixedGitApplyOutcome::Succeeded,
+            Ok(Some(_)) => return FixedGitApplyOutcome::Rejected,
+            Ok(None) if started_at.elapsed() < timeout => {
+                std::thread::sleep(GIT_CHILD_POLL_INTERVAL);
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return FixedGitApplyOutcome::TimedOut;
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return FixedGitApplyOutcome::Interrupted;
+            }
+        }
+    }
+}
+
+fn run_fixed_git_apply(
+    repository_path: &str,
+    patch: &str,
+    check_only: bool,
+) -> FixedGitApplyOutcome {
     run_fixed_git_apply_command(repository_path, patch, check_only, false)
 }
 
-fn run_fixed_git_reverse_check(repository_path: &str, patch: &str) -> Result<bool, ()> {
+fn run_fixed_git_reverse_check(repository_path: &str, patch: &str) -> FixedGitApplyOutcome {
     run_fixed_git_apply_command(repository_path, patch, true, true)
 }
 
@@ -836,7 +919,7 @@ fn run_fixed_git_apply_command(
     patch: &str,
     check_only: bool,
     reverse: bool,
-) -> Result<bool, ()> {
+) -> FixedGitApplyOutcome {
     let mut command = Command::new("git");
     command.arg("apply");
     if check_only {
@@ -845,23 +928,32 @@ fn run_fixed_git_apply_command(
     if reverse {
         command.arg("--reverse");
     }
-    let mut child = command
+    let mut child = match command
         .args(["--whitespace=nowarn", "-"])
         .current_dir(repository_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|_| ())?;
+    {
+        Ok(child) => child,
+        Err(_) => return FixedGitApplyOutcome::Unavailable,
+    };
+    let Some(mut stdin) = child.stdin.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return FixedGitApplyOutcome::Unavailable;
+    };
+    let patch_bytes = patch.as_bytes().to_vec();
+    let writer = std::thread::spawn(move || stdin.write_all(&patch_bytes));
+    let outcome = wait_for_child_with_timeout(&mut child, GIT_APPLY_TIMEOUT);
+    let write_succeeded = writer.join().is_ok_and(|result| result.is_ok());
 
-    child
-        .stdin
-        .take()
-        .ok_or(())?
-        .write_all(patch.as_bytes())
-        .map_err(|_| ())?;
-
-    child.wait().map(|status| status.success()).map_err(|_| ())
+    if outcome == FixedGitApplyOutcome::Succeeded && !write_succeeded {
+        FixedGitApplyOutcome::Interrupted
+    } else {
+        outcome
+    }
 }
 
 fn git_status_summary_json(summary: &GitStatusSummary) -> Value {
@@ -997,6 +1089,28 @@ async fn ensure_patch_apply_tables(pool: &SqlitePool) -> Result<(), ApplyPatchEr
             "Native apply audit storage is unavailable. The patch was not applied.",
         )
     })?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS patch_apply_locks (id TEXT PRIMARY KEY, repository_id TEXT NOT NULL, process_id INTEGER NOT NULL, operation TEXT NOT NULL, patch_artifact_id TEXT, status TEXT NOT NULL, started_at TEXT NOT NULL, stale_after INTEGER NOT NULL, completed_at TEXT)",
+    )
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "Native apply lock storage is unavailable. The patch was not applied.",
+        )
+    })?;
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_patch_apply_locks_active_repository ON patch_apply_locks(repository_id) WHERE status = 'active'",
+    )
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "Native apply lock storage could not be initialized safely.",
+        )
+    })?;
 
     let table_columns = sqlx::query("PRAGMA table_info(patch_apply_attempts)")
         .fetch_all(pool)
@@ -1045,6 +1159,205 @@ async fn ensure_patch_apply_tables(pool: &SqlitePool) -> Result<(), ApplyPatchEr
         )
     })?;
     Ok(())
+}
+
+fn apply_lock_directory(app_handle: &tauri::AppHandle) -> Result<PathBuf, ApplyPatchError> {
+    app_handle
+        .path()
+        .app_local_data_dir()
+        .map(|path| path.join("apply-locks"))
+        .map_err(|_| {
+            apply_patch_error(
+                "apply_lock_unavailable",
+                "The app-local apply lock directory is unavailable. The patch was not applied.",
+            )
+        })
+}
+
+fn try_repository_file_lock(
+    lock_directory: &Path,
+    repository_id: &str,
+) -> Result<Option<RepositoryApplyLock>, ApplyPatchError> {
+    fs::create_dir_all(lock_directory).map_err(|_| {
+        apply_patch_error(
+            "apply_lock_unavailable",
+            "The app-local apply lock directory could not be prepared. The patch was not applied.",
+        )
+    })?;
+    let repository_digest = sha256_hex(repository_id.as_bytes());
+    let lock_path = lock_directory.join(format!("{repository_digest}.lock"));
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .map_err(|_| {
+            apply_patch_error(
+                "apply_lock_unavailable",
+                "The repository apply lock could not be opened. The patch was not applied.",
+            )
+        })?;
+
+    match file.try_lock() {
+        Ok(()) => Ok(Some(RepositoryApplyLock {
+            file,
+            lock_id: None,
+        })),
+        Err(fs::TryLockError::WouldBlock) => Ok(None),
+        Err(_) => Err(apply_patch_error(
+            "apply_lock_unavailable",
+            "The repository apply lock could not be verified. The patch was not applied.",
+        )),
+    }
+}
+
+async fn mark_abandoned_apply_locks_stale(
+    pool: &SqlitePool,
+    repository_id: &str,
+) -> Result<(), ApplyPatchError> {
+    sqlx::query(
+        "UPDATE patch_apply_locks SET status = 'stale', completed_at = ? WHERE repository_id = ? AND status = 'active'",
+    )
+    .bind(now_unix_seconds())
+    .bind(repository_id)
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "An abandoned apply lock could not be marked stale safely.",
+        )
+    })?;
+    Ok(())
+}
+
+async fn release_repository_apply_lock(
+    pool: &SqlitePool,
+    lock: &RepositoryApplyLock,
+) -> Result<(), ApplyPatchError> {
+    let Some(lock_id) = lock.lock_id.as_deref() else {
+        return Ok(());
+    };
+    sqlx::query(
+        "UPDATE patch_apply_locks SET status = 'released', completed_at = ? WHERE id = ? AND status = 'active'",
+    )
+    .bind(now_unix_seconds())
+    .bind(lock_id)
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "The durable apply lock could not be released cleanly.",
+        )
+    })?;
+    Ok(())
+}
+
+async fn acquire_repository_apply_lock(
+    pool: &SqlitePool,
+    lock_directory: &Path,
+    repository_id: &str,
+    patch_artifact_id: &str,
+) -> Result<RepositoryApplyLock, ApplyPatchError> {
+    let mut lock = try_repository_file_lock(lock_directory, repository_id)?.ok_or_else(|| {
+        apply_patch_error(
+            "apply_locked",
+            "Another patch operation is already active for this repository. No patch was applied.",
+        )
+    })?;
+
+    mark_abandoned_apply_locks_stale(pool, repository_id).await?;
+    let unresolved_attempt = sqlx::query(
+        "SELECT id FROM patch_apply_attempts WHERE repository_id = ? AND status IN ('pending', 'applying', 'interrupted', 'needs_inspection') LIMIT 1",
+    )
+    .bind(repository_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "Existing apply attempts could not be inspected safely.",
+        )
+    })?;
+    if unresolved_attempt.is_some() {
+        return Err(apply_patch_error(
+            "unresolved_apply_attempt",
+            "An unresolved patch attempt requires inspection before another patch can be applied.",
+        ));
+    }
+
+    let started_at = now_unix_seconds();
+    let started_at_seconds = unix_seconds();
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let lock_id = format!(
+        "apply-lock-{}-{unique_suffix}",
+        &sha256_hex(repository_id.as_bytes())[..12]
+    );
+    let stale_after = started_at_seconds.saturating_add(APPLY_LOCK_STALE_AFTER_SECONDS);
+    let process_id = std::process::id();
+    let metadata = json!({
+        "lockId": &lock_id,
+        "repositoryId": repository_id,
+        "processId": process_id,
+        "startedAt": &started_at,
+        "operation": "apply_patch",
+        "patchArtifactId": patch_artifact_id,
+        "staleAfter": stale_after,
+    });
+    let metadata_bytes = serde_json::to_vec(&metadata).map_err(|_| {
+        apply_patch_error(
+            "apply_lock_unavailable",
+            "The repository apply lock metadata could not be prepared.",
+        )
+    })?;
+    lock.file.set_len(0).map_err(|_| {
+        apply_patch_error(
+            "apply_lock_unavailable",
+            "The repository apply lock metadata could not be reset.",
+        )
+    })?;
+    lock.file.seek(SeekFrom::Start(0)).map_err(|_| {
+        apply_patch_error(
+            "apply_lock_unavailable",
+            "The repository apply lock metadata could not be written.",
+        )
+    })?;
+    lock.file.write_all(&metadata_bytes).map_err(|_| {
+        apply_patch_error(
+            "apply_lock_unavailable",
+            "The repository apply lock metadata could not be written.",
+        )
+    })?;
+    lock.file.sync_data().map_err(|_| {
+        apply_patch_error(
+            "apply_lock_unavailable",
+            "The repository apply lock metadata could not be persisted.",
+        )
+    })?;
+
+    sqlx::query(
+        "INSERT INTO patch_apply_locks (id, repository_id, process_id, operation, patch_artifact_id, status, started_at, stale_after) VALUES (?, ?, ?, 'apply_patch', ?, 'active', ?, ?)",
+    )
+    .bind(&lock_id)
+    .bind(repository_id)
+    .bind(i64::from(process_id))
+    .bind(patch_artifact_id)
+    .bind(&started_at)
+    .bind(stale_after as i64)
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "The durable repository apply lock could not be recorded.",
+        )
+    })?;
+    lock.lock_id = Some(lock_id);
+    Ok(lock)
 }
 
 fn create_apply_backup(
@@ -2104,9 +2417,18 @@ fn load_git_file_diff(
 
 async fn apply_approved_patch_artifact_with_pool(
     pool: &SqlitePool,
+    lock_directory: &Path,
     input: ApplyApprovedPatchArtifactInput,
 ) -> Result<ApplyApprovedPatchArtifactResult, ApplyPatchError> {
+    #[cfg(test)]
     let _apply_guard = PATCH_APPLY_LOCK.lock().await;
+    #[cfg(not(test))]
+    let _apply_guard = PATCH_APPLY_LOCK.try_lock().map_err(|_| {
+        apply_patch_error(
+            "apply_locked",
+            "Another patch operation is already active in this app process. No patch was applied.",
+        )
+    })?;
 
     if input.confirmation_phrase != APPLY_CONFIRMATION_PHRASE {
         return Err(apply_patch_error(
@@ -2130,7 +2452,22 @@ async fn apply_approved_patch_artifact_with_pool(
     }
 
     ensure_patch_apply_tables(pool).await?;
+    let lock = acquire_repository_apply_lock(
+        pool,
+        lock_directory,
+        &input.repository_id,
+        &input.patch_artifact_id,
+    )
+    .await?;
+    let result = apply_approved_patch_artifact_under_lock(pool, input).await;
+    let _ = release_repository_apply_lock(pool, &lock).await;
+    result
+}
 
+async fn apply_approved_patch_artifact_under_lock(
+    pool: &SqlitePool,
+    input: ApplyApprovedPatchArtifactInput,
+) -> Result<ApplyApprovedPatchArtifactResult, ApplyPatchError> {
     let repository_row =
         sqlx::query("SELECT path, is_git_repository FROM repositories WHERE id = ? LIMIT 1")
             .bind(&input.repository_id)
@@ -2484,17 +2821,23 @@ async fn apply_approved_patch_artifact_with_pool(
         })?;
 
     match run_fixed_git_apply(&canonical_repository_path, &patch_for_git, true) {
-        Ok(true) => {}
-        Ok(false) => {
+        FixedGitApplyOutcome::Succeeded => {}
+        FixedGitApplyOutcome::Rejected => {
             return Err(apply_patch_error(
                 "dry_run_failed",
                 "The final native dry-run failed. The patch was not applied.",
             ));
         }
-        Err(()) => {
+        FixedGitApplyOutcome::TimedOut => {
+            return Err(apply_patch_error(
+                "dry_run_timeout",
+                "The final native dry-run exceeded 15 seconds and was terminated. The patch was not applied.",
+            ));
+        }
+        FixedGitApplyOutcome::Unavailable | FixedGitApplyOutcome::Interrupted => {
             return Err(apply_patch_error(
                 "git_unavailable",
-                "The final native dry-run could not start. The patch was not applied.",
+                "The final native dry-run could not complete safely. The patch was not applied.",
             ));
         }
     }
@@ -2645,19 +2988,35 @@ async fn apply_approved_patch_artifact_with_pool(
         ));
     }
 
-    let apply_succeeded =
-        run_fixed_git_apply(&canonical_repository_path, &patch_for_git, false).unwrap_or(false);
-    if !apply_succeeded {
-        let failure_message = "Git could not apply the approved patch. The working tree should be reviewed before retrying.";
+    let apply_outcome = run_fixed_git_apply(&canonical_repository_path, &patch_for_git, false);
+    let apply_failure = apply_failure_details(apply_outcome);
+    if let Some((attempt_status, artifact_status, error_code, failure_message)) = apply_failure {
         let completed_at = now_unix_seconds();
+        let failed_git_status = load_git_status_summary(
+            input.repository_id.clone(),
+            canonical_repository_path.clone(),
+        );
+        let failed_snapshot = capture_repository_validation_snapshot(
+            &input.repository_id,
+            &repository_root,
+            &canonical_repository_path,
+            &computed_artifact_digest,
+            &relevant_file_paths,
+        )
+        .ok();
+        let failed_evidence = patch_apply_evidence(
+            &computed_artifact_digest,
+            failed_snapshot,
+            Some(&failed_git_status),
+        );
         let _ = set_artifact_apply_metadata(
             &mut artifacts,
             &input.patch_artifact_id,
-            "apply_failed",
+            artifact_status,
             Some(&backup_id),
             None,
             Some(failure_message),
-            None,
+            Some(&failed_git_status),
         );
         if let Ok(failed_artifacts_json) = serde_json::to_string(&artifacts) {
             let _ = sqlx::query(
@@ -2669,15 +3028,22 @@ async fn apply_approved_patch_artifact_with_pool(
             .execute(pool)
             .await;
         }
+        let post_apply_evidence_json = serde_json::to_string(&failed_evidence).ok();
+        let post_apply_status_json =
+            serde_json::to_string(&git_status_summary_json(&failed_git_status)).ok();
         let _ = sqlx::query(
-            "UPDATE patch_apply_attempts SET status = 'failed', error_code = 'git_apply_failed', sanitized_error = ?, completed_at = ? WHERE id = ?",
+            "UPDATE patch_apply_attempts SET status = ?, error_code = ?, sanitized_error = ?, completed_at = ?, post_apply_evidence_json = ?, post_apply_git_status_json = ? WHERE id = ?",
         )
+        .bind(attempt_status)
+        .bind(error_code)
         .bind(failure_message)
         .bind(&completed_at)
+        .bind(post_apply_evidence_json)
+        .bind(post_apply_status_json)
         .bind(&attempt_id)
         .execute(pool)
         .await;
-        return Err(apply_patch_error("git_apply_failed", failure_message));
+        return Err(apply_patch_error(error_code, failure_message));
     }
 
     let applied_at = now_unix_seconds();
@@ -3224,9 +3590,22 @@ async fn classify_unfinished_apply_attempt(
     });
     let git_status_changed = git_status_changed_from_evidence(&pre_evidence, &current_status);
     let patch_for_git = normalized_patch_text(raw_diff);
-    let forward_check = run_fixed_git_apply(&canonical_repository_path, &patch_for_git, true).ok();
+    let forward_check = match run_fixed_git_apply(&canonical_repository_path, &patch_for_git, true)
+    {
+        FixedGitApplyOutcome::Succeeded => Some(true),
+        FixedGitApplyOutcome::Rejected => Some(false),
+        FixedGitApplyOutcome::TimedOut
+        | FixedGitApplyOutcome::Unavailable
+        | FixedGitApplyOutcome::Interrupted => None,
+    };
     let reverse_check =
-        run_fixed_git_reverse_check(&canonical_repository_path, &patch_for_git).ok();
+        match run_fixed_git_reverse_check(&canonical_repository_path, &patch_for_git) {
+            FixedGitApplyOutcome::Succeeded => Some(true),
+            FixedGitApplyOutcome::Rejected => Some(false),
+            FixedGitApplyOutcome::TimedOut
+            | FixedGitApplyOutcome::Unavailable
+            | FixedGitApplyOutcome::Interrupted => None,
+        };
     let target_changed = current_status
         .files
         .iter()
@@ -3327,9 +3706,28 @@ async fn load_patch_apply_attempt_records(
 
 async fn reconcile_interrupted_patch_apply_attempts_with_pool(
     pool: &SqlitePool,
+    lock_directory: &Path,
 ) -> Result<Vec<PatchApplyAttemptRecord>, ApplyPatchError> {
     let _apply_guard = PATCH_APPLY_LOCK.lock().await;
     ensure_patch_apply_tables(pool).await?;
+    let active_lock_rows =
+        sqlx::query("SELECT DISTINCT repository_id FROM patch_apply_locks WHERE status = 'active'")
+            .fetch_all(pool)
+            .await
+            .map_err(|_| {
+                apply_patch_error(
+                    "storage_unavailable",
+                    "Active apply locks could not be inspected safely.",
+                )
+            })?;
+    for row in active_lock_rows {
+        let repository_id: String = row.try_get("repository_id").unwrap_or_default();
+        let Some(_repository_lock) = try_repository_file_lock(lock_directory, &repository_id)?
+        else {
+            continue;
+        };
+        mark_abandoned_apply_locks_stale(pool, &repository_id).await?;
+    }
     let unfinished_rows = sqlx::query(
         "SELECT id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, backup_id, pre_apply_evidence_json FROM patch_apply_attempts WHERE status IN ('pending', 'applying') ORDER BY started_at ASC",
     )
@@ -3342,6 +3740,12 @@ async fn reconcile_interrupted_patch_apply_attempts_with_pool(
         )
     })?;
     for row in &unfinished_rows {
+        let repository_id: String = row.try_get("repository_id").unwrap_or_default();
+        let Some(_repository_lock) = try_repository_file_lock(lock_directory, &repository_id)?
+        else {
+            continue;
+        };
+        mark_abandoned_apply_locks_stale(pool, &repository_id).await?;
         classify_unfinished_apply_attempt(pool, row).await?;
     }
     load_patch_apply_attempt_records(pool).await
@@ -3349,6 +3753,7 @@ async fn reconcile_interrupted_patch_apply_attempts_with_pool(
 
 #[tauri::command]
 async fn apply_approved_patch_artifact(
+    app_handle: tauri::AppHandle,
     database_instances: tauri::State<'_, DbInstances>,
     input: ApplyApprovedPatchArtifactInput,
 ) -> Result<ApplyApprovedPatchArtifactResult, ApplyPatchError> {
@@ -3364,11 +3769,13 @@ async fn apply_approved_patch_artifact(
     };
     drop(instances);
 
-    apply_approved_patch_artifact_with_pool(&pool, input).await
+    let lock_directory = apply_lock_directory(&app_handle)?;
+    apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input).await
 }
 
 #[tauri::command]
 async fn reconcile_interrupted_patch_apply_attempts(
+    app_handle: tauri::AppHandle,
     database_instances: tauri::State<'_, DbInstances>,
 ) -> Result<Vec<PatchApplyAttemptRecord>, ApplyPatchError> {
     let instances = database_instances.0.read().await;
@@ -3383,7 +3790,8 @@ async fn reconcile_interrupted_patch_apply_attempts(
     };
     drop(instances);
 
-    reconcile_interrupted_patch_apply_attempts_with_pool(&pool).await
+    let lock_directory = apply_lock_directory(&app_handle)?;
+    reconcile_interrupted_patch_apply_attempts_with_pool(&pool, &lock_directory).await
 }
 
 #[tauri::command]
@@ -3468,72 +3876,39 @@ fn validate_generated_patch(input: PatchValidationInput) -> PatchValidationResul
         }
     };
 
-    let mut child = match Command::new("git")
-        .args(["apply", "--check", "--whitespace=nowarn", "-"])
-        .current_dir(canonical_repository_path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(_) => {
-            return patch_validation_result_with_snapshot(
-                &input,
-                "valid_structure",
-                "Patch structure is valid, but the native Git dry-run is unavailable.",
-                repository_snapshot,
-                false,
-            );
-        }
-    };
-
     let raw_diff = input.raw_diff.as_deref().unwrap_or_default();
-    let patch_for_git = if raw_diff.ends_with('\n') {
-        raw_diff.to_string()
-    } else {
-        format!("{raw_diff}\n")
-    };
-    let write_result = child
-        .stdin
-        .take()
-        .ok_or(())
-        .and_then(|mut stdin| stdin.write_all(patch_for_git.as_bytes()).map_err(|_| ()));
-
-    if write_result.is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
-        return patch_validation_result_with_snapshot(
-            &input,
-            "valid_structure",
-            "Patch structure is valid, but the native Git dry-run could not read the proposal.",
-            repository_snapshot,
-            false,
-        );
-    }
-
-    match child.wait() {
-        Ok(status) if status.success() => patch_validation_result_with_snapshot(
+    let patch_for_git = normalized_patch_text(raw_diff);
+    match run_fixed_git_apply(&canonical_repository_path, &patch_for_git, true) {
+        FixedGitApplyOutcome::Succeeded => patch_validation_result_with_snapshot(
             &input,
             "dry_run_passed",
             "Git reports that the patch can apply to the current working tree without writing it.",
             repository_snapshot,
             true,
         ),
-        Ok(_) => patch_validation_result_with_snapshot(
+        FixedGitApplyOutcome::Rejected => patch_validation_result_with_snapshot(
             &input,
             "dry_run_failed",
             "Git reports that the patch does not apply cleanly to the current working tree.",
             repository_snapshot,
             true,
         ),
-        Err(_) => patch_validation_result_with_snapshot(
+        FixedGitApplyOutcome::TimedOut => patch_validation_result_with_snapshot(
             &input,
-            "valid_structure",
-            "Patch structure is valid, but the native Git dry-run did not complete.",
+            "dry_run_failed",
+            "The native Git dry-run exceeded 15 seconds and was terminated without writing files.",
             repository_snapshot,
-            false,
+            true,
         ),
+        FixedGitApplyOutcome::Unavailable | FixedGitApplyOutcome::Interrupted => {
+            patch_validation_result_with_snapshot(
+                &input,
+                "valid_structure",
+                "Patch structure is valid, but the native Git dry-run could not complete safely.",
+                repository_snapshot,
+                false,
+            )
+        }
     }
 }
 
@@ -3735,8 +4110,19 @@ mod tests {
         path
     }
 
+    fn test_apply_lock_directory(repository_path: &Path) -> PathBuf {
+        repository_path.with_file_name(format!(
+            "{}-app-locks",
+            repository_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("repository")
+        ))
+    }
+
     fn remove_temp_dir(path: &Path) {
         let _ = fs::remove_dir_all(path);
+        let _ = fs::remove_dir_all(test_apply_lock_directory(path));
     }
 
     fn init_git_repo(path: &Path) {
@@ -4251,6 +4637,159 @@ mod tests {
     }
 
     #[test]
+    fn bounded_child_wait_terminates_a_stuck_process() {
+        let mut child = Command::new("/bin/sleep")
+            .arg("2")
+            .spawn()
+            .expect("start bounded child fixture");
+        let started_at = Instant::now();
+
+        let outcome = wait_for_child_with_timeout(&mut child, Duration::from_millis(25));
+
+        assert_eq!(outcome, FixedGitApplyOutcome::TimedOut);
+        assert!(started_at.elapsed() < Duration::from_secs(1));
+        assert!(child
+            .try_wait()
+            .expect("inspect terminated child")
+            .is_some());
+    }
+
+    #[test]
+    fn apply_timeout_requires_manual_inspection_and_preserves_recovery_boundary() {
+        let (attempt_status, artifact_status, error_code, message) =
+            apply_failure_details(FixedGitApplyOutcome::TimedOut)
+                .expect("timeout should have a durable failure classification");
+
+        assert_eq!(attempt_status, "interrupted");
+        assert_eq!(artifact_status, "interrupted");
+        assert_eq!(error_code, "git_apply_timeout");
+        assert!(message.contains("backup was preserved"));
+        assert!(message.contains("manual inspection is required"));
+    }
+
+    #[test]
+    fn repository_apply_lock_blocks_concurrent_holder_and_releases_durably() {
+        tauri::async_runtime::block_on(async {
+            let lock_directory = create_temp_dir("cross-process-lock");
+            let pool = create_apply_test_pool().await;
+            ensure_patch_apply_tables(&pool).await.unwrap();
+
+            let first = acquire_repository_apply_lock(
+                &pool,
+                &lock_directory,
+                "repo-lock-test",
+                "artifact-first",
+            )
+            .await
+            .expect("acquire first repository lock");
+            let blocked = acquire_repository_apply_lock(
+                &pool,
+                &lock_directory,
+                "repo-lock-test",
+                "artifact-second",
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(blocked.code, "apply_locked");
+
+            release_repository_apply_lock(&pool, &first)
+                .await
+                .expect("release first repository lock");
+            drop(first);
+            let second = acquire_repository_apply_lock(
+                &pool,
+                &lock_directory,
+                "repo-lock-test",
+                "artifact-second",
+            )
+            .await
+            .expect("acquire repository lock after release");
+            release_repository_apply_lock(&pool, &second)
+                .await
+                .expect("release second repository lock");
+            drop(second);
+
+            let active_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM patch_apply_locks WHERE repository_id = 'repo-lock-test' AND status = 'active'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            let released_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM patch_apply_locks WHERE repository_id = 'repo-lock-test' AND status = 'released'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(active_count, 0);
+            assert_eq!(released_count, 2);
+            remove_temp_dir(&lock_directory);
+        });
+    }
+
+    #[test]
+    fn repository_apply_lock_marks_abandoned_record_stale_and_blocks_unresolved_attempts() {
+        tauri::async_runtime::block_on(async {
+            let lock_directory = create_temp_dir("stale-cross-process-lock");
+            let pool = create_apply_test_pool().await;
+            ensure_patch_apply_tables(&pool).await.unwrap();
+            sqlx::query(
+                "INSERT INTO patch_apply_locks (id, repository_id, process_id, operation, patch_artifact_id, status, started_at, stale_after) VALUES ('stale-lock', 'repo-lock-test', 999999, 'apply_patch', 'artifact-old', 'active', '1', 2)",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+
+            reconcile_interrupted_patch_apply_attempts_with_pool(&pool, &lock_directory)
+                .await
+                .expect("startup reconciliation should inspect abandoned locks");
+            let stale_status: String =
+                sqlx::query_scalar("SELECT status FROM patch_apply_locks WHERE id = 'stale-lock'")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(stale_status, "stale");
+
+            let recovered = acquire_repository_apply_lock(
+                &pool,
+                &lock_directory,
+                "repo-lock-test",
+                "artifact-new",
+            )
+            .await
+            .expect("recover abandoned durable lock");
+            release_repository_apply_lock(&pool, &recovered)
+                .await
+                .unwrap();
+            drop(recovered);
+
+            sqlx::query(
+                "INSERT INTO patch_apply_attempts (id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, started_at) VALUES ('unresolved-attempt', 'proposal', 'artifact', 'approval', 'repo-lock-test', 'needs_inspection', '3')",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            let unresolved = acquire_repository_apply_lock(
+                &pool,
+                &lock_directory,
+                "repo-lock-test",
+                "artifact-next",
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(unresolved.code, "unresolved_apply_attempt");
+            let active_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM patch_apply_locks WHERE repository_id = 'repo-lock-test' AND status = 'active'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(active_count, 0);
+            remove_temp_dir(&lock_directory);
+        });
+    }
+
+    #[test]
     fn safe_apply_requires_approved_durable_records_and_exact_confirmation() {
         tauri::async_runtime::block_on(async {
             let repository_path = create_temp_dir("safe-apply-approval");
@@ -4259,7 +4798,9 @@ mod tests {
             let pool = create_apply_test_pool().await;
             let mut input = seed_apply_test_records(&pool, &repository_path, "pending").await;
 
-            let unapproved = apply_approved_patch_artifact_with_pool(&pool, input).await;
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let unapproved =
+                apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input).await;
             assert_eq!(unapproved.unwrap_err().code, "proposal_not_approved");
             assert!(!repository_path.join("generated.txt").exists());
 
@@ -4278,7 +4819,8 @@ mod tests {
                 patch_artifact_id: "artifact-apply".to_string(),
                 confirmation_phrase: "apply patch".to_string(),
             };
-            let wrong_confirmation = apply_approved_patch_artifact_with_pool(&pool, input).await;
+            let wrong_confirmation =
+                apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input).await;
             assert_eq!(
                 wrong_confirmation.unwrap_err().code,
                 "confirmation_required"
@@ -4328,7 +4870,9 @@ mod tests {
                 })
                 .await;
 
-                let result = apply_approved_patch_artifact_with_pool(&pool, input).await;
+                let lock_directory = test_apply_lock_directory(&repository_path);
+                let result =
+                    apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input).await;
                 assert_eq!(result.unwrap_err().code, expected_code);
                 assert!(!repository_path.join("generated.txt").exists());
                 assert!(!repository_path
@@ -4413,7 +4957,8 @@ mod tests {
             let pool = create_apply_test_pool().await;
             let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
 
-            let result = apply_approved_patch_artifact_with_pool(&pool, input)
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let result = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
                 .await
                 .expect("apply approved patch");
 
@@ -4476,14 +5021,22 @@ mod tests {
             let head_before = git_output(repository_path.to_str().unwrap(), &["rev-parse", "HEAD"]);
             let pool = create_apply_test_pool().await;
             let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
-            let result = apply_approved_patch_artifact_with_pool(&pool, input)
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let result = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
                 .await
                 .expect("apply fixture patch");
             reset_successful_apply_to_unfinished(&pool, &result, false, false).await;
+            sqlx::query(
+                "INSERT INTO patch_apply_locks (id, repository_id, process_id, operation, patch_artifact_id, status, started_at, stale_after) VALUES ('crashed-process-lock', 'repo-apply', 999999, 'apply_patch', 'artifact-apply', 'active', '1', 2)",
+            )
+            .execute(&pool)
+            .await
+            .expect("insert abandoned apply lock");
 
-            let attempts = reconcile_interrupted_patch_apply_attempts_with_pool(&pool)
-                .await
-                .expect("reconcile applied attempt");
+            let attempts =
+                reconcile_interrupted_patch_apply_attempts_with_pool(&pool, &lock_directory)
+                    .await
+                    .expect("reconcile applied attempt");
             let attempt = attempts
                 .iter()
                 .find(|attempt| attempt.apply_attempt_id == result.apply_attempt_id)
@@ -4491,6 +5044,13 @@ mod tests {
 
             assert_eq!(attempt.status, "applied");
             assert_eq!(attempt.current_git_status_changed, Some(true));
+            let stale_lock_status: String = sqlx::query_scalar(
+                "SELECT status FROM patch_apply_locks WHERE id = 'crashed-process-lock'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(stale_lock_status, "stale");
             assert_eq!(
                 fs::read_to_string(repository_path.join("generated.txt")).unwrap(),
                 "safe generated content\n"
@@ -4519,15 +5079,17 @@ mod tests {
             commit_test_file(&repository_path, "README.md", "fixture\n");
             let pool = create_apply_test_pool().await;
             let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
-            let result = apply_approved_patch_artifact_with_pool(&pool, input)
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let result = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
                 .await
                 .expect("apply fixture patch");
             fs::remove_file(repository_path.join("generated.txt")).unwrap();
             reset_successful_apply_to_unfinished(&pool, &result, false, false).await;
 
-            let attempts = reconcile_interrupted_patch_apply_attempts_with_pool(&pool)
-                .await
-                .expect("reconcile untouched attempt");
+            let attempts =
+                reconcile_interrupted_patch_apply_attempts_with_pool(&pool, &lock_directory)
+                    .await
+                    .expect("reconcile untouched attempt");
             let attempt = attempts
                 .iter()
                 .find(|attempt| attempt.apply_attempt_id == result.apply_attempt_id)
@@ -4556,15 +5118,17 @@ mod tests {
             commit_test_file(&repository_path, "README.md", "fixture\n");
             let pool = create_apply_test_pool().await;
             let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
-            let result = apply_approved_patch_artifact_with_pool(&pool, input)
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let result = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
                 .await
                 .expect("apply fixture patch");
             fs::remove_file(repository_path.join("generated.txt")).unwrap();
             reset_successful_apply_to_unfinished(&pool, &result, true, true).await;
 
-            let attempts = reconcile_interrupted_patch_apply_attempts_with_pool(&pool)
-                .await
-                .expect("reconcile incomplete attempt");
+            let attempts =
+                reconcile_interrupted_patch_apply_attempts_with_pool(&pool, &lock_directory)
+                    .await
+                    .expect("reconcile incomplete attempt");
             let attempt = attempts
                 .iter()
                 .find(|attempt| attempt.apply_attempt_id == result.apply_attempt_id)
@@ -4585,7 +5149,8 @@ mod tests {
             commit_test_file(&repository_path, "README.md", "fixture\n");
             let pool = create_apply_test_pool().await;
             let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
-            let result = apply_approved_patch_artifact_with_pool(&pool, input)
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let result = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
                 .await
                 .expect("apply fixture patch");
             fs::write(
@@ -4595,9 +5160,10 @@ mod tests {
             .unwrap();
             reset_successful_apply_to_unfinished(&pool, &result, false, false).await;
 
-            let attempts = reconcile_interrupted_patch_apply_attempts_with_pool(&pool)
-                .await
-                .expect("reconcile ambiguous attempt");
+            let attempts =
+                reconcile_interrupted_patch_apply_attempts_with_pool(&pool, &lock_directory)
+                    .await
+                    .expect("reconcile ambiguous attempt");
             let attempt = attempts
                 .iter()
                 .find(|attempt| attempt.apply_attempt_id == result.apply_attempt_id)

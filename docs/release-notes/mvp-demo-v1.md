@@ -135,8 +135,11 @@ apps/desktop/src-tauri/target/release/bundle/dmg/
 
 ## Known Limitations
 
-- Patch application and all provider-driven repository writes are unavailable.
-- Approval is not a one-shot application authorization.
+- Safe Patch Application is limited to one eligible approved single-file text
+  artifact with a native backup, exact typed confirmation, cross-process lock,
+  and post-apply Git review.
+- Approval alone is not application authorization; native revalidation and
+  exact `APPLY PATCH` confirmation remain mandatory.
 - Signing, notarization, automatic updates, crash reporting, and public
   distribution are not configured.
 - Packaged verification currently targets macOS ARM64.
@@ -156,8 +159,8 @@ and verification commands pass on the recording machine.
 
 ## Next Boundary
 
-Safe Patch Application v1 is the next major product boundary. Implementation
-must follow `docs/security/patch-application-safety.md` and must not reuse a
-normal approval as write authorization. It requires a separate one-shot apply
-approval, durable-ID-only native lookup, same-request revalidation, atomic
-application, audit state, and post-apply verification.
+The next product boundary is Safe Patch Recovery and Application Hardening:
+retained packaged disposable-repository QA evidence, unexpected-path
+post-verification, and an explicit rollback design using persisted backups.
+Repository-scoped cross-process locking and bounded Git child-process timeouts
+are implemented. Multi-artifact application remains out of scope.

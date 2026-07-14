@@ -7,8 +7,9 @@
   artifact
 - Implementation status: Enabled only after every native safety gate and exact
   typed confirmation pass
-- Recovery status: Pre-apply backups and conservative interrupted-attempt
-  reconciliation implemented; automated rollback remains future work
+- Recovery status: Pre-apply backups, conservative interrupted-attempt
+  reconciliation, repository-scoped cross-process locking, and bounded Git
+  child-process timeouts implemented; automated rollback remains future work
 - Release classification: Local MVP capability with a documented disposable
   packaged-app QA protocol; execution evidence is still required per build
 - Last updated: 2026-07-15
@@ -72,6 +73,10 @@ The current product can:
   command.
 - Persist a bounded pre-apply backup and application-attempt record before the
   write.
+- Hold an app-local repository-scoped advisory lock with a durable SQLite lock
+  audit record for the complete authoritative apply request.
+- Terminate fixed `git apply --check` and `git apply` child processes after 15
+  seconds without retrying.
 - Apply one persisted patch through fixed `git apply --whitespace=nowarn -`.
 - Persist applied/failed state and refreshed Git status after the attempt.
 
@@ -414,7 +419,7 @@ Both invocations:
 - Run with the canonical repository root as the working directory.
 - Receive the exact normalized persisted artifact over stdin.
 - Use null stdout unless a bounded result is explicitly required.
-- Capture stderr only for internal classification, with a strict size limit.
+- Discard raw stderr and return only fixed sanitized classifications.
 - Return sanitized error categories rather than raw patch or repository data.
 - Have a bounded timeout and terminate the child process on timeout.
 
@@ -432,10 +437,20 @@ repositories. Multi-artifact transactional application is not implemented.
 The application service must prevent concurrent attempts for the same
 repository and approval. Use both:
 
-- An in-process application lock for concurrent windows in the same process.
+- A non-blocking in-process application lock for duplicate requests in the same
+  native process.
+- A repository-scoped OS advisory lock stored under the app-local data
+  directory, never inside the selected repository.
+- A durable SQLite lock record containing lock ID, repository ID, process ID,
+  operation, artifact ID, start time, and stale deadline.
 - Persisted `applying` and `applied` states that block replay.
 
-The snapshot must still be rechecked after acquiring both protections.
+The OS lock is authoritative for live cross-process exclusion. If the app
+crashes, the operating system releases it; the next holder marks the abandoned
+SQLite record `stale` before proceeding. An unresolved apply attempt still
+blocks a new application even after an abandoned lock is recovered. No stale
+lock recovery may trigger application automatically. The snapshot must still
+be rechecked after acquiring every protection.
 
 ## Pre-Apply Backup Foundation
 
@@ -494,9 +509,11 @@ an immutable human decision in v1; artifact apply state prevents replay.
 
 On native startup and when Agent Runs or Approval Review opens, the app asks a
 dedicated native command to reconcile attempts left in `pending` or `applying`.
-The command shares the process-local apply mutex and reloads the saved
-repository, proposal, artifact, approval link, backup, pre-apply evidence, and
-current Git state.
+The command shares the process-local apply mutex, attempts the same
+repository-scoped OS lock, and skips any repository still held by another live
+process. Once the OS lock is available, any abandoned durable lock record is
+marked `stale` before the command reloads the saved repository, proposal,
+artifact, approval link, backup, pre-apply evidence, and current Git state.
 
 Reconciliation is read-only with respect to the repository. It may use only
 fixed forward and reverse `git apply --check` probes with persisted patch bytes
@@ -548,6 +565,16 @@ defined by the error category.
 
 The service persists `apply_failed` with a sanitized error and retains the
 backup record. The user must inspect Git status before any retry.
+
+### Git Child Timeout
+
+Every fixed forward dry-run, reverse reconciliation probe, and mutating apply
+process has a 15-second deadline. The native runner kills and reaps a child that
+exceeds the deadline. A dry-run timeout returns `dry_run_failed` or
+`dry_run_timeout` without creating an apply attempt. A timeout after an attempt
+has entered `applying` persists the artifact and attempt as `interrupted`,
+retains the backup, captures current Git evidence where available, and requires
+manual inspection. It is never retried automatically.
 
 ### Unexpected Change Or Process Interruption
 
@@ -619,6 +646,11 @@ type PatchApplicationErrorCode =
   | "approval_stale"
   | "approval_consumed"
   | "application_in_progress"
+  | "apply_locked"
+  | "unresolved_apply_attempt"
+  | "dry_run_timeout"
+  | "git_apply_timeout"
+  | "git_apply_interrupted"
   | "application_failed_no_change"
   | "outcome_unknown"
   | "partial_write_detected";
@@ -646,7 +678,12 @@ unbounded Git output.
   branch, changed `HEAD`, and changed target hashes are rejected.
 - Raw patch, paths, commands, and arguments cannot be overridden by the caller.
 - Raw stderr and patch content are absent from serialized errors and logs.
-- Artifact replay and concurrent in-process application are rejected.
+- Artifact replay and concurrent in-process or cross-process application are
+  rejected.
+- Abandoned durable locks become stale only after the repository OS lock is
+  acquired, and unresolved attempts still block application.
+- A stuck child process is terminated at its deadline and returns a sanitized
+  timeout classification.
 
 ### Native Integration Tests
 
