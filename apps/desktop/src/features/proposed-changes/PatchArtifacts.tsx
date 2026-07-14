@@ -1,5 +1,9 @@
-import type { ProposedPatchArtifact } from "@ai-dev/ai";
-import { IconBadge, StatusPill } from "@ai-dev/ui";
+import {
+  initialPatchValidationStatus,
+  type PatchValidationStatus,
+  type ProposedPatchArtifact,
+} from "@ai-dev/ai";
+import { IconBadge, SecondaryButton, StatusPill } from "@ai-dev/ui";
 import { patchArtifactTone } from "../../lib/uiState";
 
 type PatchArtifactListProps = {
@@ -52,6 +56,22 @@ function patchArtifactSummary(artifact: ProposedPatchArtifact) {
   return "No generated patch content is stored";
 }
 
+function patchValidationTone(status: PatchValidationStatus) {
+  if (status === "dry_run_passed") {
+    return "success" as const;
+  }
+
+  if (status === "invalid_structure" || status === "dry_run_failed") {
+    return "danger" as const;
+  }
+
+  if (status === "valid_structure") {
+    return "warning" as const;
+  }
+
+  return "neutral" as const;
+}
+
 export function PatchArtifactList({
   artifacts,
   onSelectArtifact,
@@ -87,7 +107,10 @@ export function PatchArtifactList({
             </StatusPill>
             <div>
               <strong>{artifact.filePath}</strong>
-              <span>{patchArtifactSummary(artifact)}</span>
+              <span>
+                {patchArtifactSummary(artifact)} · Validation:{" "}
+                {initialPatchValidationStatus(artifact).replaceAll("_", " ")}
+              </span>
             </div>
           </>
         );
@@ -120,9 +143,25 @@ export function PatchArtifactList({
 
 type PatchArtifactDetailProps = {
   artifact: ProposedPatchArtifact | null;
+  isValidating?: boolean;
+  onValidate?: () => void;
 };
 
-export function PatchArtifactDetail({ artifact }: PatchArtifactDetailProps) {
+export function PatchArtifactDetail({
+  artifact,
+  isValidating = false,
+  onValidate,
+}: PatchArtifactDetailProps) {
+  const validationStatus = artifact
+    ? initialPatchValidationStatus(artifact)
+    : "unavailable";
+  const canValidate = Boolean(
+    artifact?.status === "generated" &&
+    !artifact.isBinary &&
+    !artifact.isTooLarge &&
+    artifact.rawDiff,
+  );
+
   return (
     <section
       className="patch-artifact-detail"
@@ -160,6 +199,36 @@ export function PatchArtifactDetail({ artifact }: PatchArtifactDetailProps) {
           <dd>{artifact?.createdAt ?? "Not generated"}</dd>
         </div>
       </dl>
+
+      {artifact ? (
+        <div className="patch-validation-panel">
+          <div>
+            <div className="patch-validation-panel__title">
+              <span>Validation and dry-run</span>
+              <StatusPill
+                tone={patchValidationTone(validationStatus)}
+                size="sm"
+                showDot={false}
+              >
+                {validationStatus.replaceAll("_", " ")}
+              </StatusPill>
+            </div>
+            <p>
+              {artifact.validationMessage ??
+                (validationStatus === "not_validated"
+                  ? "Structure and applicability have not been checked against the selected repository."
+                  : "This artifact does not have reviewable text content for validation.")}
+            </p>
+          </div>
+          <SecondaryButton
+            disabled={!canValidate || isValidating}
+            icon="approval"
+            onClick={onValidate}
+          >
+            {isValidating ? "Checking patch" : "Validate & dry-run"}
+          </SecondaryButton>
+        </div>
+      ) : null}
 
       {!artifact ? (
         <div className="patch-artifact-state">

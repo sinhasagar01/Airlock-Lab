@@ -188,6 +188,20 @@ export type ProposedChangeStatus =
 export type ProposedPatchArtifactStatus =
   "not_generated" | "generated" | "failed" | "unavailable";
 
+export type PatchValidationStatus =
+  | "not_validated"
+  | "valid_structure"
+  | "invalid_structure"
+  | "dry_run_passed"
+  | "dry_run_failed"
+  | "unavailable";
+
+export type PatchValidationResult = {
+  status: PatchValidationStatus;
+  message: string;
+  validatedAt?: string;
+};
+
 export type ProposedChangeFileOperation =
   "create" | "modify" | "delete" | "rename" | "unknown";
 
@@ -212,6 +226,9 @@ export type ProposedPatchArtifact = {
   deletions?: number;
   rawDiff?: string;
   createdAt?: string;
+  validationStatus?: PatchValidationStatus;
+  validationMessage?: string;
+  validatedAt?: string;
 };
 
 export type ProviderPatchArtifact = {
@@ -222,6 +239,175 @@ export type ProviderPatchArtifact = {
 };
 
 export const MAX_GENERATED_PATCH_ARTIFACT_BYTES = 64 * 1024;
+export const MAX_GENERATED_PATCH_ARTIFACT_LINES = 4_000;
+
+const PATCH_VALIDATION_STATUSES: PatchValidationStatus[] = [
+  "not_validated",
+  "valid_structure",
+  "invalid_structure",
+  "dry_run_passed",
+  "dry_run_failed",
+  "unavailable",
+];
+
+export function initialPatchValidationStatus(
+  artifact: ProposedPatchArtifact,
+): PatchValidationStatus {
+  if (artifact.status !== "generated" || artifact.isBinary) {
+    return "unavailable";
+  }
+
+  if (artifact.isTooLarge) {
+    return "invalid_structure";
+  }
+
+  if (!artifact.rawDiff) {
+    return "unavailable";
+  }
+
+  if (
+    artifact.validationStatus &&
+    PATCH_VALIDATION_STATUSES.includes(artifact.validationStatus)
+  ) {
+    return artifact.validationStatus;
+  }
+
+  return "not_validated";
+}
+
+export function validatePatchArtifactStructure(
+  artifact: ProposedPatchArtifact,
+  file: ProposedChangeFile,
+): PatchValidationResult {
+  if (artifact.status !== "generated") {
+    return {
+      status: "unavailable",
+      message: "Only generated patch artifacts can be validated.",
+    };
+  }
+
+  if (artifact.filePath !== file.path || !isSafeProviderFilePath(file.path)) {
+    return {
+      status: "invalid_structure",
+      message: "The patch path is unsafe or does not match the proposed file.",
+    };
+  }
+
+  if (artifact.isBinary) {
+    return {
+      status: "unavailable",
+      message: "Binary patch artifacts cannot use the text dry-run boundary.",
+    };
+  }
+
+  if (artifact.isTooLarge) {
+    return {
+      status: "invalid_structure",
+      message: "The patch exceeds the 64 KiB validation limit.",
+    };
+  }
+
+  const rawDiff = artifact.rawDiff;
+
+  if (!rawDiff) {
+    return {
+      status: "unavailable",
+      message: "No generated patch content is available to validate.",
+    };
+  }
+
+  const lines = rawDiff.split("\n");
+
+  if (
+    new TextEncoder().encode(rawDiff).byteLength >
+      MAX_GENERATED_PATCH_ARTIFACT_BYTES ||
+    lines.length > MAX_GENERATED_PATCH_ARTIFACT_LINES
+  ) {
+    return {
+      status: "invalid_structure",
+      message: "The patch exceeds the validation size or line-count limit.",
+    };
+  }
+
+  if (
+    rawDiff.includes("\0") ||
+    rawDiff.includes("\r") ||
+    rawDiff.includes("GIT binary patch") ||
+    rawDiff.includes("Binary files ") ||
+    rawDiff.includes("new file mode 120000") ||
+    rawDiff.includes("new file mode 160000") ||
+    lines.some(
+      (line) =>
+        line.startsWith("rename from ") ||
+        line.startsWith("rename to ") ||
+        line.startsWith("copy from ") ||
+        line.startsWith("copy to "),
+    )
+  ) {
+    return {
+      status: "invalid_structure",
+      message:
+        "The text patch contains unsupported binary, link, or path metadata.",
+    };
+  }
+
+  if (file.operation === "rename") {
+    return {
+      status: "unavailable",
+      message:
+        "Rename dry-runs are unavailable until old-path validation is supported.",
+    };
+  }
+
+  const expectedDiffHeader = `diff --git a/${file.path} b/${file.path}`;
+  const diffHeaders = lines.filter((line) => line.startsWith("diff --git "));
+  const firstHunkIndex = lines.findIndex((line) => line.startsWith("@@ "));
+  const metadataLines =
+    firstHunkIndex >= 0 ? lines.slice(0, firstHunkIndex) : [];
+  const oldHeaders = metadataLines.filter((line) => line.startsWith("--- "));
+  const newHeaders = metadataLines.filter((line) => line.startsWith("+++ "));
+  const expectedOldHeader = `--- a/${file.path}`;
+  const expectedNewHeader = `+++ b/${file.path}`;
+
+  if (
+    diffHeaders.length !== 1 ||
+    diffHeaders[0] !== expectedDiffHeader ||
+    firstHunkIndex < 0 ||
+    oldHeaders.length !== 1 ||
+    newHeaders.length !== 1
+  ) {
+    return {
+      status: "invalid_structure",
+      message:
+        "The artifact must contain one matching single-file unified diff.",
+    };
+  }
+
+  const operationMatches =
+    file.operation === "create"
+      ? oldHeaders[0] === "--- /dev/null" && newHeaders[0] === expectedNewHeader
+      : file.operation === "delete"
+        ? oldHeaders[0] === expectedOldHeader &&
+          newHeaders[0] === "+++ /dev/null"
+        : file.operation === "modify"
+          ? oldHeaders[0] === expectedOldHeader &&
+            newHeaders[0] === expectedNewHeader
+          : [expectedOldHeader, "--- /dev/null"].includes(oldHeaders[0]) &&
+            [expectedNewHeader, "+++ /dev/null"].includes(newHeaders[0]);
+
+  if (!operationMatches) {
+    return {
+      status: "invalid_structure",
+      message: "The patch headers do not match the proposed file operation.",
+    };
+  }
+
+  return {
+    status: "valid_structure",
+    message:
+      "The patch has one bounded unified diff with matching paths and operation.",
+  };
+}
 
 export type PersistedProposedChange = {
   id: string;
@@ -248,6 +434,8 @@ export function createProposedPatchArtifactPlaceholder(
     status: file.patchArtifactStatus,
     isBinary: false,
     isTooLarge: false,
+    validationStatus: "unavailable",
+    validationMessage: "No generated patch content is available to validate.",
   };
 }
 
@@ -261,7 +449,10 @@ export function ensureProposedPatchArtifacts(
     const existingArtifact = existingArtifactsByPath.get(file.path);
 
     if (existingArtifact) {
-      return existingArtifact;
+      return {
+        ...existingArtifact,
+        validationStatus: initialPatchValidationStatus(existingArtifact),
+      };
     }
 
     return createProposedPatchArtifactPlaceholder(change.id, file);
@@ -1035,6 +1226,14 @@ export async function executeAgentRun(
         deletions: previewDiff ? deletions : undefined,
         rawDiff: previewDiff,
         createdAt: request.startedAt,
+        validationStatus: isTooLarge
+          ? "invalid_structure"
+          : artifact.status === "generated" && !artifact.isBinary && previewDiff
+            ? "not_validated"
+            : "unavailable",
+        validationMessage: isTooLarge
+          ? "The patch exceeds the 64 KiB validation limit."
+          : undefined,
       };
     });
   const proposedChange = ensureProposedPatchArtifacts({

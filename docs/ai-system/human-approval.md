@@ -114,6 +114,9 @@ Approval review should distinguish three related concepts:
 - Generated patch artifacts are future generated diff records for proposed
   files. In the MVP they may exist as `not_generated`, `generated`, `failed`,
   or `unavailable` records.
+- Generated text artifacts may carry a structure/dry-run validation status.
+  `dry_run_passed` means only that `git apply --check` succeeded against the
+  current working tree; it does not apply the patch or grant permission.
 - Matching local Git diffs are read-only repository diffs for affected files
   that currently appear in Git status.
 - Generated patch diffs are future artifacts produced when proposed changes are

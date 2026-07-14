@@ -31,6 +31,8 @@ effects exist.
   not fabricate diff text.
 - Approval decisions update the linked proposed-change status to `approved` or
   `rejected`.
+- Generated text artifacts expose an explicit **Validate & dry-run** action.
+  Its persisted validation status is shared by Agent Run and Approval Review.
 - Agent Runs and Approval Review consume persisted proposed-change records while
   keeping the existing structured plan steps, risks, and validation strategy.
 - The MVP seed includes one connected demo proposed change,
@@ -82,6 +84,27 @@ accepted only for one matching single-file unified diff. Addition/deletion
 counts are derived locally, and raw previews above 64 KiB are discarded while
 the too-large review state is retained.
 
+## Validation And Dry-Run
+
+Artifact validation uses these persisted states:
+
+- `not_validated`: generated text exists but has not been checked.
+- `valid_structure`: path, size, line count, unified-diff shape, and operation
+  checks pass, but a native applicability check was unavailable.
+- `invalid_structure`: the artifact violates a path, format, operation, binary,
+  size, or line-count rule.
+- `dry_run_passed`: native Git reports that the patch can apply to the current
+  working tree.
+- `dry_run_failed`: native Git reports that the patch does not apply cleanly.
+- `unavailable`: no reviewable text exists, or the binary/rename boundary is
+  unsupported.
+
+The native dry-run is a dedicated Tauri command. It canonicalizes the selected
+Git repository, repeats all structure checks, and invokes only
+`git apply --check --whitespace=nowarn -`. Patch content is sent over stdin.
+The command exposes no arbitrary Git arguments or shell strings, suppresses raw
+Git stderr, and never applies, stages, writes, or commits changes.
+
 ## Data Model
 
 The shared model lives in `packages/ai`:
@@ -92,3 +115,5 @@ The shared model lives in `packages/ai`:
 - `ProposedChangeFileOperation`
 - `ProposedPatchArtifact`
 - `ProposedPatchArtifactStatus`
+- `PatchValidationStatus`
+- `PatchValidationResult`

@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   AgentProviderError,
   MAX_GENERATED_PATCH_ARTIFACT_BYTES,
+  MAX_GENERATED_PATCH_ARTIFACT_LINES,
   createMockAgentProviderAdapter,
   createOpenAiAgentProviderAdapter,
   executeAgentRun,
   executeMockAgentRun,
+  ensureProposedPatchArtifacts,
+  validatePatchArtifactStructure,
 } from "./index";
 
 const validOpenAiPlan = {
@@ -94,6 +97,97 @@ describe("AgentProviderAdapter", () => {
       ),
     ).toBe(true);
     expect(result.patchArtifacts).toEqual([]);
+  });
+});
+
+describe("patch artifact structure validation", () => {
+  const file = {
+    id: "file-app",
+    path: "src/App.tsx",
+    operation: "modify" as const,
+    reason: "Update the app.",
+    riskLevel: "medium" as const,
+    patchArtifactStatus: "generated" as const,
+  };
+  const artifact = {
+    id: "artifact-app",
+    proposedChangeId: "proposal-app",
+    filePath: file.path,
+    status: "generated" as const,
+    isBinary: false,
+    isTooLarge: false,
+    rawDiff: validOpenAiPlan.patchArtifacts[0].rawDiff,
+  };
+
+  it("accepts one bounded unified diff with matching path and operation", () => {
+    expect(validatePatchArtifactStructure(artifact, file)).toMatchObject({
+      status: "valid_structure",
+    });
+  });
+
+  it("rejects traversal, multiple files, and operation mismatches", () => {
+    expect(
+      validatePatchArtifactStructure(
+        { ...artifact, filePath: "../outside.txt" },
+        { ...file, path: "../outside.txt" },
+      ),
+    ).toMatchObject({ status: "invalid_structure" });
+    expect(
+      validatePatchArtifactStructure(
+        {
+          ...artifact,
+          rawDiff: `${artifact.rawDiff}\ndiff --git a/src/Other.tsx b/src/Other.tsx`,
+        },
+        file,
+      ),
+    ).toMatchObject({ status: "invalid_structure" });
+    expect(
+      validatePatchArtifactStructure(artifact, {
+        ...file,
+        operation: "create",
+      }),
+    ).toMatchObject({ status: "invalid_structure" });
+  });
+
+  it("enforces binary, size, and line-count boundaries", () => {
+    expect(
+      validatePatchArtifactStructure({ ...artifact, isBinary: true }, file),
+    ).toMatchObject({ status: "unavailable" });
+    expect(
+      validatePatchArtifactStructure(
+        {
+          ...artifact,
+          rawDiff: `${artifact.rawDiff}\n+${"x".repeat(MAX_GENERATED_PATCH_ARTIFACT_BYTES)}`,
+        },
+        file,
+      ),
+    ).toMatchObject({ status: "invalid_structure" });
+    expect(
+      validatePatchArtifactStructure(
+        {
+          ...artifact,
+          rawDiff: `${artifact.rawDiff}\n${" context\n".repeat(MAX_GENERATED_PATCH_ARTIFACT_LINES)}`,
+        },
+        file,
+      ),
+    ).toMatchObject({ status: "invalid_structure" });
+  });
+
+  it("normalizes older persisted artifacts to a safe validation state", () => {
+    const change = ensureProposedPatchArtifacts({
+      id: "proposal-app",
+      runId: "run-app",
+      repositoryId: "repo-app",
+      title: "Update app",
+      summary: "Review app changes.",
+      status: "ready_for_review",
+      files: [file],
+      patchArtifacts: [artifact],
+      createdAt: "2026-07-14T00:00:00.000Z",
+      updatedAt: "2026-07-14T00:00:00.000Z",
+    });
+
+    expect(change.patchArtifacts[0].validationStatus).toBe("not_validated");
   });
 });
 

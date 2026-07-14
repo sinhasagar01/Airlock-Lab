@@ -107,6 +107,12 @@ text. The app derives addition/deletion counts and strips raw content above the
 Malformed, unsafe, mismatched, or incomplete output is rejected before a run,
 proposed change, or approval request is persisted.
 
+Persisted generated text artifacts can subsequently be checked against the
+selected repository. Structure validation runs in shared application code and
+again in the native command. Native applicability uses fixed
+`git apply --check --whitespace=nowarn -` arguments with content on stdin. It
+does not apply the provider output or expose a general Git execution surface.
+
 ## Error Handling
 
 The native boundary maps authentication, rate-limit, timeout, unavailable,

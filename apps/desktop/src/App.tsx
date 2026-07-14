@@ -9,8 +9,11 @@ import {
   createOpenAiAgentProviderAdapter,
   executeAgentRun,
   type PersistedProposedChange,
+  type PatchValidationResult,
+  type ProposedPatchArtifact,
   type ProposedChangePlan,
   type ProposedChangeFileOperation,
+  validatePatchArtifactStructure,
 } from "@ai-dev/ai";
 import {
   type GitFileDiff,
@@ -92,6 +95,7 @@ import { previewRepositoryFile } from "./storage/filePreview";
 import { scanRepositoryFileTree } from "./storage/fileTreeScanner";
 import { loadGitFileDiff, loadGitStatusSummary } from "./storage/gitChanges";
 import { loadRepositoriesGitMetadata } from "./storage/gitMetadata";
+import { dryRunGeneratedPatch } from "./storage/patchValidation";
 import {
   loadIndexedFileFacts,
   replaceIndexedFileFacts,
@@ -212,6 +216,9 @@ export function App() {
     useState<string | null>(null);
   const [selectedApprovalPatchArtifactId, setSelectedApprovalPatchArtifactId] =
     useState<string | null>(null);
+  const [validatingPatchArtifactId, setValidatingPatchArtifactId] = useState<
+    string | null
+  >(null);
   const [filePreview, setFilePreview] = useState<FileContentPreview | null>(
     null,
   );
@@ -606,6 +613,105 @@ export function App() {
           : `${selectedProviderName} could not create a run. No files or repository state were changed.`,
       );
     }
+  }
+
+  async function validatePatchArtifact(
+    change: PersistedProposedChange,
+    artifact: ProposedPatchArtifact,
+  ) {
+    if (validatingPatchArtifactId) {
+      return;
+    }
+
+    const file = change.files.find(
+      (candidate) => candidate.path === artifact.filePath,
+    );
+
+    if (!file) {
+      return;
+    }
+
+    setValidatingPatchArtifactId(artifact.id);
+    const validatedAt = new Date().toISOString();
+    let validation: PatchValidationResult = {
+      ...validatePatchArtifactStructure(artifact, file),
+      validatedAt,
+    };
+
+    if (validation.status === "valid_structure") {
+      if (!hasActiveRepository || change.repositoryId !== activeRepository.id) {
+        validation = {
+          status: "valid_structure",
+          message:
+            "Patch structure is valid. Select its linked repository to run the native Git dry-run.",
+          validatedAt,
+        };
+      } else {
+        try {
+          validation = await dryRunGeneratedPatch(
+            activeRepository.id,
+            activeRepository.path,
+            artifact,
+            file,
+          );
+        } catch {
+          validation = {
+            status: "valid_structure",
+            message:
+              "Patch structure is valid. The native Git dry-run is unavailable in this runtime.",
+            validatedAt,
+          };
+        }
+      }
+    }
+
+    const nextChange: PersistedProposedChange = {
+      ...change,
+      patchArtifacts: change.patchArtifacts.map((candidate) =>
+        candidate.id === artifact.id
+          ? {
+              ...candidate,
+              validationStatus: validation.status,
+              validationMessage: validation.message,
+              validatedAt: validation.validatedAt,
+            }
+          : candidate,
+      ),
+      updatedAt: validatedAt,
+    };
+
+    setPersistedProposedChanges((currentChanges) =>
+      currentChanges.map((candidate) =>
+        candidate.id === nextChange.id ? nextChange : candidate,
+      ),
+    );
+
+    if (storageStatus === "ready") {
+      try {
+        await saveProposedChange(nextChange);
+      } catch {
+        setPersistedProposedChanges((currentChanges) =>
+          currentChanges.map((candidate) =>
+            candidate.id === nextChange.id
+              ? {
+                  ...candidate,
+                  patchArtifacts: candidate.patchArtifacts.map(
+                    (candidateArtifact) =>
+                      candidateArtifact.id === artifact.id
+                        ? {
+                            ...candidateArtifact,
+                            validationMessage: `${validation.message} The result could not be saved.`,
+                          }
+                        : candidateArtifact,
+                  ),
+                }
+              : candidate,
+          ),
+        );
+      }
+    }
+
+    setValidatingPatchArtifactId(null);
   }
 
   function openDemoApprovalReview() {
@@ -2175,7 +2281,24 @@ export function App() {
                 </section>
 
                 <section className="plan-section patch-artifact-detail-section">
-                  <PatchArtifactDetail artifact={selectedAgentPatchArtifact} />
+                  <PatchArtifactDetail
+                    artifact={selectedAgentPatchArtifact}
+                    isValidating={
+                      selectedAgentPatchArtifact?.id ===
+                      validatingPatchArtifactId
+                    }
+                    onValidate={() => {
+                      if (
+                        activePersistedProposedChange &&
+                        selectedAgentPatchArtifact
+                      ) {
+                        void validatePatchArtifact(
+                          activePersistedProposedChange,
+                          selectedAgentPatchArtifact,
+                        );
+                      }
+                    }}
+                  />
                 </section>
 
                 <section className="plan-section plan-risk-section">
@@ -2736,7 +2859,24 @@ export function App() {
                   onSelectArtifact={setSelectedApprovalPatchArtifactId}
                   selectedArtifactId={selectedApprovalPatchArtifact?.id}
                 />
-                <PatchArtifactDetail artifact={selectedApprovalPatchArtifact} />
+                <PatchArtifactDetail
+                  artifact={selectedApprovalPatchArtifact}
+                  isValidating={
+                    selectedApprovalPatchArtifact?.id ===
+                    validatingPatchArtifactId
+                  }
+                  onValidate={() => {
+                    if (
+                      selectedApprovalProposedChange &&
+                      selectedApprovalPatchArtifact
+                    ) {
+                      void validatePatchArtifact(
+                        selectedApprovalProposedChange,
+                        selectedApprovalPatchArtifact,
+                      );
+                    }
+                  }}
+                />
               </article>
 
               <article className="overview-card approval-diff-review-card">

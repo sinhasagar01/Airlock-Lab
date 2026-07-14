@@ -1,7 +1,8 @@
 use std::{
     env, fs,
+    io::Write,
     path::{Component, Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -15,6 +16,8 @@ const MAX_PROVIDER_TASK_BYTES: usize = 1_200;
 const MAX_PROVIDER_KEY_FILES: usize = 20;
 const MAX_PROVIDER_FOLDERS: usize = 20;
 const MAX_PROVIDER_EXTENSIONS: usize = 12;
+const MAX_GENERATED_PATCH_BYTES: usize = 64 * 1024;
+const MAX_GENERATED_PATCH_LINES: usize = 4_000;
 const DEFAULT_OPENAI_MODEL: &str = "gpt-5.6-luna";
 const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 const OPENAI_MODELS_URL: &str = "https://api.openai.com/v1/models";
@@ -112,6 +115,27 @@ struct GitFileDiff {
     raw_diff: Option<String>,
     lines: Vec<GitDiffLine>,
     refreshed_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PatchValidationInput {
+    repository_id: String,
+    repository_path: String,
+    file_path: String,
+    operation: String,
+    is_binary: bool,
+    raw_diff: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PatchValidationResult {
+    repository_id: String,
+    file_path: String,
+    status: String,
+    message: String,
+    validated_at: String,
 }
 
 #[derive(Serialize)]
@@ -309,6 +333,121 @@ fn is_safe_relative_path(file_path: &str) -> bool {
             false
         }
     })
+}
+
+fn patch_validation_result(
+    input: &PatchValidationInput,
+    status: &str,
+    message: &str,
+) -> PatchValidationResult {
+    PatchValidationResult {
+        repository_id: input.repository_id.clone(),
+        file_path: input.file_path.clone(),
+        status: status.to_string(),
+        message: message.to_string(),
+        validated_at: now_unix_seconds(),
+    }
+}
+
+fn validate_generated_patch_structure(input: &PatchValidationInput) -> Result<(), String> {
+    if !is_safe_relative_git_path(&input.file_path) {
+        return Err("The patch path is unsafe or outside the repository.".to_string());
+    }
+
+    if input.is_binary {
+        return Err("binary_unavailable".to_string());
+    }
+
+    if input.operation == "rename" {
+        return Err("rename_unavailable".to_string());
+    }
+
+    if !matches!(
+        input.operation.as_str(),
+        "create" | "modify" | "delete" | "unknown"
+    ) {
+        return Err("The proposed file operation is invalid.".to_string());
+    }
+
+    let Some(raw_diff) = input.raw_diff.as_deref() else {
+        return Err("content_unavailable".to_string());
+    };
+    let lines: Vec<&str> = raw_diff.split('\n').collect();
+
+    if raw_diff.is_empty()
+        || raw_diff.len() > MAX_GENERATED_PATCH_BYTES
+        || lines.len() > MAX_GENERATED_PATCH_LINES
+    {
+        return Err("The patch exceeds the validation size or line-count limit.".to_string());
+    }
+
+    if raw_diff.contains('\0')
+        || raw_diff.contains('\r')
+        || raw_diff.contains("GIT binary patch")
+        || raw_diff.contains("Binary files ")
+        || raw_diff.contains("new file mode 120000")
+        || raw_diff.contains("new file mode 160000")
+        || lines.iter().any(|line| {
+            line.starts_with("rename from ")
+                || line.starts_with("rename to ")
+                || line.starts_with("copy from ")
+                || line.starts_with("copy to ")
+        })
+    {
+        return Err(
+            "The text patch contains unsupported binary, link, or path metadata.".to_string(),
+        );
+    }
+
+    let expected_diff_header = format!("diff --git a/{path} b/{path}", path = input.file_path);
+    let diff_headers: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| line.starts_with("diff --git "))
+        .collect();
+    let Some(first_hunk_index) = lines.iter().position(|line| line.starts_with("@@ ")) else {
+        return Err("The artifact must contain a unified diff hunk.".to_string());
+    };
+    let metadata_lines = &lines[..first_hunk_index];
+    let old_headers: Vec<&str> = metadata_lines
+        .iter()
+        .copied()
+        .filter(|line| line.starts_with("--- "))
+        .collect();
+    let new_headers: Vec<&str> = metadata_lines
+        .iter()
+        .copied()
+        .filter(|line| line.starts_with("+++ "))
+        .collect();
+
+    if diff_headers.len() != 1
+        || diff_headers[0] != expected_diff_header
+        || old_headers.len() != 1
+        || new_headers.len() != 1
+    {
+        return Err("The artifact must contain one matching single-file unified diff.".to_string());
+    }
+
+    let expected_old_header = format!("--- a/{}", input.file_path);
+    let expected_new_header = format!("+++ b/{}", input.file_path);
+    let old_header = old_headers[0];
+    let new_header = new_headers[0];
+    let operation_matches = match input.operation.as_str() {
+        "create" => old_header == "--- /dev/null" && new_header == expected_new_header,
+        "delete" => old_header == expected_old_header && new_header == "+++ /dev/null",
+        "modify" => old_header == expected_old_header && new_header == expected_new_header,
+        "unknown" => {
+            (old_header == expected_old_header || old_header == "--- /dev/null")
+                && (new_header == expected_new_header || new_header == "+++ /dev/null")
+        }
+        _ => false,
+    };
+
+    if !operation_matches {
+        return Err("The patch headers do not match the proposed file operation.".to_string());
+    }
+
+    Ok(())
 }
 
 fn openai_model() -> Result<String, String> {
@@ -1215,6 +1354,99 @@ fn load_git_file_diff(
 }
 
 #[tauri::command]
+fn validate_generated_patch(input: PatchValidationInput) -> PatchValidationResult {
+    if let Err(reason) = validate_generated_patch_structure(&input) {
+        return match reason.as_str() {
+            "binary_unavailable" => patch_validation_result(
+                &input,
+                "unavailable",
+                "Binary patch artifacts cannot use the text dry-run boundary.",
+            ),
+            "rename_unavailable" => patch_validation_result(
+                &input,
+                "unavailable",
+                "Rename dry-runs are unavailable until old-path validation is supported.",
+            ),
+            "content_unavailable" => patch_validation_result(
+                &input,
+                "unavailable",
+                "No generated patch content is available to validate.",
+            ),
+            _ => patch_validation_result(&input, "invalid_structure", &reason),
+        };
+    }
+
+    let (_, canonical_repository_path) = match canonical_selected_git_root(&input.repository_path) {
+        Ok(root) => root,
+        Err(_) => {
+            return patch_validation_result(
+                &input,
+                "valid_structure",
+                "Patch structure is valid, but the selected Git repository is unavailable for dry-run.",
+            );
+        }
+    };
+
+    let mut child = match Command::new("git")
+        .args(["apply", "--check", "--whitespace=nowarn", "-"])
+        .current_dir(canonical_repository_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => {
+            return patch_validation_result(
+                &input,
+                "valid_structure",
+                "Patch structure is valid, but the native Git dry-run is unavailable.",
+            );
+        }
+    };
+
+    let raw_diff = input.raw_diff.as_deref().unwrap_or_default();
+    let patch_for_git = if raw_diff.ends_with('\n') {
+        raw_diff.to_string()
+    } else {
+        format!("{raw_diff}\n")
+    };
+    let write_result = child
+        .stdin
+        .take()
+        .ok_or(())
+        .and_then(|mut stdin| stdin.write_all(patch_for_git.as_bytes()).map_err(|_| ()));
+
+    if write_result.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return patch_validation_result(
+            &input,
+            "valid_structure",
+            "Patch structure is valid, but the native Git dry-run could not read the proposal.",
+        );
+    }
+
+    match child.wait() {
+        Ok(status) if status.success() => patch_validation_result(
+            &input,
+            "dry_run_passed",
+            "Git reports that the patch can apply to the current working tree without writing it.",
+        ),
+        Ok(_) => patch_validation_result(
+            &input,
+            "dry_run_failed",
+            "Git reports that the patch does not apply cleanly to the current working tree.",
+        ),
+        Err(_) => patch_validation_result(
+            &input,
+            "valid_structure",
+            "Patch structure is valid, but the native Git dry-run did not complete.",
+        ),
+    }
+}
+
+#[tauri::command]
 fn get_openai_provider_configuration() -> OpenAiProviderConfiguration {
     let has_api_key = env::var("OPENAI_API_KEY")
         .ok()
@@ -1454,6 +1686,22 @@ mod tests {
         }
     }
 
+    fn test_patch_validation_input(
+        repository_path: &Path,
+        file_path: &str,
+        operation: &str,
+        raw_diff: &str,
+    ) -> PatchValidationInput {
+        PatchValidationInput {
+            repository_id: "repo-test".to_string(),
+            repository_path: repository_path.to_string_lossy().to_string(),
+            file_path: file_path.to_string(),
+            operation: operation.to_string(),
+            is_binary: false,
+            raw_diff: Some(raw_diff.to_string()),
+        }
+    }
+
     #[test]
     fn openai_plan_input_accepts_bounded_repository_summary() {
         assert_eq!(
@@ -1612,6 +1860,106 @@ mod tests {
         assert!(!is_safe_relative_path("src/../outside.txt"));
         assert!(!is_safe_relative_path("/tmp/outside.txt"));
         assert!(!is_safe_relative_path("src/App.tsx\0.png"));
+    }
+
+    #[test]
+    fn generated_patch_structure_rejects_unsafe_mismatched_and_binary_content() {
+        let repository_path = Path::new("/tmp/repository");
+        let valid_diff = "diff --git a/src/App.tsx b/src/App.tsx\n--- a/src/App.tsx\n+++ b/src/App.tsx\n@@ -1 +1 @@\n-old\n+new";
+        let traversal =
+            test_patch_validation_input(repository_path, "../outside.txt", "modify", valid_diff);
+        let absolute =
+            test_patch_validation_input(repository_path, "/tmp/outside.txt", "modify", valid_diff);
+        let operation_mismatch =
+            test_patch_validation_input(repository_path, "src/App.tsx", "create", valid_diff);
+        let multiple_files = test_patch_validation_input(
+            repository_path,
+            "src/App.tsx",
+            "modify",
+            &format!("{valid_diff}\ndiff --git a/src/Other.tsx b/src/Other.tsx"),
+        );
+        let binary_payload = test_patch_validation_input(
+            repository_path,
+            "src/App.tsx",
+            "modify",
+            &format!("{valid_diff}\nGIT binary patch"),
+        );
+        let oversized = test_patch_validation_input(
+            repository_path,
+            "src/App.tsx",
+            "modify",
+            &format!("{valid_diff}\n+{}", "x".repeat(MAX_GENERATED_PATCH_BYTES)),
+        );
+        let too_many_lines = test_patch_validation_input(
+            repository_path,
+            "src/App.tsx",
+            "modify",
+            &format!(
+                "{valid_diff}\n{}",
+                " context\n".repeat(MAX_GENERATED_PATCH_LINES)
+            ),
+        );
+
+        assert!(validate_generated_patch_structure(&traversal).is_err());
+        assert!(validate_generated_patch_structure(&absolute).is_err());
+        assert!(validate_generated_patch_structure(&operation_mismatch).is_err());
+        assert!(validate_generated_patch_structure(&multiple_files).is_err());
+        assert!(validate_generated_patch_structure(&binary_payload).is_err());
+        assert!(validate_generated_patch_structure(&oversized).is_err());
+        assert!(validate_generated_patch_structure(&too_many_lines).is_err());
+    }
+
+    #[test]
+    fn generated_patch_dry_run_passes_without_writing_the_working_tree() {
+        let repository_path = create_temp_dir("patch-dry-run-pass");
+        init_git_repo(&repository_path);
+        let raw_diff = "diff --git a/new-file.txt b/new-file.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new-file.txt\n@@ -0,0 +1 @@\n+review only";
+        let input =
+            test_patch_validation_input(&repository_path, "new-file.txt", "create", raw_diff);
+        let status_before = git_output(
+            repository_path.to_str().expect("repository path"),
+            &["status", "--porcelain=v1"],
+        );
+
+        let result = validate_generated_patch(input);
+        let status_after = git_output(
+            repository_path.to_str().expect("repository path"),
+            &["status", "--porcelain=v1"],
+        );
+
+        assert_eq!(result.status, "dry_run_passed");
+        assert!(!repository_path.join("new-file.txt").exists());
+        assert_eq!(status_before, status_after);
+        remove_temp_dir(&repository_path);
+    }
+
+    #[test]
+    fn generated_patch_dry_run_fails_cleanly_when_target_content_is_missing() {
+        let repository_path = create_temp_dir("patch-dry-run-fail");
+        init_git_repo(&repository_path);
+        let raw_diff = "diff --git a/missing.txt b/missing.txt\n--- a/missing.txt\n+++ b/missing.txt\n@@ -1 +1 @@\n-old\n+new";
+        let input =
+            test_patch_validation_input(&repository_path, "missing.txt", "modify", raw_diff);
+
+        let result = validate_generated_patch(input);
+
+        assert_eq!(result.status, "dry_run_failed");
+        assert!(!repository_path.join("missing.txt").exists());
+        remove_temp_dir(&repository_path);
+    }
+
+    #[test]
+    fn generated_patch_keeps_valid_structure_when_repository_is_not_git() {
+        let repository_path = create_temp_dir("patch-dry-run-unavailable");
+        let raw_diff = "diff --git a/new-file.txt b/new-file.txt\n--- /dev/null\n+++ b/new-file.txt\n@@ -0,0 +1 @@\n+review only";
+        let input =
+            test_patch_validation_input(&repository_path, "new-file.txt", "create", raw_diff);
+
+        let result = validate_generated_patch(input);
+
+        assert_eq!(result.status, "valid_structure");
+        assert!(!repository_path.join("new-file.txt").exists());
+        remove_temp_dir(&repository_path);
     }
 
     #[test]
@@ -1787,7 +2135,8 @@ pub fn run() {
             load_repository_git_metadata,
             preview_repository_file,
             scan_repository_file_tree,
-            test_openai_connection
+            test_openai_connection,
+            validate_generated_patch
         ])
         .run(tauri::generate_context!())
         .expect("error while running AI Developer Workspace");

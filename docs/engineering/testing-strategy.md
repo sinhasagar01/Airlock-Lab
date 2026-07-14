@@ -146,6 +146,10 @@ Current desktop smoke coverage includes:
   proposed change, pending approval, and `not_generated` patch artifacts.
 - OpenAI contract output for generated, unavailable, binary, oversized,
   unsafe, and mismatched patch artifacts before persistence.
+- Patch structure validation for traversal, absolute/mismatched paths,
+  multi-file diffs, operation mismatches, binary markers, size, and line limits.
+- Native patch dry-run pass/fail behavior, including assertions that
+  `git apply --check` leaves working-tree files and Git status unchanged.
 - Safe file preview panel states for no file selected, loading, text preview,
   binary content, too-large files, outside-repository blocking, preview errors,
   and selected-file changes.

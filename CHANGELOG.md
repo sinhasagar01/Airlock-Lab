@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Added persisted patch validation states covering unvalidated, structurally
+  valid/invalid, dry-run passed/failed, and unavailable artifacts.
+- Added shared structure validation for repository-relative paths, traversal,
+  single-file unified diffs, matching operations, binary/link metadata, 64 KiB
+  size limits, and 4,000-line limits.
+- Added a dedicated read-only Tauri dry-run command using fixed
+  `git apply --check --whitespace=nowarn -` arguments with patch data on stdin.
+- Added Validate & dry-run controls to Agent Run and Approval Review, with
+  synchronized persisted results and graceful browser/native-unavailable state.
+- Added provider, frontend, and native tests proving pass/fail behavior and that
+  dry-run does not create files or change Git status.
 - Extended the provider plan contract and strict OpenAI response schema with
   review-only patch artifact records linked to proposed affected files.
 - Added validation for safe unique artifact paths, matching single-file unified

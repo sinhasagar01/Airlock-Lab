@@ -120,6 +120,12 @@ Generated artifacts are persisted proposal data only. They are displayed
 separately from read-only local Git diffs, cannot trigger repository writes,
 and do not become more trusted when an approval status changes.
 
+Generated text artifacts can be structure-validated and checked for current
+working-tree applicability through the dedicated native dry-run boundary. A
+passing dry-run is informational only: it does not approve, apply, stage, or
+write the artifact. Validation results are stored on the proposed patch
+artifact so Agent Run and Approval Review show the same state.
+
 ## Run Lifecycle
 
 ### 1. Created

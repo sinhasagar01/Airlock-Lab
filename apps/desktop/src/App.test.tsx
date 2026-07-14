@@ -13,6 +13,7 @@ import { App } from "./App";
 import { previewRepositoryFile } from "./storage/filePreview";
 import { scanRepositoryFileTree } from "./storage/fileTreeScanner";
 import { loadGitFileDiff, loadGitStatusSummary } from "./storage/gitChanges";
+import { dryRunGeneratedPatch } from "./storage/patchValidation";
 import {
   saveApprovalRequest,
   updateApprovalRequestStatus,
@@ -415,6 +416,15 @@ vi.mock("./storage/gitChanges", () => ({
   loadGitStatusSummary: vi.fn(async () => mockState.gitStatus),
 }));
 
+vi.mock("./storage/patchValidation", () => ({
+  dryRunGeneratedPatch: vi.fn(async () => ({
+    status: "dry_run_passed",
+    message:
+      "Git reports that the patch can apply to the current working tree without writing it.",
+    validatedAt: "1783532400",
+  })),
+}));
+
 vi.mock("./storage/approvalRequestStore", () => ({
   loadApprovalRequests: vi.fn(async () => mockState.approvals),
   saveApprovalRequest: vi.fn(async () => undefined),
@@ -522,6 +532,12 @@ beforeEach(() => {
       filePath: file.path,
       kind: file.stage === "staged" ? "staged" : mockState.gitDiff.kind,
     };
+  });
+  vi.mocked(dryRunGeneratedPatch).mockResolvedValue({
+    status: "dry_run_passed",
+    message:
+      "Git reports that the patch can apply to the current working tree without writing it.",
+    validatedAt: "1783532400",
   });
   vi.mocked(scanRepositoryFileTree).mockImplementation(async () => ({
     repositoryPath: mockState.repositories[0]?.path ?? "/workspace",
@@ -1208,6 +1224,57 @@ describe("App smoke tests", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps a valid structure result when the native dry-run is unavailable", async () => {
+    const proposal = defaultProposedChanges[0];
+    const validProposal: PersistedProposedChange = {
+      ...proposal,
+      patchArtifacts: proposal.patchArtifacts.map((artifact) =>
+        artifact.filePath === "packages/ai/src/index.ts"
+          ? {
+              ...artifact,
+              rawDiff: [
+                "diff --git a/packages/ai/src/index.ts b/packages/ai/src/index.ts",
+                "--- a/packages/ai/src/index.ts",
+                "+++ b/packages/ai/src/index.ts",
+                "@@ -1 +1 @@",
+                "-export type OldPlan = string;",
+                "+export type NewPlan = string;",
+              ].join("\n"),
+              validationStatus: "not_validated",
+            }
+          : artifact,
+      ),
+    };
+    vi.mocked(dryRunGeneratedPatch).mockRejectedValue(
+      new Error("native runtime unavailable"),
+    );
+    const { user } = renderApp({
+      proposedChanges: [validProposal, ...defaultProposedChanges.slice(1)],
+    });
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(
+      screen.getByRole("button", {
+        name: /generated packages\/ai\/src\/index\.ts/,
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Validate & dry-run" }),
+    );
+
+    expect(await screen.findByText("valid structure")).toBeInTheDocument();
+    expect(
+      screen.getByText(/native Git dry-run is unavailable in this runtime/),
+    ).toBeInTheDocument();
+    expect(saveProposedChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        patchArtifacts: expect.arrayContaining([
+          expect.objectContaining({ validationStatus: "valid_structure" }),
+        ]),
+      }),
+    );
+  });
+
   it("creates a persisted mock agent run with a review-only proposal and approval", async () => {
     const { user } = renderApp();
 
@@ -1380,11 +1447,33 @@ describe("App smoke tests", () => {
     expect(
       await screen.findByText("Provider-generated proposal · not applied"),
     ).toBeInTheDocument();
+    expect(screen.getByText("not validated")).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Validate & dry-run" }),
+    );
+    expect(dryRunGeneratedPatch).toHaveBeenCalledWith(
+      "repo-workspace",
+      "/workspace",
+      expect.objectContaining({ filePath: "src/App.tsx" }),
+      expect.objectContaining({ operation: "modify" }),
+    );
+    expect(await screen.findByText("dry run passed")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(saveProposedChange).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          patchArtifacts: [
+            expect.objectContaining({ validationStatus: "dry_run_passed" }),
+          ],
+        }),
+      );
+    });
 
     await user.click(screen.getByRole("button", { name: "Review approval" }));
     expect(
       await screen.findByText("Provider-generated proposal · not applied"),
     ).toBeInTheDocument();
+    expect(screen.getByText("dry run passed")).toBeInTheDocument();
   });
 
   it("rejects malformed OpenAI output without creating review records", async () => {

@@ -104,10 +104,16 @@ In the selected Agent Run, walk through:
 - Risk summary
 - Validation checks
 - Generated patch artifact review states
+- Persisted structure and dry-run validation status
 
 Say: "Affected files are proposed scope. They are not proof that a file was
 changed. Patch artifacts are provider proposals, not local Git state, and none
 of them has been applied."
+
+For a generated text artifact, select **Validate & dry-run**. Explain that the
+app first validates the bounded single-file diff, then uses read-only
+`git apply --check` in the selected repository. A pass means “potentially
+applicable now,” not “approved” or “applied.”
 
 If no affected files appear, explain that the selected repository has no
 indexed file facts in the current session and reindex before repeating the run.
