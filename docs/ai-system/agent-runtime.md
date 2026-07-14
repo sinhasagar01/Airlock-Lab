@@ -101,13 +101,18 @@ Repository Intelligence, proposed change review, approval review, generated
 artifact states, and matching local Git diffs. This seed is not real agent
 execution and must stay labeled as demo workflow state.
 
-The Agent Runs screen also supports creating a new review-only run through the
-mock provider. A submitted task is converted into one durable run record, a
-structured proposed plan, a persisted proposed change, and a linked pending
-approval request. Repository context is limited to the selected repository's
-existing metadata and indexed file facts. The mock provider does not call an
-external model, write files, generate patch content, or mutate Git; every patch
-artifact begins in `not_generated` state.
+The Agent Runs screen supports creating a new review-only run through the Mock
+Provider or, when configured in the native process, OpenAI. A submitted task is
+converted into one durable run record, a structured proposed plan, a persisted
+proposed change, and a linked pending approval request. The Mock Provider is the
+default and remains deterministic. OpenAI generates plans only from bounded
+repository metadata and indexed summaries; it receives no arbitrary file
+contents. Neither path writes files, generates patch content, uses tools, or
+mutates Git, and every patch artifact begins in `not_generated` state.
+
+Provider output is validated before any linked records are created. Invalid or
+unsafe output leaves the run composer in an error state and does not persist a
+partial run, proposed change, or approval request.
 
 ## Run Lifecycle
 
@@ -236,10 +241,12 @@ Handoffs should not rely on hidden conversation state.
 
 ## MVP Runtime
 
-The current mock runtime supports:
+The current runtime supports:
 
 - Creating a run from a user task against the selected repository
-- Building a deterministic structured plan from indexed repository context
+- Building a deterministic Mock Provider plan from indexed repository context
+- Building a real OpenAI plan from bounded repository facts when native
+  credentials are configured
 - Persisting the run and plan in SQLite
 - Persisting a linked proposed change and pending approval request
 - Opening the new run immediately in the existing plan-review surface
@@ -249,7 +256,6 @@ The production runtime should additionally support:
 
 - Creating a run from an approved plan
 - Assembling repository and task context
-- Calling an AI provider through the provider abstraction
 - Mediating basic tool use
 - Recording progress
 - Producing structured output

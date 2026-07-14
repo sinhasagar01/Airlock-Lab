@@ -62,8 +62,8 @@
   --font-size-meta: 13px;
   --font-size-caption: 12px;
   --font-family-sans:
-    Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
-    Roboto, "Helvetica Neue", Arial, ui-sans-serif, system-ui, sans-serif;
+    Inter, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, ui-sans-serif, system-ui, sans-serif;
   --font-family-display:
     Inter, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI",
     Roboto, "Helvetica Neue", Arial, ui-sans-serif, system-ui, sans-serif;
@@ -1423,22 +1423,54 @@ dt {
   align-items: end;
   display: grid;
   gap: 18px;
-  grid-template-columns: minmax(0, 1fr) max-content;
+  grid-template-columns: minmax(190px, 0.45fr) minmax(0, 1fr) max-content;
   margin-top: 22px;
 }
 
+.agent-run-provider-field,
 .agent-run-task-field {
   display: grid;
   gap: 9px;
   min-width: 0;
 }
 
+.agent-run-provider-field > span,
 .agent-run-task-field > span {
   color: var(--color-text-secondary);
   font-size: 11px;
   font-weight: 730;
   letter-spacing: 0.13em;
   text-transform: uppercase;
+}
+
+.agent-run-provider-field select {
+  appearance: none;
+  background: #fbfdff;
+  border: 1px solid #dfe7ef;
+  border-radius: 14px;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-weight: 650;
+  min-height: 48px;
+  padding: 0 38px 0 14px;
+}
+
+.agent-run-provider-field small {
+  color: var(--color-text-subtle);
+  font-size: 12px;
+  line-height: 1.45;
+  max-width: 260px;
+}
+
+.agent-run-provider-field select:focus-visible {
+  border-color: var(--color-focus);
+  box-shadow: 0 0 0 3px rgba(234, 118, 84, 0.22);
+  outline: none;
+}
+
+.agent-run-provider-field select:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
 }
 
 .agent-run-task-field textarea {
@@ -1808,8 +1840,11 @@ dt {
 
 .demo-workflow-card,
 .demo-workflow-inline {
-  background:
-    linear-gradient(135deg, rgba(255, 247, 239, 0.92), rgba(251, 253, 255, 0.96));
+  background: linear-gradient(
+    135deg,
+    rgba(255, 247, 239, 0.92),
+    rgba(251, 253, 255, 0.96)
+  );
   border-color: rgba(231, 113, 80, 0.18);
 }
 
@@ -3024,7 +3059,10 @@ dt {
   border-radius: var(--radius-md);
   display: grid;
   gap: 16px;
-  grid-template-columns: 44px minmax(0, 1fr) minmax(148px, max-content) max-content;
+  grid-template-columns: 44px minmax(0, 1fr) minmax(
+      148px,
+      max-content
+    ) max-content;
   min-height: 92px;
   padding: 18px;
 }
@@ -3787,7 +3825,7 @@ dd {
 .file-metadata-grid > div {
   background: var(--color-surface);
   border: 1px solid #e7edf4;
-    border-radius: var(--radius-sm);
+  border-radius: var(--radius-sm);
 
   min-width: 0;
   padding: 13px 14px;

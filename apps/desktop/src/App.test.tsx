@@ -23,6 +23,10 @@ import {
   saveProposedChanges,
 } from "./storage/proposedChangeStore";
 import { loadSavedRepositories } from "./storage/repositoryStore";
+import {
+  loadOpenAiProviderConfiguration,
+  requestOpenAiPlan,
+} from "./storage/providerRuntime";
 
 const mockState = vi.hoisted(() => {
   const repository: RepositorySummary = {
@@ -249,7 +253,8 @@ const mockState = vi.hoisted(() => {
             id: "proposal-file-app",
             path: "apps/desktop/src/App.tsx",
             operation: "modify",
-            reason: "Primary shell and run-detail composition lives here today.",
+            reason:
+              "Primary shell and run-detail composition lives here today.",
             riskLevel: "medium",
             patchArtifactStatus: "not_generated",
           },
@@ -335,7 +340,8 @@ const mockState = vi.hoisted(() => {
             id: "proposal-file-indexing",
             path: "packages/indexing/src/index.ts",
             operation: "modify",
-            reason: "Repository intelligence helpers derive context from facts.",
+            reason:
+              "Repository intelligence helpers derive context from facts.",
             riskLevel: "low",
             patchArtifactStatus: "not_generated",
           },
@@ -366,8 +372,8 @@ vi.mock("./storage/repositoryStore", () => ({
 }));
 
 vi.mock("./storage/gitMetadata", () => ({
-  loadRepositoriesGitMetadata: vi.fn(async (repositories: RepositorySummary[]) =>
-    repositories,
+  loadRepositoriesGitMetadata: vi.fn(
+    async (repositories: RepositorySummary[]) => repositories,
   ),
 }));
 
@@ -417,6 +423,15 @@ vi.mock("./storage/filePreview", () => ({
   previewRepositoryFile: vi.fn(() => Promise.resolve(mockState.preview)),
 }));
 
+vi.mock("./storage/providerRuntime", () => ({
+  loadOpenAiProviderConfiguration: vi.fn(async () => ({
+    configured: false,
+    model: "gpt-5.6-luna",
+    reason: "Set OPENAI_API_KEY in the native app environment.",
+  })),
+  requestOpenAiPlan: vi.fn(),
+}));
+
 function renderApp(options?: {
   files?: IndexedFileFact[];
   gitDiff?: GitFileDiff;
@@ -429,8 +444,9 @@ function renderApp(options?: {
   mockState.gitDiff = options?.gitDiff ?? defaultGitDiff;
   mockState.gitStatus = options?.gitStatus ?? defaultGitStatus;
   mockState.preview = options?.preview ?? defaultPreview;
-  mockState.proposedChanges =
-    options?.proposedChanges ?? [...defaultProposedChanges];
+  mockState.proposedChanges = options?.proposedChanges ?? [
+    ...defaultProposedChanges,
+  ];
   mockState.repositories = options?.repositories ?? [...defaultRepositories];
 
   return {
@@ -457,6 +473,12 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  vi.mocked(loadOpenAiProviderConfiguration).mockResolvedValue({
+    configured: false,
+    model: "gpt-5.6-luna",
+    reason: "Set OPENAI_API_KEY in the native app environment.",
+  });
+  vi.mocked(requestOpenAiPlan).mockReset();
   vi.mocked(previewRepositoryFile).mockImplementation(() =>
     Promise.resolve(mockState.preview),
   );
@@ -715,7 +737,9 @@ describe("App smoke tests", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByText("demo workflow").length).toBeGreaterThan(0);
     expect(screen.getByText("seeded path")).toBeInTheDocument();
-    expect(screen.getAllByText(/approval-provider-rfc/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/approval-provider-rfc/).length).toBeGreaterThan(
+      0,
+    );
     expect(
       screen.getByRole("button", { name: "Inspect local diffs" }),
     ).toBeEnabled();
@@ -728,7 +752,9 @@ describe("App smoke tests", () => {
       }),
     ).toBeInTheDocument();
     expect(screen.getByText("Connected MVP review path")).toBeInTheDocument();
-    expect(screen.getByText(/generated patch artifact states/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/generated patch artifact states/),
+    ).toBeInTheDocument();
     expect(screen.getByText("Generated Patch Artifacts")).toBeInTheDocument();
     expect(screen.getByText("Local repository diffs")).toBeInTheDocument();
     expect(
@@ -737,7 +763,9 @@ describe("App smoke tests", () => {
       ),
     ).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Inspect local diffs" }));
+    await user.click(
+      screen.getByRole("button", { name: "Inspect local diffs" }),
+    );
 
     expect(
       await screen.findByRole("heading", {
@@ -747,7 +775,9 @@ describe("App smoke tests", () => {
     expect(
       screen.getByText("Approval-linked local change review"),
     ).toBeInTheDocument();
-    expect(screen.getByText(/Local Git diffs remain repository state/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Local Git diffs remain repository state/),
+    ).toBeInTheDocument();
     expect(screen.getAllByText("matches approval").length).toBeGreaterThan(0);
   });
 
@@ -781,7 +811,9 @@ describe("App smoke tests", () => {
       "/workspace",
     );
     expect(screen.getByText("Changed files")).toBeInTheDocument();
-    expect(screen.getAllByText("apps/desktop/src/App.tsx").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText("apps/desktop/src/App.tsx").length,
+    ).toBeGreaterThan(0);
     expect(screen.getByText("packages/git/src/index.ts")).toBeInTheDocument();
     expect(screen.getByText("docs/features/git-status.md")).toBeInTheDocument();
     expect(screen.getByText("Staged / Unstaged")).toBeInTheDocument();
@@ -793,33 +825,50 @@ describe("App smoke tests", () => {
       expect.objectContaining({ path: "apps/desktop/src/App.tsx" }),
     );
     expect(await screen.findByText("Local Git diff")).toBeInTheDocument();
-    expect(screen.getByText("+export const label = 'new';")).toBeInTheDocument();
+    expect(
+      screen.getByText("+export const label = 'new';"),
+    ).toBeInTheDocument();
 
-    const callCountBeforeRefresh = vi.mocked(loadGitStatusSummary).mock.calls.length;
+    const callCountBeforeRefresh =
+      vi.mocked(loadGitStatusSummary).mock.calls.length;
 
-    await user.click(screen.getByRole("button", { name: "Refresh Git status" }));
+    await user.click(
+      screen.getByRole("button", { name: "Refresh Git status" }),
+    );
 
-    expect(loadGitStatusSummary).toHaveBeenCalledTimes(callCountBeforeRefresh + 1);
+    expect(loadGitStatusSummary).toHaveBeenCalledTimes(
+      callCountBeforeRefresh + 1,
+    );
   });
 
   it("shows Git status unavailable state when the native Git status wrapper rejects", async () => {
-    vi.mocked(loadGitStatusSummary).mockRejectedValue(new Error("git unavailable"));
+    vi.mocked(loadGitStatusSummary).mockRejectedValue(
+      new Error("git unavailable"),
+    );
     const { user } = renderApp();
 
     await user.click(screen.getByRole("button", { name: "Changes" }));
 
-    expect(await screen.findByText("Git status unavailable")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Git status unavailable"),
+    ).toBeInTheDocument();
     expect(
       screen.getByText(
         "The workspace could not read Git status for the selected repository. No write operations were attempted.",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText("Approval-linked local change review")).toBeInTheDocument();
+    expect(
+      screen.getByText("Approval-linked local change review"),
+    ).toBeInTheDocument();
   });
 
   it("keeps the demo workflow navigable when native status and preview wrappers are unavailable", async () => {
-    vi.mocked(loadGitStatusSummary).mockRejectedValue(new Error("git unavailable"));
-    vi.mocked(previewRepositoryFile).mockRejectedValue(new Error("preview unavailable"));
+    vi.mocked(loadGitStatusSummary).mockRejectedValue(
+      new Error("git unavailable"),
+    );
+    vi.mocked(previewRepositoryFile).mockRejectedValue(
+      new Error("preview unavailable"),
+    );
     const { user } = renderApp();
 
     await user.click(screen.getByRole("button", { name: "Repositories" }));
@@ -881,12 +930,16 @@ describe("App smoke tests", () => {
         name: "Draft app shell implementation plan",
       }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Structured implementation plan")).toBeInTheDocument();
+    expect(
+      screen.getByText("Structured implementation plan"),
+    ).toBeInTheDocument();
     expect(screen.getByText("Ordered plan")).toBeInTheDocument();
     expect(screen.getByText("Affected files")).toBeInTheDocument();
     expect(screen.getByText("Known risks")).toBeInTheDocument();
     expect(screen.getByText("Check strategy")).toBeInTheDocument();
-    expect(screen.getAllByText("apps/desktop/src/App.tsx").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText("apps/desktop/src/App.tsx").length,
+    ).toBeGreaterThan(0);
     expect(screen.getByText("Proposal Record")).toBeInTheDocument();
     expect(screen.getAllByText("proposal-mvp-shell").length).toBeGreaterThan(0);
     expect(screen.getAllByText("ready for review").length).toBeGreaterThan(0);
@@ -895,23 +948,33 @@ describe("App smoke tests", () => {
     expect(
       screen.getByText(/No patch content has been generated or applied/),
     ).toBeInTheDocument();
-    expect(screen.getAllByText("Patch not generated").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Patch not generated").length).toBeGreaterThan(
+      0,
+    );
     expect(
       screen.getByText(
         "Future agent execution will attach a reviewable generated patch here.",
       ),
     ).toBeInTheDocument();
     expect(screen.getAllByText("not generated").length).toBeGreaterThan(0);
-    expect(screen.queryByText("Generated patch artifact preview")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Generated patch artifact preview"),
+    ).not.toBeInTheDocument();
     await user.click(
       screen.getByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
       }),
     );
     expect(screen.getByText("Generated patch artifact")).toBeInTheDocument();
-    expect(screen.getByText("Generated patch artifact preview")).toBeInTheDocument();
-    expect(screen.getByText("Sample/demo generated artifact data")).toBeInTheDocument();
-    expect(screen.getByText("+export type PatchArtifact = string;")).toBeInTheDocument();
+    expect(
+      screen.getByText("Generated patch artifact preview"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Sample/demo generated artifact data"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("+export type PatchArtifact = string;"),
+    ).toBeInTheDocument();
     expect(screen.getByText(/real Git diffs yet/)).toBeInTheDocument();
     expect(screen.getByText(String(defaultFiles.length))).toBeInTheDocument();
     expect(
@@ -976,6 +1039,183 @@ describe("App smoke tests", () => {
         (artifact) => artifact.status === "not_generated",
       ),
     ).toBe(true);
+  });
+
+  it("shows OpenAI as unavailable when native credentials are not configured", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+
+    const openAiOption = await screen.findByRole("option", {
+      name: /OpenAI · gpt-5\.6-luna/,
+    });
+    expect(openAiOption).toBeDisabled();
+    expect(
+      screen.getByText("Set OPENAI_API_KEY in the native app environment."),
+    ).toBeInTheDocument();
+  });
+
+  it("creates persisted review records from a validated OpenAI plan", async () => {
+    vi.mocked(loadOpenAiProviderConfiguration).mockResolvedValue({
+      configured: true,
+      model: "test-model",
+    });
+    vi.mocked(requestOpenAiPlan).mockResolvedValue({
+      summary: "Add provider-backed repository planning.",
+      steps: [
+        {
+          title: "Wire provider planning",
+          description: "Connect the native plan transport to the composer.",
+        },
+      ],
+      affectedFiles: [
+        {
+          path: "src/App.tsx",
+          reason: "Expose provider selection and plan status.",
+          operation: "modify",
+          riskLevel: "medium",
+        },
+      ],
+      risks: [
+        {
+          level: "medium",
+          title: "Validate provider output",
+          description: "Reject malformed plans before persistence.",
+        },
+      ],
+      validation: [{ label: "Run provider contract tests" }],
+      approvalRequired: true,
+    });
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    const providerSelect = screen.getByRole("combobox", {
+      name: "Agent provider",
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("option", { name: "OpenAI · test-model" }),
+      ).toBeEnabled();
+    });
+    await user.selectOptions(providerSelect, "openai");
+    await user.type(
+      screen.getByRole("textbox", { name: "Agent task request" }),
+      "Add provider-backed repository planning",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Generate plan with OpenAI" }),
+    );
+
+    expect(
+      await screen.findByText(
+        "OpenAI run created and saved. Review the structured plan before approving it.",
+      ),
+    ).toBeInTheDocument();
+    expect(requestOpenAiPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskPrompt: "Add provider-backed repository planning",
+        context: expect.objectContaining({
+          branch: "main",
+          indexedFileCount: defaultFiles.length,
+          keyFiles: expect.arrayContaining(["package.json", "README.md"]),
+          projectFolders: expect.arrayContaining(["src", "docs"]),
+        }),
+      }),
+    );
+    expect(saveAgentRunRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        run: expect.objectContaining({
+          providerId: "openai",
+          model: "test-model",
+        }),
+      }),
+    );
+    expect(saveProposedChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        files: [expect.objectContaining({ path: "src/App.tsx" })],
+        patchArtifacts: [expect.objectContaining({ status: "not_generated" })],
+      }),
+    );
+    expect(saveApprovalRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "pending" }),
+    );
+  });
+
+  it("rejects malformed OpenAI output without creating review records", async () => {
+    vi.mocked(loadOpenAiProviderConfiguration).mockResolvedValue({
+      configured: true,
+      model: "test-model",
+    });
+    vi.mocked(requestOpenAiPlan).mockResolvedValue({ summary: "Incomplete" });
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("option", { name: "OpenAI · test-model" }),
+      ).toBeEnabled();
+    });
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Agent provider" }),
+      "openai",
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "Agent task request" }),
+      "Create an invalid plan",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Generate plan with OpenAI" }),
+    );
+
+    expect(
+      await screen.findByText(
+        "OpenAI returned malformed plan output. No review records were created.",
+      ),
+    ).toBeInTheDocument();
+    expect(saveAgentRunRecord).not.toHaveBeenCalled();
+    expect(saveProposedChange).not.toHaveBeenCalled();
+    expect(saveApprovalRequest).not.toHaveBeenCalled();
+  });
+
+  it("shows normalized OpenAI errors without creating broken records", async () => {
+    vi.mocked(loadOpenAiProviderConfiguration).mockResolvedValue({
+      configured: true,
+      model: "test-model",
+    });
+    vi.mocked(requestOpenAiPlan).mockRejectedValue(
+      new Error("provider_unavailable: private upstream details"),
+    );
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await waitFor(() => {
+      expect(
+        screen.getByRole("option", { name: "OpenAI · test-model" }),
+      ).toBeEnabled();
+    });
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Agent provider" }),
+      "openai",
+    );
+    await user.type(
+      screen.getByRole("textbox", { name: "Agent task request" }),
+      "Create a provider plan",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Generate plan with OpenAI" }),
+    );
+
+    expect(
+      await screen.findByText(
+        "OpenAI is currently unavailable. No review records were created.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/private upstream details/),
+    ).not.toBeInTheDocument();
+    expect(saveAgentRunRecord).not.toHaveBeenCalled();
+    expect(saveProposedChange).not.toHaveBeenCalled();
+    expect(saveApprovalRequest).not.toHaveBeenCalled();
   });
 
   it("keeps a mock run in session without invoking persistence in the web fallback", async () => {
@@ -1046,20 +1286,26 @@ describe("App smoke tests", () => {
     expect(
       screen.getByText("Draft app shell implementation plan"),
     ).toBeInTheDocument();
-    expect(screen.getByText(/Mock Provider.*mock-planner-v1/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Mock Provider.*mock-planner-v1/),
+    ).toBeInTheDocument();
     expect(screen.getByText("Plan attached to approval")).toBeInTheDocument();
     expect(screen.getByText("Proposal Status")).toBeInTheDocument();
     expect(screen.getByText("Patch Artifacts")).toBeInTheDocument();
     expect(screen.getByText("Patch artifact placeholders")).toBeInTheDocument();
     expect(
-      screen.getByText(/They are not local Git diffs and no patch has been written/),
+      screen.getByText(
+        /They are not local Git diffs and no patch has been written/,
+      ),
     ).toBeInTheDocument();
     await user.click(
       screen.getAllByRole("button", {
         name: /failed docs\/specs\/provider-api\.md/,
       })[0],
     );
-    expect(screen.getAllByText("Patch generation failed").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText("Patch generation failed").length,
+    ).toBeGreaterThan(0);
     await user.click(
       screen.getAllByRole("button", {
         name: /unavailable docs\/rfcs\/provider-abstraction\.md/,
@@ -1078,10 +1324,14 @@ describe("App smoke tests", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByText("Local Diffs")).toBeInTheDocument();
-    expect(screen.getAllByText("Local diff available").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Local diff available").length).toBeGreaterThan(
+      0,
+    );
     expect(screen.getAllByText("No local diff yet").length).toBeGreaterThan(0);
     expect(await screen.findByText("Local Git diff")).toBeInTheDocument();
-    expect(screen.getByText("+export const label = 'new';")).toBeInTheDocument();
+    expect(
+      screen.getByText("+export const label = 'new';"),
+    ).toBeInTheDocument();
     expect(loadGitFileDiff).toHaveBeenCalledWith(
       "repo-workspace",
       "/workspace",
@@ -1153,7 +1403,9 @@ describe("App smoke tests", () => {
 
     await user.click(screen.getByRole("button", { name: "Approvals" }));
 
-    expect(await screen.findByText("Diff could not be loaded")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Diff could not be loaded"),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled();
   });
@@ -1297,13 +1549,17 @@ describe("App smoke tests", () => {
     const { user } = renderApp({ files });
 
     await user.click(screen.getByRole("button", { name: "Changes" }));
-    expect(await screen.findByText("Preview for src/App.tsx")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Preview for src/App.tsx"),
+    ).toBeInTheDocument();
 
     await user.click(
       screen.getByRole("button", { name: "docs/guide.md, md, 512 B" }),
     );
 
-    expect(await screen.findByText("Preview for docs/guide.md")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Preview for docs/guide.md"),
+    ).toBeInTheDocument();
     expect(previewRepositoryFile).toHaveBeenLastCalledWith(
       "/workspace",
       "docs/guide.md",

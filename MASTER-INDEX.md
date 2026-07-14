@@ -84,6 +84,7 @@
 - [Docs](docs/README.md)
 - [AI System](docs/ai-system/README.md)
 - [Agent Runtime](docs/ai-system/agent-runtime.md)
+- [Provider Adapters](docs/ai-system/provider-adapters.md)
 - [AI Native Workspace](docs/ai-system/ai-native-workspace.md)
 - [Context Engine](docs/ai-system/context-engine.md)
 - [Human Approval](docs/ai-system/human-approval.md)

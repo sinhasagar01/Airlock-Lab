@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Added optional OpenAI-backed structured plan generation behind the existing
+  provider adapter contract, while keeping Mock Provider as the default.
+- Added a native Tauri credential and request boundary using `OPENAI_API_KEY`
+  and optional `OPENAI_MODEL`; credentials never enter React or app storage.
+- Limited real-provider context to task text and bounded repository/index/Git
+  summaries, excluding file contents, secret files, environment files, and
+  internal run/repository IDs from the outbound prompt.
+- Added strict OpenAI structured-output validation and normalized provider
+  errors so malformed or failed requests cannot create partial runs, proposed
+  changes, or approvals.
+- Added Agent Run provider selection, configured/unavailable states, planning
+  progress, provider-specific success/error feedback, and actual provider/model
+  labels on run and approval detail surfaces.
+- Added provider contract, desktop workflow, and native request-boundary tests
+  while preserving `not_generated` patch artifacts, read-only repository
+  behavior, and the deterministic mock demo flow.
 - Added the provider-independent `AgentProviderAdapter` contract with typed
   provider identity, capabilities, indexed run context, plan input, and
   normalized structured plan output.

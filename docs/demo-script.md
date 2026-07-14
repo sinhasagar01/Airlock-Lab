@@ -2,8 +2,8 @@
 
 ## Demo Goal
 
-Show the complete local-first review workflow without implying that a real AI
-provider, patch generator, file writer, or Git mutation is connected.
+Show the complete local-first review workflow without implying that provider
+plan generation can generate patches, write files, or mutate Git state.
 
 The recommended demo uses the packaged native app. The web preview is useful
 for UI rehearsal, but repository picking, SQLite persistence, indexing, and Git
@@ -17,7 +17,8 @@ reads require the Tauri runtime.
    demo if Repository Intelligence reports zero files.
 4. Decide whether to demonstrate a clean repository or an existing local
    change. Do not create or modify project files for the demo.
-5. Confirm the header shows `Provider: Mock Provider`.
+5. Keep Mock Provider selected for the deterministic demo. OpenAI is an optional
+   plan-only path when the native process has `OPENAI_API_KEY` configured.
 6. Confirm Settings shows cache clearing and reset as unavailable or guarded.
 7. Use this task prompt:
 
@@ -73,6 +74,19 @@ It does not call an external model, generate a patch, or write files."
 Confirm the run shows the submitted task, Mock Provider and
 `mock-planner-v1`, selected repository and branch, waiting-for-approval status,
 and linked proposal and approval.
+
+### Optional OpenAI Planning Variant
+
+For a provider-backed rehearsal, launch the native app with `OPENAI_API_KEY`,
+choose **OpenAI** in the Agent Run composer, and submit the same task. Explain
+that only the displayed repository summary is sent: repository name, branch,
+indexed count, key files, project folders, extension counts, Git summary, and
+the task. Full file contents and secret/environment files are not sent.
+
+The successful result follows the same persisted run, proposed-change, pending
+approval, and `not_generated` patch-artifact workflow. If OpenAI is unavailable
+or returns malformed output, show the error state and confirm that no partial
+review records were created.
 
 ### 5. Inspect The Proposed Plan
 
@@ -182,13 +196,16 @@ Real today:
 
 Mock or sample today:
 
-- Agent planning provider
+- Deterministic Mock Provider planning
 - Seeded connected demo records
 - Stored generated artifact preview content labeled as sample/demo
 
+Optional real capability today:
+
+- OpenAI structured plan generation when configured in the native process
+
 Not implemented:
 
-- Real AI provider calls
 - Real patch generation
 - Patch application or file writes
 - Git staging, reset, checkout, commit, clean, or other mutation

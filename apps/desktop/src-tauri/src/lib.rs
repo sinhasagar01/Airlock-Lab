@@ -1,15 +1,22 @@
 use std::{
-    fs,
+    env, fs,
     path::{Component, Path, PathBuf},
     process::Command,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 const MAX_INDEXED_FILES: usize = 5_000;
 const MAX_PREVIEW_BYTES: u64 = 256 * 1024;
 const MAX_DIFF_BYTES: usize = 512 * 1024;
+const MAX_PROVIDER_TASK_BYTES: usize = 1_200;
+const MAX_PROVIDER_KEY_FILES: usize = 20;
+const MAX_PROVIDER_FOLDERS: usize = 20;
+const MAX_PROVIDER_EXTENSIONS: usize = 12;
+const DEFAULT_OPENAI_MODEL: &str = "gpt-5.6-luna";
+const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 const IGNORED_DIRECTORIES: &[&str] = &[
     ".git",
     "node_modules",
@@ -104,6 +111,50 @@ struct GitFileDiff {
     raw_diff: Option<String>,
     lines: Vec<GitDiffLine>,
     refreshed_at: String,
+}
+
+#[derive(Serialize)]
+struct OpenAiProviderConfiguration {
+    configured: bool,
+    model: String,
+    reason: Option<String>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAiPlanExtensionSummary {
+    extension: String,
+    count: usize,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAiPlanGitContext {
+    is_git_repository: bool,
+    is_clean: bool,
+    changed_file_count: usize,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAiPlanContext {
+    branch: String,
+    indexed_file_count: usize,
+    key_files: Vec<String>,
+    project_folders: Vec<String>,
+    top_extensions: Vec<OpenAiPlanExtensionSummary>,
+    git: OpenAiPlanGitContext,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAiPlanInput {
+    run_id: String,
+    repository_id: String,
+    repository_name: Option<String>,
+    task_title: String,
+    task_prompt: String,
+    context: OpenAiPlanContext,
 }
 
 fn git_output(repository_path: &str, args: &[&str]) -> Option<String> {
@@ -246,6 +297,208 @@ fn is_safe_relative_path(file_path: &str) -> bool {
             false
         }
     })
+}
+
+fn openai_model() -> String {
+    env::var("OPENAI_MODEL")
+        .ok()
+        .map(|model| model.trim().to_string())
+        .filter(|model| !model.is_empty())
+        .unwrap_or_else(|| DEFAULT_OPENAI_MODEL.to_string())
+}
+
+fn is_sensitive_provider_path(file_path: &str) -> bool {
+    let normalized = file_path.to_ascii_lowercase();
+    let file_name = Path::new(&normalized)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+
+    file_name == ".env"
+        || file_name.starts_with(".env.")
+        || matches!(file_name, "id_rsa" | "id_ed25519" | "credentials.json")
+        || file_name.starts_with("secrets.")
+        || [".pem", ".key", ".p12", ".pfx"]
+            .iter()
+            .any(|extension| file_name.ends_with(extension))
+}
+
+fn validate_openai_plan_input(input: &OpenAiPlanInput) -> Result<(), String> {
+    let title = input.task_title.trim();
+    let prompt = input.task_prompt.trim();
+
+    if title.is_empty() || title.len() > 160 {
+        return Err("invalid_input".to_string());
+    }
+
+    if prompt.is_empty() || prompt.len() > MAX_PROVIDER_TASK_BYTES {
+        return Err("invalid_input".to_string());
+    }
+
+    if input.context.branch.trim().is_empty() || input.context.branch.len() > 200 {
+        return Err("invalid_input".to_string());
+    }
+
+    if input.context.indexed_file_count > MAX_INDEXED_FILES
+        || input.context.key_files.len() > MAX_PROVIDER_KEY_FILES
+        || input.context.project_folders.len() > MAX_PROVIDER_FOLDERS
+        || input.context.top_extensions.len() > MAX_PROVIDER_EXTENSIONS
+    {
+        return Err("invalid_input".to_string());
+    }
+
+    if input.context.key_files.iter().any(|path| {
+        path.len() > 320 || !is_safe_relative_path(path) || is_sensitive_provider_path(path)
+    }) {
+        return Err("invalid_input".to_string());
+    }
+
+    if input.context.project_folders.iter().any(|folder| {
+        folder.len() > 120
+            || !is_safe_relative_path(folder)
+            || folder.contains('/')
+            || folder.contains('\\')
+            || is_sensitive_provider_path(folder)
+    }) {
+        return Err("invalid_input".to_string());
+    }
+
+    if input.context.top_extensions.iter().any(|extension| {
+        extension.extension.trim().is_empty()
+            || extension.extension.len() > 24
+            || extension.count > MAX_INDEXED_FILES
+    }) {
+        return Err("invalid_input".to_string());
+    }
+
+    Ok(())
+}
+
+fn openai_plan_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "summary",
+            "steps",
+            "affectedFiles",
+            "risks",
+            "validation",
+            "approvalRequired"
+        ],
+        "properties": {
+            "summary": { "type": "string" },
+            "steps": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["title", "description"],
+                    "properties": {
+                        "title": { "type": "string" },
+                        "description": { "type": "string" }
+                    }
+                }
+            },
+            "affectedFiles": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["path", "reason", "operation", "riskLevel"],
+                    "properties": {
+                        "path": { "type": "string" },
+                        "reason": { "type": "string" },
+                        "operation": {
+                            "type": "string",
+                            "enum": ["create", "modify", "delete", "rename", "unknown"]
+                        },
+                        "riskLevel": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high"]
+                        }
+                    }
+                }
+            },
+            "risks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["level", "title", "description"],
+                    "properties": {
+                        "level": { "type": "string", "enum": ["low", "medium", "high"] },
+                        "title": { "type": "string" },
+                        "description": { "type": "string" }
+                    }
+                }
+            },
+            "validation": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["label"],
+                    "properties": {
+                        "label": { "type": "string" }
+                    }
+                }
+            },
+            "approvalRequired": { "type": "boolean" }
+        }
+    })
+}
+
+fn build_openai_plan_request(input: &OpenAiPlanInput, model: &str) -> Value {
+    let bounded_prompt = json!({
+        "taskTitle": input.task_title.trim(),
+        "taskPrompt": input.task_prompt.trim(),
+        "repositoryName": input.repository_name,
+        "branch": input.context.branch,
+        "indexedFileCount": input.context.indexed_file_count,
+        "keyFiles": input.context.key_files,
+        "projectFolders": input.context.project_folders,
+        "topExtensions": input.context.top_extensions,
+        "git": input.context.git
+    });
+
+    json!({
+        "model": model,
+        "store": false,
+        "instructions": "Create a reviewable implementation plan only. Use only the supplied repository summary. Do not request or infer file contents, secrets, tools, shell commands, patches, or file writes. Every result requires human approval.",
+        "input": [{
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": bounded_prompt.to_string()
+            }]
+        }],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "agent_plan",
+                "strict": true,
+                "schema": openai_plan_schema()
+            }
+        },
+        "max_output_tokens": 4000
+    })
+}
+
+fn extract_openai_output_text(response: &Value) -> Option<&str> {
+    response
+        .get("output")?
+        .as_array()?
+        .iter()
+        .flat_map(|item| {
+            item.get("content")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .find(|content| content.get("type").and_then(Value::as_str) == Some("output_text"))
+        .and_then(|content| content.get("text"))
+        .and_then(Value::as_str)
 }
 
 fn git_change_kind(index_status: char, worktree_status: char) -> String {
@@ -876,6 +1129,77 @@ fn load_git_file_diff(
     }
 }
 
+#[tauri::command]
+fn get_openai_provider_configuration() -> OpenAiProviderConfiguration {
+    let configured = env::var("OPENAI_API_KEY")
+        .ok()
+        .is_some_and(|key| !key.trim().is_empty());
+
+    OpenAiProviderConfiguration {
+        configured,
+        model: openai_model(),
+        reason: (!configured).then(|| {
+            "Set OPENAI_API_KEY in the native app environment to enable OpenAI planning."
+                .to_string()
+        }),
+    }
+}
+
+#[tauri::command]
+async fn create_openai_plan(input: OpenAiPlanInput) -> Result<Value, String> {
+    validate_openai_plan_input(&input)?;
+
+    let api_key = env::var("OPENAI_API_KEY")
+        .ok()
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty())
+        .ok_or_else(|| "provider_not_configured".to_string())?;
+    let model = openai_model();
+    let request_body = build_openai_plan_request(&input, &model);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .build()
+        .map_err(|_| "request_failed".to_string())?;
+    let response = client
+        .post(OPENAI_RESPONSES_URL)
+        .bearer_auth(api_key)
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|error| {
+            if error.is_timeout() {
+                "timeout".to_string()
+            } else {
+                "request_failed".to_string()
+            }
+        })?;
+    let status = response.status();
+
+    if !status.is_success() {
+        return Err(match status.as_u16() {
+            401 | 403 => "authentication_error",
+            408 | 504 => "timeout",
+            429 => "rate_limit",
+            _ => "provider_unavailable",
+        }
+        .to_string());
+    }
+
+    let response_body = response
+        .json::<Value>()
+        .await
+        .map_err(|_| "invalid_output".to_string())?;
+
+    if response_body.get("status").and_then(Value::as_str) != Some("completed") {
+        return Err("invalid_output".to_string());
+    }
+
+    let output_text =
+        extract_openai_output_text(&response_body).ok_or_else(|| "invalid_output".to_string())?;
+
+    serde_json::from_str::<Value>(output_text).map_err(|_| "invalid_output".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -917,6 +1241,106 @@ mod tests {
             output.status.success(),
             "git init failed: {}",
             String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn test_openai_plan_input() -> OpenAiPlanInput {
+        OpenAiPlanInput {
+            run_id: "run-private-id".to_string(),
+            repository_id: "repository-private-id".to_string(),
+            repository_name: Some("AI Developer Workspace".to_string()),
+            task_title: "Add a provider adapter".to_string(),
+            task_prompt: "Create a bounded implementation plan for an OpenAI adapter.".to_string(),
+            context: OpenAiPlanContext {
+                branch: "main".to_string(),
+                indexed_file_count: 42,
+                key_files: vec!["package.json".to_string(), "src/App.tsx".to_string()],
+                project_folders: vec!["src".to_string(), "docs".to_string()],
+                top_extensions: vec![OpenAiPlanExtensionSummary {
+                    extension: "ts".to_string(),
+                    count: 12,
+                }],
+                git: OpenAiPlanGitContext {
+                    is_git_repository: true,
+                    is_clean: false,
+                    changed_file_count: 2,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn openai_plan_input_accepts_bounded_repository_summary() {
+        assert_eq!(
+            validate_openai_plan_input(&test_openai_plan_input()),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn openai_plan_input_rejects_sensitive_traversal_and_oversized_context() {
+        let mut sensitive = test_openai_plan_input();
+        sensitive.context.key_files = vec![".env.production".to_string()];
+        assert_eq!(
+            validate_openai_plan_input(&sensitive),
+            Err("invalid_input".to_string())
+        );
+
+        let mut traversal = test_openai_plan_input();
+        traversal.context.key_files = vec!["../outside.txt".to_string()];
+        assert_eq!(
+            validate_openai_plan_input(&traversal),
+            Err("invalid_input".to_string())
+        );
+
+        let mut oversized = test_openai_plan_input();
+        oversized.context.key_files = (0..=MAX_PROVIDER_KEY_FILES)
+            .map(|index| format!("src/file-{index}.ts"))
+            .collect();
+        assert_eq!(
+            validate_openai_plan_input(&oversized),
+            Err("invalid_input".to_string())
+        );
+    }
+
+    #[test]
+    fn openai_request_contains_only_bounded_context_and_strict_plan_schema() {
+        let input = test_openai_plan_input();
+        let request = build_openai_plan_request(&input, "test-model");
+        let prompt = request["input"][0]["content"][0]["text"]
+            .as_str()
+            .expect("bounded prompt text");
+
+        assert!(prompt.contains("AI Developer Workspace"));
+        assert!(prompt.contains("indexedFileCount"));
+        assert!(!prompt.contains("run-private-id"));
+        assert!(!prompt.contains("repository-private-id"));
+        assert_eq!(request["store"], false);
+        assert_eq!(request["text"]["format"]["type"], "json_schema");
+        assert_eq!(request["text"]["format"]["strict"], true);
+        assert_eq!(
+            request["text"]["format"]["schema"]["additionalProperties"],
+            false
+        );
+        assert!(request.get("tools").is_none());
+    }
+
+    #[test]
+    fn extracts_only_completed_output_text_content() {
+        let response = json!({
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "content": [
+                    { "type": "refusal", "refusal": "not used" },
+                    { "type": "output_text", "text": "{\"summary\":\"Ready\"}" }
+                ]
+            }]
+        });
+
+        assert_eq!(
+            extract_openai_output_text(&response),
+            Some("{\"summary\":\"Ready\"}")
         );
     }
 
@@ -1098,6 +1522,8 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
+            create_openai_plan,
+            get_openai_provider_configuration,
             load_git_file_diff,
             load_git_status_summary,
             load_repository_git_metadata,
