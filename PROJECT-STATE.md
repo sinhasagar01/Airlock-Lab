@@ -71,6 +71,31 @@ desktop shell components, UI-state helpers, generated patch artifact panels,
 local Git diff preview, and indexed-file browser/preview now live in focused
 desktop modules under `components`, `features`, and `lib`.
 
+## MVP Demo v1 Release Checkpoint
+
+As of 2026-07-15, the project is at an internal recorded-demo checkpoint.
+Release-accurate scope, recording instructions, and release notes are maintained
+in:
+
+- `docs/mvp-scope.md`
+- `docs/demo-script.md`
+- `docs/release-notes/mvp-demo-v1.md`
+- `docs/security/patch-application-safety.md`
+
+The checkpoint is ready for a recorded demo when the verification suite passes
+on the recording machine and the presenter uses a non-sensitive disposable
+repository. The packaged `.app` and DMG demonstrate the macOS ARM64 build path;
+they do not imply signing, notarization, public distribution, or production
+support.
+
+The release decision is deliberately split:
+
+- Internal recorded MVP demo: ready after the documented preflight passes.
+- Production or autonomous repository modification: not ready.
+- Safe Patch Application v1: future work gated by the approved safety design,
+  separate one-shot authorization, native authoritative lookup, locking,
+  same-request revalidation, audit state, and post-apply verification.
+
 ## Current UI Direction
 
 The product is in the final dashboard design migration, using

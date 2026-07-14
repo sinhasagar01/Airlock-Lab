@@ -6,7 +6,9 @@
 - Scope: Future application of approved generated patch artifacts
 - Implementation status: Application not implemented; informational readiness
   gates implemented
-- Last updated: 2026-07-14
+- Pre-apply evidence status: Complete for the MVP Demo v1 checkpoint
+- Release classification: Internal demo only; not production authorization
+- Last updated: 2026-07-15
 
 This document is a prerequisite for patch application work. It defines the
 security, approval, native-command, persistence, recovery, UX, and test
@@ -15,6 +17,10 @@ repository.
 
 Nothing in this document grants the current application permission to write
 files or mutate Git state.
+
+For the release checkpoint and recorded-demo boundary, see
+[`docs/mvp-scope.md`](../mvp-scope.md) and
+[`docs/release-notes/mvp-demo-v1.md`](../release-notes/mvp-demo-v1.md).
 
 ## Decision Summary
 
@@ -238,20 +244,20 @@ The design must address:
 
 Every condition is required. Missing or unknown values are ineligible.
 
-| Area | Required state | Failure result |
-| --- | --- | --- |
-| Runtime | Native Tauri runtime | `native_runtime_required` |
-| Repository | Saved, selected, canonical, Git-backed root | `repository_unavailable` |
-| Repository link | Proposal and approval repository IDs match active repository | `repository_mismatch` |
-| Branch | Named branch matching approved snapshot | `branch_changed` |
-| HEAD | Current commit matches approved snapshot | `head_changed` |
-| Git state | Index and working tree are clean | `working_tree_not_clean` |
-| Proposal | `ready_for_review` or approved for application review; not rejected, superseded, or applied | `proposal_not_applicable` |
-| Artifacts | All required artifacts are generated text with retained content | `artifact_unavailable` |
-| Validation | Structure valid and fresh dry-run passes | `validation_required` |
-| Application approval | Exact, unexpired, approved, unused `apply_patch` scope | `application_not_authorized` |
-| Operation | Create or modify regular UTF-8 text file | `operation_unsupported` |
-| Limits | Existing per-artifact and future proposal aggregate limits pass | `patch_limit_exceeded` |
+| Area                 | Required state                                                                              | Failure result               |
+| -------------------- | ------------------------------------------------------------------------------------------- | ---------------------------- |
+| Runtime              | Native Tauri runtime                                                                        | `native_runtime_required`    |
+| Repository           | Saved, selected, canonical, Git-backed root                                                 | `repository_unavailable`     |
+| Repository link      | Proposal and approval repository IDs match active repository                                | `repository_mismatch`        |
+| Branch               | Named branch matching approved snapshot                                                     | `branch_changed`             |
+| HEAD                 | Current commit matches approved snapshot                                                    | `head_changed`               |
+| Git state            | Index and working tree are clean                                                            | `working_tree_not_clean`     |
+| Proposal             | `ready_for_review` or approved for application review; not rejected, superseded, or applied | `proposal_not_applicable`    |
+| Artifacts            | All required artifacts are generated text with retained content                             | `artifact_unavailable`       |
+| Validation           | Structure valid and fresh dry-run passes                                                    | `validation_required`        |
+| Application approval | Exact, unexpired, approved, unused `apply_patch` scope                                      | `application_not_authorized` |
+| Operation            | Create or modify regular UTF-8 text file                                                    | `operation_unsupported`      |
+| Limits               | Existing per-artifact and future proposal aggregate limits pass                             | `patch_limit_exceeded`       |
 
 The first implementation should use the existing 64 KiB and 4,000-line limits
 for each artifact. Before implementation, an aggregate proposal file-count,
@@ -297,7 +303,8 @@ type PatchApplicationApproval = {
     sha256: string;
   }>;
   snapshot: RepositoryApplicationSnapshot;
-  status: "pending" | "approved" | "rejected" | "consumed" | "expired" | "stale";
+  status:
+    "pending" | "approved" | "rejected" | "consumed" | "expired" | "stale";
   createdAt: string;
   decidedAt?: string;
   expiresAt: string;
@@ -659,6 +666,12 @@ unbounded Git output.
 7. Perform packaged desktop security QA before enabling the capability in MVP.
 8. Consider delete, rename, binary, dirty-tree, or non-Git support only through
    separate design reviews.
+
+MVP Demo v1 completes the read-only evidence subset of step 3: structure
+validation, dry-run, artifact digest, target fingerprints, snapshot digest, and
+informational eligibility display. It does not complete authoritative native
+record lookup, application approval, attempt persistence, locking, or any
+write-capable step.
 
 ## Blocking Decisions
 

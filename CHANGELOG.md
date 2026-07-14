@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Prepared the MVP Demo v1 release checkpoint with a complete root README,
+  release-accurate MVP scope, recorded-demo run sheet, release notes, recovery
+  guidance, and explicit internal-demo versus production-readiness decisions.
+- Consolidated `docs/mvp-scope.md` as the canonical implemented scope and kept
+  the older product-area path as a compatibility link.
+- Updated the patch-application safety design and project state to record that
+  pre-apply evidence is complete for the demo while application authorization,
+  native authoritative record lookup, locking, audit state, and writes remain
+  unimplemented.
 - Added native bounded target-file fingerprints for patch validation evidence,
   including captured, missing, binary, too-large, forbidden, and unavailable
   states without returning file content to React.

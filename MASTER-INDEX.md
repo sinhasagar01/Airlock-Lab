@@ -82,6 +82,9 @@
 ## Docs
 
 - [Docs](docs/README.md)
+- [MVP Demo v1 Scope](docs/mvp-scope.md)
+- [MVP Demo Script](docs/demo-script.md)
+- [MVP Demo v1 Release Notes](docs/release-notes/mvp-demo-v1.md)
 - [AI System](docs/ai-system/README.md)
 - [Agent Runtime](docs/ai-system/agent-runtime.md)
 - [Provider Adapters](docs/ai-system/provider-adapters.md)
@@ -122,7 +125,7 @@
 - [Monitoring](docs/observability/monitoring.md)
 - [Product](docs/product/README.md)
 - [Feature Map](docs/product/feature-map.md)
-- [MVP Scope](docs/product/mvp-scope.md)
+- [Product MVP Scope Compatibility Link](docs/product/mvp-scope.md)
 - [Personas](docs/product/personas.md)
 - [Roadmap](docs/product/roadmap.md)
 - [Use Cases](docs/product/use-cases.md)

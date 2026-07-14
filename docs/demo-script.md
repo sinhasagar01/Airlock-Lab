@@ -10,6 +10,19 @@ The recommended demo uses the packaged native app. The web preview is useful
 for UI rehearsal, but repository picking, SQLite persistence, indexing, and Git
 reads require the Tauri runtime.
 
+## Recording Profile
+
+- Target length: 8 to 10 minutes; use the five-minute version for a short clip.
+- Capture: Native application window at 1440 x 900 or larger.
+- Repository: A disposable, non-sensitive local Git repository with no secrets.
+- Provider: Mock Provider for the required deterministic path; OpenAI is an
+  optional second take.
+- Audio: Narrate product intent and safety boundaries, not implementation code.
+- Privacy: Hide terminal history, API keys, unrelated local paths, notifications,
+  and other applications before recording.
+- Cursor: Pause briefly over status pills, artifact states, fingerprints, and
+  disabled controls so the evidence is readable in the recording.
+
 ## Pre-Demo Checklist
 
 1. Launch the native `AI Developer Workspace.app` build.
@@ -25,6 +38,38 @@ reads require the Tauri runtime.
 7. Use this task prompt:
 
    `Add a repository onboarding summary and validation plan`
+
+8. Run the release checks before the recording session:
+
+   ```bash
+   npm run typecheck
+   npm run lint
+   npm run test
+   npm run build
+   git diff --check
+   ```
+
+9. Confirm the app contains no API key, secret value, or sensitive repository
+   path in visible diagnostics.
+10. Record one uninterrupted Mock Provider take before attempting the optional
+    OpenAI variant.
+
+## Recorded Demo Run Sheet
+
+| Time | Scene           | Required proof                                           |
+| ---- | --------------- | -------------------------------------------------------- |
+| 0:00 | Overview        | Local-first positioning and review-only boundary         |
+| 0:40 | Repositories    | Native selection, indexing, and intelligence             |
+| 1:45 | Agent Runs      | User prompt, provider choice, persisted plan             |
+| 3:15 | Patch artifacts | Generated state, preview, digest, and validation         |
+| 4:30 | Apply Readiness | Fingerprints, snapshot digest, staleness, disabled Apply |
+| 5:45 | Approvals       | Linked evidence and approve/reject decision              |
+| 6:45 | Changes         | Separate real local Git status and diff                  |
+| 7:30 | Settings        | Provider diagnostic and guarded maintenance              |
+| 8:15 | Restart         | Durable run, proposal, approval, and validation state    |
+
+Do not cut from approval directly to a changed working tree. That edit would
+imply application behavior the MVP does not have.
 
 ## Full Walkthrough
 
@@ -248,6 +293,8 @@ Real today:
 - Indexing and Repository Intelligence facts
 - SQLite run, proposal, and approval persistence
 - Persisted generated artifact validation and read-only `git apply --check`
+- Artifact digests, bounded native target fingerprints, repository snapshot
+  digests, and staleness comparison
 - Informational Apply Readiness gates with a disabled apply boundary
 - Read-only Git status and local diffs
 - Approval/rejection metadata updates
@@ -267,3 +314,13 @@ Not implemented:
 
 - Patch application or file writes
 - Git staging, reset, checkout, commit, clean, or other mutation
+
+## Post-Recording Checklist
+
+1. Verify the recording never displays a credential or sensitive local file.
+2. Confirm generated artifacts and local Git diffs were described separately.
+3. Confirm the narration states that approval and dry-run do not apply patches.
+4. Confirm `Apply unavailable` is visible and disabled.
+5. Confirm the recording shows at least one persisted state after restart.
+6. Record the build date, platform, and provider path in the published caption.
+7. Link `docs/release-notes/mvp-demo-v1.md` from the recording description.
