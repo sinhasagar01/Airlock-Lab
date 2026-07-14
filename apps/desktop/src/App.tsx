@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
 import {
   AgentProviderError,
   type AgentRun,
@@ -107,6 +106,10 @@ import {
   loadSavedRepositories,
   saveRepositories,
 } from "./storage/repositoryStore";
+import {
+  pickRepositoryDirectories,
+  RepositoryPickerError,
+} from "./storage/repositoryPicker";
 import {
   loadOpenAiProviderConfiguration,
   requestOpenAiPlan,
@@ -927,18 +930,26 @@ export function App() {
   async function selectRepositories() {
     setRepositoryPickerError(null);
 
+    let selectedPaths: string[] | null;
+
     try {
-      const selected = await open({
-        directory: true,
-        multiple: true,
-        title: "Choose repositories",
-      });
+      selectedPaths = await pickRepositoryDirectories();
+    } catch (error) {
+      setRepositoryPickerError(
+        error instanceof RepositoryPickerError &&
+          error.code === "browser_runtime"
+          ? "Repository selection is available in the native Tauri app. The web preview cannot open local folders."
+          : "The native repository picker could not open. Restart the desktop app and try again.",
+      );
+      setActiveSection("repositories");
+      return;
+    }
 
-      if (!selected) {
-        return;
-      }
+    if (!selectedPaths) {
+      return;
+    }
 
-      const selectedPaths = Array.isArray(selected) ? selected : [selected];
+    try {
       const selectedRepositories = await loadRepositoriesGitMetadata(
         selectedPaths.map((path) => createRepositorySummaryFromPath(path)),
       );
@@ -961,7 +972,7 @@ export function App() {
       setActiveSection("repositories");
     } catch {
       setRepositoryPickerError(
-        "Repository selection is available in the native Tauri app. The web preview cannot open local folders.",
+        "The repository was selected, but the workspace could not save it. Check native storage access and try again.",
       );
       setActiveSection("repositories");
     }
