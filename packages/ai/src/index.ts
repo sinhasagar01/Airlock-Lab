@@ -27,6 +27,12 @@ export type AgentRun = {
   approvalRequired: boolean;
 };
 
+export type AgentRunRecord = {
+  run: AgentRun;
+  plan: ProposedChangePlan;
+  createdAt: string;
+};
+
 export type ProposedChangeStepStatus =
   | "planned"
   | "in_progress"
@@ -187,6 +193,154 @@ export type ApprovalRequest = {
   files: string[];
   createdAt: string;
 };
+
+export type MockAgentRunRequest = {
+  id: string;
+  repositoryId: string;
+  repositoryName: string;
+  branch: string;
+  task: string;
+  contextFilePaths: string[];
+  startedAt: string;
+  createdAt: string;
+};
+
+export type MockAgentRunResult = AgentRunRecord & {
+  proposedChange: PersistedProposedChange;
+  approvalRequest: ApprovalRequest;
+};
+
+function createMockRunTitle(task: string) {
+  const normalizedTask = task.replace(/\s+/g, " ").trim();
+
+  if (normalizedTask.length <= 68) {
+    return normalizedTask;
+  }
+
+  return `${normalizedTask.slice(0, 65)}...`;
+}
+
+export async function executeMockAgentRun(
+  request: MockAgentRunRequest,
+): Promise<MockAgentRunResult> {
+  const normalizedTask = request.task.trim();
+
+  if (!normalizedTask) {
+    throw new Error("A task request is required.");
+  }
+
+  const title = createMockRunTitle(normalizedTask);
+  const planId = `plan-${request.id}`;
+  const proposedChangeId = `proposal-${request.id}`;
+  const approvalRequestId = `approval-${request.id}`;
+  const contextFilePaths = [...new Set(request.contextFilePaths)]
+    .filter((path) => path.trim().length > 0)
+    .slice(0, 3);
+  const affectedFiles: ProposedAffectedFile[] = contextFilePaths.map((path) => ({
+    path,
+    reason:
+      "Candidate file selected from indexed repository context for mock planning review.",
+    changeType: "unknown",
+  }));
+  const plan: ProposedChangePlan = {
+    id: planId,
+    runId: request.id,
+    summary:
+      "The mock provider produced a review-only implementation plan from the submitted task and indexed repository context. No patch content was generated.",
+    approvalRequired: true,
+    steps: [
+      {
+        id: `${planId}-context`,
+        title: "Review repository context",
+        description: `Use indexed facts from ${request.repositoryName} on ${request.branch} without reading outside the selected repository.`,
+        status: "completed",
+      },
+      {
+        id: `${planId}-plan`,
+        title: "Compose structured mock plan",
+        description:
+          "Translate the task into a bounded plan, candidate files, risks, and validation checks.",
+        status: "completed",
+      },
+      {
+        id: `${planId}-approval`,
+        title: "Wait for human approval",
+        description:
+          "Pause before any future patch generation or file write is allowed.",
+        status: "planned",
+      },
+    ],
+    affectedFiles,
+    risks: [
+      {
+        level: contextFilePaths.length > 0 ? "medium" : "low",
+        title: "Mock plan requires review",
+        description:
+          "Candidate files and steps are deterministic mock-provider output and must be reviewed before future execution is connected.",
+      },
+    ],
+    validation: [
+      { label: "Review proposed plan", status: "planned" },
+      { label: "Confirm repository context", status: "planned" },
+      { label: "Approve or reject request", status: "planned" },
+    ],
+  };
+  const files: ProposedChangeFile[] = affectedFiles.map((file, index) => ({
+    id: `${proposedChangeId}-file-${index + 1}`,
+    path: file.path,
+    operation: file.changeType,
+    reason: file.reason,
+    riskLevel: "medium",
+    patchArtifactStatus: "not_generated",
+  }));
+  const proposedChange = ensureProposedPatchArtifacts({
+    id: proposedChangeId,
+    runId: request.id,
+    approvalRequestId,
+    repositoryId: request.repositoryId,
+    title,
+    summary: plan.summary,
+    status: "ready_for_review",
+    files,
+    patchArtifacts: [],
+    createdAt: request.startedAt,
+    updatedAt: request.startedAt,
+  });
+  const approvalRequest: ApprovalRequest = {
+    id: approvalRequestId,
+    title: `Review ${title}`,
+    repository: request.repositoryName,
+    agentRunId: request.id,
+    status: "pending",
+    risk: contextFilePaths.length > 0 ? "medium" : "low",
+    summary:
+      "Review the mock provider plan before any generated patch or repository write is permitted.",
+    files: contextFilePaths,
+    createdAt: request.startedAt,
+  };
+  const run: AgentRun = {
+    id: request.id,
+    title,
+    taskSummary: normalizedTask,
+    repository: request.repositoryName,
+    providerId: "mock",
+    model: "mock-planner-v1",
+    status: "waiting_for_approval",
+    nextStep: "Review the structured mock plan and approval request.",
+    startedAt: request.startedAt,
+    elapsed: "<1m",
+    confidence: contextFilePaths.length > 0 ? "medium" : "low",
+    approvalRequired: true,
+  };
+
+  return {
+    run,
+    plan,
+    proposedChange,
+    approvalRequest,
+    createdAt: request.createdAt,
+  };
+}
 
 export function createMockProvider(): ProviderAdapter {
   return {

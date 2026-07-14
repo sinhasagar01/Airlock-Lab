@@ -101,6 +101,14 @@ Repository Intelligence, proposed change review, approval review, generated
 artifact states, and matching local Git diffs. This seed is not real agent
 execution and must stay labeled as demo workflow state.
 
+The Agent Runs screen also supports creating a new review-only run through the
+mock provider. A submitted task is converted into one durable run record, a
+structured proposed plan, a persisted proposed change, and a linked pending
+approval request. Repository context is limited to the selected repository's
+existing metadata and indexed file facts. The mock provider does not call an
+external model, write files, generate patch content, or mutate Git; every patch
+artifact begins in `not_generated` state.
+
 ## Run Lifecycle
 
 ### 1. Created
@@ -228,7 +236,16 @@ Handoffs should not rely on hidden conversation state.
 
 ## MVP Runtime
 
-The MVP runtime should support:
+The current mock runtime supports:
+
+- Creating a run from a user task against the selected repository
+- Building a deterministic structured plan from indexed repository context
+- Persisting the run and plan in SQLite
+- Persisting a linked proposed change and pending approval request
+- Opening the new run immediately in the existing plan-review surface
+- Preserving generated patch artifacts as `not_generated`
+
+The production runtime should additionally support:
 
 - Creating a run from an approved plan
 - Assembling repository and task context

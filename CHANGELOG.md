@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Added task-driven Agent Run creation through the mock provider, producing a
+  structured review-only plan from selected repository metadata and indexed
+  file facts.
+- Added SQLite persistence for agent run and plan records, linked each new run
+  to a persisted proposed change and pending approval request, and kept every
+  generated patch artifact in the honest `not_generated` state.
+- Added provider-contract and desktop smoke coverage for mock-run creation and
+  its linked persistence records without file writes, patch generation, or Git
+  mutation.
 - Rebuilt the Agent Runs and Approval Review desktop grids at the 1512px app
   viewport, replacing cramped three-column auto-placement with deliberate
   master/detail, full-width plan, balanced support, artifact, and diff regions.

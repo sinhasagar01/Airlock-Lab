@@ -137,6 +137,8 @@ Current desktop smoke coverage includes:
 - Approval queue actions and pending-count updates.
 - Connected demo workflow navigation across Repository Intelligence, Agent
   Runs, Approval Review, and Changes.
+- Mock-provider run creation, including the linked durable run, review-only
+  proposed change, pending approval, and `not_generated` patch artifacts.
 - Safe file preview panel states for no file selected, loading, text preview,
   binary content, too-large files, outside-repository blocking, preview errors,
   and selected-file changes.

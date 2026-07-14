@@ -13,8 +13,15 @@ import { App } from "./App";
 import { previewRepositoryFile } from "./storage/filePreview";
 import { scanRepositoryFileTree } from "./storage/fileTreeScanner";
 import { loadGitFileDiff, loadGitStatusSummary } from "./storage/gitChanges";
-import { updateApprovalRequestStatus } from "./storage/approvalRequestStore";
-import { saveProposedChanges } from "./storage/proposedChangeStore";
+import {
+  saveApprovalRequest,
+  updateApprovalRequestStatus,
+} from "./storage/approvalRequestStore";
+import { saveAgentRunRecord } from "./storage/agentRunStore";
+import {
+  saveProposedChange,
+  saveProposedChanges,
+} from "./storage/proposedChangeStore";
 
 const mockState = vi.hoisted(() => {
   const repository: RepositorySummary = {
@@ -389,12 +396,19 @@ vi.mock("./storage/gitChanges", () => ({
 
 vi.mock("./storage/approvalRequestStore", () => ({
   loadApprovalRequests: vi.fn(async () => mockState.approvals),
+  saveApprovalRequest: vi.fn(async () => undefined),
   saveApprovalRequests: vi.fn(async () => undefined),
   updateApprovalRequestStatus: vi.fn(async () => undefined),
 }));
 
+vi.mock("./storage/agentRunStore", () => ({
+  loadAgentRunRecords: vi.fn(async () => []),
+  saveAgentRunRecord: vi.fn(async () => undefined),
+}));
+
 vi.mock("./storage/proposedChangeStore", () => ({
   loadProposedChanges: vi.fn(async () => mockState.proposedChanges),
+  saveProposedChange: vi.fn(async () => undefined),
   saveProposedChanges: vi.fn(async () => undefined),
 }));
 
@@ -892,6 +906,56 @@ describe("App smoke tests", () => {
     expect(
       await screen.findByRole("heading", { name: "2 pending approvals" }),
     ).toBeInTheDocument();
+  });
+
+  it("creates a persisted mock agent run with a review-only proposal and approval", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Agent task request" }),
+      "Add a repository context summary",
+    );
+    await user.click(screen.getByRole("button", { name: "Run mock agent" }));
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Add a repository context summary",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Mock run created and saved. Review the structured plan before approving it.",
+      ),
+    ).toBeInTheDocument();
+    expect(saveAgentRunRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        run: expect.objectContaining({
+          providerId: "mock",
+          status: "waiting_for_approval",
+        }),
+      }),
+    );
+    expect(saveProposedChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "ready_for_review",
+        files: expect.any(Array),
+        patchArtifacts: expect.any(Array),
+      }),
+    );
+    expect(saveApprovalRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "pending",
+        agentRunId: expect.stringMatching(/^run-/),
+      }),
+    );
+
+    const savedChange = vi.mocked(saveProposedChange).mock.calls[0][0];
+    expect(
+      savedChange.patchArtifacts.every(
+        (artifact) => artifact.status === "not_generated",
+      ),
+    ).toBe(true);
   });
 
   it("switches the selected agent run from the run list", async () => {

@@ -25,11 +25,12 @@ The app shell now follows a warm premium SaaS dashboard direction.
   runs, and changes.
 - Repositories also exposes a `Demo workflow` card that continues the seeded
   MVP review path into the connected agent run and approval request.
-- Agent Runs now uses a master/detail workflow with selectable runs, provider
-  and model metadata, repository context, a structured proposed plan surface,
-  persisted proposal status, expected affected files, patch artifact state, risk
-  summary, validation strategy, generated patch artifact placeholders, and
-  approval handoff.
+- Agent Runs now uses a master/detail workflow with a task composer backed by
+  the mock provider, selectable durable runs, provider and model metadata,
+  repository context, a structured proposed plan surface, persisted proposal
+  status, expected affected files, patch artifact state, risk summary,
+  validation strategy, generated patch artifact placeholders, and approval
+  handoff.
 - Approvals now uses a master/detail review workflow with selectable approval
   requests, linked agent run metadata, proposed plan review, affected files,
   persisted proposal status, risk and validation sections, repository context,
@@ -74,6 +75,8 @@ The app shell now follows a warm premium SaaS dashboard direction.
 - Agent run detail selected state, structured proposed plan state, linked
   persisted proposed-change state, approval handoff, and disabled diff action
   until generated diffs exist.
+- Mock agent task empty, running, persisted-success, session-only fallback, and
+  failure states.
 - Generated patch artifact placeholder states separate from local Git diff
   states.
 - Approval queue selected state, approval detail, proposed plan review, matching

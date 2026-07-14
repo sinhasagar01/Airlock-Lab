@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
+  type AgentRun,
   type ApprovalRequest,
   type ApprovalRequestStatus,
+  executeMockAgentRun,
   type PersistedProposedChange,
+  type ProposedChangePlan,
   type ProposedChangeFileOperation,
 } from "@ai-dev/ai";
 import {
@@ -39,14 +42,14 @@ import {
   PatchArtifactList,
 } from "./features/proposed-changes/PatchArtifacts";
 import {
-  agentRuns,
+  agentRuns as mockAgentRuns,
   changeFeatureBlocks,
   dashboardActivity,
   emptyRepository,
   mockApprovalRequests,
   mockProposedChanges,
   mockRepositories,
-  proposedChangePlans,
+  proposedChangePlans as mockProposedChangePlans,
   provider,
   quickStartItems,
   sectionEyebrows,
@@ -71,9 +74,14 @@ import {
 } from "./lib/uiState";
 import {
   loadApprovalRequests,
+  saveApprovalRequest,
   saveApprovalRequests,
   updateApprovalRequestStatus,
 } from "./storage/approvalRequestStore";
+import {
+  loadAgentRunRecords,
+  saveAgentRunRecord,
+} from "./storage/agentRunStore";
 import { previewRepositoryFile } from "./storage/filePreview";
 import { scanRepositoryFileTree } from "./storage/fileTreeScanner";
 import { loadGitFileDiff, loadGitStatusSummary } from "./storage/gitChanges";
@@ -85,6 +93,7 @@ import {
 import { loadIndexingJobs, saveIndexingJob } from "./storage/indexingJobStore";
 import {
   loadProposedChanges,
+  saveProposedChange,
   saveProposedChanges,
 } from "./storage/proposedChangeStore";
 import {
@@ -104,6 +113,10 @@ export function App() {
     "loading" | "ready" | "unavailable"
   >("loading");
   const [indexingJobs, setIndexingJobs] = useState<IndexingJob[]>([]);
+  const [agentRuns, setAgentRuns] = useState<AgentRun[]>(mockAgentRuns);
+  const [proposedChangePlans, setProposedChangePlans] = useState<
+    ProposedChangePlan[]
+  >(mockProposedChangePlans);
   const [approvalRequests, setApprovalRequests] =
     useState<ApprovalRequest[]>(mockApprovalRequests);
   const [persistedProposedChanges, setPersistedProposedChanges] =
@@ -112,7 +125,16 @@ export function App() {
   const [fileSearch, setFileSearch] = useState("");
   const [extensionFilter, setExtensionFilter] = useState("all");
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
-  const [selectedAgentRunId, setSelectedAgentRunId] = useState(agentRuns[0].id);
+  const [selectedAgentRunId, setSelectedAgentRunId] = useState(
+    mockAgentRuns[0].id,
+  );
+  const [agentTask, setAgentTask] = useState("");
+  const [agentExecutionState, setAgentExecutionState] = useState<
+    "idle" | "running" | "success" | "error"
+  >("idle");
+  const [agentExecutionMessage, setAgentExecutionMessage] = useState(
+    "Describe a task to create a review-only plan with the mock provider.",
+  );
   const [selectedApprovalRequestId, setSelectedApprovalRequestId] = useState(
     mockApprovalRequests[0].id,
   );
@@ -201,6 +223,9 @@ export function App() {
     : null;
   const pendingApprovalCount = approvalRequests.filter(
     (approval) => approval.status === "pending",
+  ).length;
+  const waitingAgentRunCount = agentRuns.filter(
+    (run) => run.status === "waiting_for_approval",
   ).length;
   const extensionCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -369,6 +394,101 @@ export function App() {
   function openDemoAgentRun() {
     setSelectedAgentRunId(demoWorkflow.runId);
     setActiveSection("agents");
+  }
+
+  async function startMockAgentRun() {
+    const task = agentTask.trim();
+
+    if (!hasActiveRepository) {
+      setAgentExecutionState("error");
+      setAgentExecutionMessage("Choose a repository before starting an agent run.");
+      return;
+    }
+
+    if (!task) {
+      setAgentExecutionState("error");
+      setAgentExecutionMessage("Enter a task request for the mock provider.");
+      return;
+    }
+
+    if (provider.status !== "connected") {
+      setAgentExecutionState("error");
+      setAgentExecutionMessage("The mock provider is not connected.");
+      return;
+    }
+
+    setAgentExecutionState("running");
+    setAgentExecutionMessage(
+      "Mock Provider is creating a structured review plan. No files will be written.",
+    );
+
+    const createdAt = new Date();
+    const runId = `run-${createdAt.getTime()}`;
+    const startedAt = `Today, ${createdAt.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    })}`;
+
+    try {
+      const result = await executeMockAgentRun({
+        id: runId,
+        repositoryId: activeRepository.id,
+        repositoryName: activeRepository.name,
+        branch: activeRepository.branch,
+        task,
+        contextFilePaths: indexedFiles.map((file) => file.path),
+        startedAt,
+        createdAt: createdAt.toISOString(),
+      });
+
+      setAgentRuns((currentRuns) => [
+        result.run,
+        ...currentRuns.filter((run) => run.id !== result.run.id),
+      ]);
+      setProposedChangePlans((currentPlans) => [
+        result.plan,
+        ...currentPlans.filter((plan) => plan.id !== result.plan.id),
+      ]);
+      setPersistedProposedChanges((currentChanges) => [
+        result.proposedChange,
+        ...currentChanges.filter(
+          (change) => change.id !== result.proposedChange.id,
+        ),
+      ]);
+      setApprovalRequests((currentRequests) => [
+        result.approvalRequest,
+        ...currentRequests.filter(
+          (request) => request.id !== result.approvalRequest.id,
+        ),
+      ]);
+      setSelectedAgentRunId(result.run.id);
+      setAgentTask("");
+
+      const persistenceResults = await Promise.allSettled([
+        saveAgentRunRecord({
+          run: result.run,
+          plan: result.plan,
+          createdAt: result.createdAt,
+        }),
+        saveProposedChange(result.proposedChange),
+        saveApprovalRequest(result.approvalRequest),
+      ]);
+      const persistenceUnavailable = persistenceResults.some(
+        (persistenceResult) => persistenceResult.status === "rejected",
+      );
+
+      setAgentExecutionState("success");
+      setAgentExecutionMessage(
+        persistenceUnavailable
+          ? "Mock run created for this session. Native persistence is unavailable in the web preview."
+          : "Mock run created and saved. Review the structured plan before approving it.",
+      );
+    } catch {
+      setAgentExecutionState("error");
+      setAgentExecutionMessage(
+        "The mock provider could not create a run. No files or repository state were changed.",
+      );
+    }
   }
 
   function openDemoApprovalReview() {
@@ -608,6 +728,7 @@ export function App() {
       try {
         const savedRepositories = await loadSavedRepositories();
         const savedIndexingJobs = await loadIndexingJobs();
+        const savedAgentRunRecords = await loadAgentRunRecords();
         const savedApprovalRequests = await loadApprovalRequests();
         const savedProposedChanges = await loadProposedChanges();
 
@@ -616,6 +737,24 @@ export function App() {
         }
 
         setIndexingJobs(savedIndexingJobs);
+        if (savedAgentRunRecords.length > 0) {
+          const savedRunIds = new Set(
+            savedAgentRunRecords.map((record) => record.run.id),
+          );
+          const savedPlanIds = new Set(
+            savedAgentRunRecords.map((record) => record.plan.id),
+          );
+          setAgentRuns([
+            ...savedAgentRunRecords.map((record) => record.run),
+            ...mockAgentRuns.filter((run) => !savedRunIds.has(run.id)),
+          ]);
+          setProposedChangePlans([
+            ...savedAgentRunRecords.map((record) => record.plan),
+            ...mockProposedChangePlans.filter(
+              (plan) => !savedPlanIds.has(plan.id),
+            ),
+          ]);
+        }
         const hydratedApprovalRequests =
           savedApprovalRequests.length > 0
             ? mergeSeedApprovalRequests(savedApprovalRequests)
@@ -909,11 +1048,13 @@ export function App() {
             value={repositories.length}
           />
           <SummaryCard
-            detail="One run is waiting for human approval"
+            detail={`${waitingAgentRunCount} ${
+              waitingAgentRunCount === 1 ? "run is" : "runs are"
+            } waiting for human approval`}
             icon="agent"
             label="Agent runs"
             tone="agent"
-            value={workspace.summary.activeRuns}
+            value={agentRuns.length}
           />
           <SummaryCard
             detail={
@@ -1039,7 +1180,7 @@ export function App() {
                         }
 
                         if (item.title === "Run agent") {
-                          void startIndexingJob(activeRepository);
+                          setActiveSection("agents");
                           return;
                         }
 
@@ -1424,6 +1565,88 @@ export function App() {
 
         {activeSection === "agents" ? (
           <section className="agent-run-workspace">
+            <article className="overview-card agent-run-create-card">
+              <div className="overview-card__header">
+                <div>
+                  <p className="card-eyebrow">Create Agent Run</p>
+                  <h2>Start with Mock Provider</h2>
+                </div>
+                <StatusPill
+                  tone={
+                    agentExecutionState === "success"
+                      ? "success"
+                      : agentExecutionState === "error"
+                        ? "danger"
+                        : agentExecutionState === "running"
+                          ? "warning"
+                          : "agent"
+                  }
+                  size="sm"
+                >
+                  {agentExecutionState === "running"
+                    ? "planning"
+                    : provider.status}
+                </StatusPill>
+              </div>
+
+              <form
+                className="agent-run-create-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void startMockAgentRun();
+                }}
+              >
+                <label className="agent-run-task-field">
+                  <span>Task request</span>
+                  <textarea
+                    aria-describedby="agent-run-execution-status"
+                    aria-label="Agent task request"
+                    maxLength={1200}
+                    onChange={(event) => setAgentTask(event.target.value)}
+                    placeholder="Describe the repository task you want the mock provider to plan..."
+                    rows={3}
+                    value={agentTask}
+                  />
+                </label>
+                <div className="agent-run-create-actions">
+                  <div className="status-row compact">
+                    <StatusPill tone="success" size="sm">
+                      {provider.displayName}
+                    </StatusPill>
+                    <StatusPill
+                      tone={hasActiveRepository ? "context" : "warning"}
+                      size="sm"
+                    >
+                      {hasActiveRepository
+                        ? activeRepository.name
+                        : "repository required"}
+                    </StatusPill>
+                  </div>
+                  <PrimaryButton
+                    disabled={
+                      !hasActiveRepository ||
+                      provider.status !== "connected" ||
+                      agentExecutionState === "running"
+                    }
+                    icon="play"
+                    type="submit"
+                  >
+                    {agentExecutionState === "running"
+                      ? "Creating plan..."
+                      : "Run mock agent"}
+                  </PrimaryButton>
+                </div>
+              </form>
+
+              <p
+                className={`agent-run-execution-status agent-run-execution-status--${agentExecutionState}`}
+                id="agent-run-execution-status"
+                role="status"
+              >
+                {agentExecutionMessage}
+              </p>
+            </article>
+
             <aside className="overview-card agent-run-list-card">
               <div className="overview-card__header">
                 <div>
