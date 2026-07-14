@@ -9,6 +9,9 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use sqlx::{Row, SqlitePool};
+use tauri_plugin_sql::{DbInstances, DbPool};
+use tokio::sync::Mutex;
 
 const MAX_INDEXED_FILES: usize = 5_000;
 const MAX_PREVIEW_BYTES: u64 = 256 * 1024;
@@ -21,6 +24,8 @@ const MAX_GENERATED_PATCH_BYTES: usize = 64 * 1024;
 const MAX_GENERATED_PATCH_LINES: usize = 4_000;
 const MAX_FINGERPRINT_BYTES: u64 = 256 * 1024;
 const MAX_FINGERPRINT_TARGETS: usize = 64;
+const WORKSPACE_DATABASE_URL: &str = "sqlite:workspace.db";
+const APPLY_CONFIRMATION_PHRASE: &str = "APPLY PATCH";
 const DEFAULT_OPENAI_MODEL: &str = "gpt-5.6-luna";
 const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 const OPENAI_MODELS_URL: &str = "https://api.openai.com/v1/models";
@@ -36,6 +41,8 @@ const IGNORED_DIRECTORIES: &[&str] = &[
     ".venv",
     "__pycache__",
 ];
+
+static PATCH_APPLY_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[derive(Serialize)]
 struct RepositoryGitMetadata {
@@ -70,7 +77,7 @@ struct FileContentPreview {
     max_size_bytes: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct GitChangedFile {
     path: String,
     old_path: Option<String>,
@@ -79,7 +86,7 @@ struct GitChangedFile {
     status_code: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct GitStatusSummary {
     repository_id: String,
     repository_path: String,
@@ -144,7 +151,7 @@ struct RepositorySnapshotInput {
     relevant_file_paths: Vec<String>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TargetFileFingerprint {
     path: String,
@@ -156,7 +163,7 @@ struct TargetFileFingerprint {
     reason: Option<String>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RepositoryValidationSnapshot {
     repository_id: String,
@@ -183,6 +190,44 @@ struct PatchValidationResult {
     repository_snapshot: Option<RepositoryValidationSnapshot>,
     validated_at: String,
     dry_run_at: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplyApprovedPatchArtifactInput {
+    repository_id: String,
+    proposed_change_id: String,
+    approval_request_id: String,
+    patch_artifact_id: String,
+    confirmation_phrase: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplyPatchBackupFile {
+    path: String,
+    existed_before_apply: bool,
+    content_sha256: Option<String>,
+    content: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplyApprovedPatchArtifactResult {
+    status: String,
+    proposed_change_id: String,
+    patch_artifact_id: String,
+    backup_id: String,
+    applied_at: String,
+    post_apply_git_status: GitStatusSummary,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplyPatchError {
+    code: String,
+    message: String,
 }
 
 #[derive(Serialize)]
@@ -728,6 +773,297 @@ fn validate_generated_patch_structure(input: &PatchValidationInput) -> Result<()
 
     if !operation_matches {
         return Err("The patch headers do not match the proposed file operation.".to_string());
+    }
+
+    Ok(())
+}
+
+fn apply_patch_error(code: &str, message: &str) -> ApplyPatchError {
+    ApplyPatchError {
+        code: code.to_string(),
+        message: message.to_string(),
+    }
+}
+
+fn normalized_patch_text(raw_diff: &str) -> String {
+    let normalized = raw_diff.replace("\r\n", "\n").replace('\r', "\n");
+    if normalized.ends_with('\n') {
+        normalized
+    } else {
+        format!("{normalized}\n")
+    }
+}
+
+fn run_fixed_git_apply(repository_path: &str, patch: &str, check_only: bool) -> Result<bool, ()> {
+    let mut command = Command::new("git");
+    command.arg("apply");
+    if check_only {
+        command.arg("--check");
+    }
+    let mut child = command
+        .args(["--whitespace=nowarn", "-"])
+        .current_dir(repository_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| ())?;
+
+    child
+        .stdin
+        .take()
+        .ok_or(())?
+        .write_all(patch.as_bytes())
+        .map_err(|_| ())?;
+
+    child.wait().map(|status| status.success()).map_err(|_| ())
+}
+
+fn git_status_summary_json(summary: &GitStatusSummary) -> Value {
+    json!({
+        "repositoryId": &summary.repository_id,
+        "repositoryPath": &summary.repository_path,
+        "branch": &summary.branch,
+        "headSha": &summary.head_sha,
+        "isGitRepository": summary.is_git_repository,
+        "isClean": summary.is_clean,
+        "changedFileCount": summary.changed_file_count,
+        "stagedCount": summary.staged_count,
+        "unstagedCount": summary.unstaged_count,
+        "untrackedCount": summary.untracked_count,
+        "conflictedCount": summary.conflicted_count,
+        "files": summary.files.iter().map(|file| json!({
+            "path": &file.path,
+            "oldPath": &file.old_path,
+            "kind": &file.kind,
+            "stage": &file.stage,
+            "statusCode": &file.status_code,
+        })).collect::<Vec<_>>(),
+        "refreshedAt": &summary.refreshed_at,
+    })
+}
+
+fn set_artifact_apply_metadata(
+    artifacts: &mut Value,
+    artifact_id: &str,
+    status: &str,
+    backup_id: Option<&str>,
+    applied_at: Option<&str>,
+    apply_error: Option<&str>,
+    post_apply_git_status: Option<&GitStatusSummary>,
+) -> Result<(), ApplyPatchError> {
+    let artifact = artifacts
+        .as_array_mut()
+        .and_then(|items| {
+            items
+                .iter_mut()
+                .find(|item| item.get("id").and_then(Value::as_str) == Some(artifact_id))
+        })
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| {
+            apply_patch_error(
+                "artifact_not_found",
+                "The persisted patch artifact is unavailable.",
+            )
+        })?;
+
+    artifact.insert("applyStatus".to_string(), json!(status));
+    if let Some(backup_id) = backup_id {
+        artifact.insert("backupId".to_string(), json!(backup_id));
+    }
+    if let Some(applied_at) = applied_at {
+        artifact.insert("appliedAt".to_string(), json!(applied_at));
+        artifact.insert("appliedBy".to_string(), json!("local_user"));
+    }
+    if let Some(error) = apply_error {
+        artifact.insert("applyError".to_string(), json!(error));
+    } else {
+        artifact.remove("applyError");
+    }
+    if let Some(summary) = post_apply_git_status {
+        artifact.insert(
+            "postApplyGitStatus".to_string(),
+            git_status_summary_json(summary),
+        );
+    }
+
+    Ok(())
+}
+
+async fn ensure_patch_apply_tables(pool: &SqlitePool) -> Result<(), ApplyPatchError> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS patch_apply_backups (id TEXT PRIMARY KEY, proposed_change_id TEXT NOT NULL, patch_artifact_id TEXT NOT NULL, repository_id TEXT NOT NULL, files_json TEXT NOT NULL, created_at TEXT NOT NULL)",
+    )
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "Native backup storage is unavailable. The patch was not applied.",
+        )
+    })?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS patch_apply_attempts (id TEXT PRIMARY KEY, proposed_change_id TEXT NOT NULL, patch_artifact_id TEXT NOT NULL, approval_request_id TEXT NOT NULL, repository_id TEXT NOT NULL, status TEXT NOT NULL, error_code TEXT, backup_id TEXT, started_at TEXT NOT NULL, completed_at TEXT, post_apply_git_status_json TEXT)",
+    )
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "Native apply audit storage is unavailable. The patch was not applied.",
+        )
+    })?;
+    Ok(())
+}
+
+fn create_apply_backup(
+    repository_root: &Path,
+    file_path: &str,
+    operation: &str,
+    expected_fingerprint: &TargetFileFingerprint,
+) -> Result<ApplyPatchBackupFile, ApplyPatchError> {
+    if expected_fingerprint.path != file_path
+        || !matches!(expected_fingerprint.status.as_str(), "captured" | "missing")
+    {
+        return Err(apply_patch_error(
+            "backup_unavailable",
+            "A complete target-file backup cannot be created. The patch was not applied.",
+        ));
+    }
+
+    if expected_fingerprint.status == "missing" {
+        if operation != "create" && operation != "unknown" {
+            return Err(apply_patch_error(
+                "backup_unavailable",
+                "The target file is missing for the proposed operation. The patch was not applied.",
+            ));
+        }
+        return Ok(ApplyPatchBackupFile {
+            path: file_path.to_string(),
+            existed_before_apply: false,
+            content_sha256: None,
+            content: None,
+        });
+    }
+
+    if operation == "create" {
+        return Err(apply_patch_error(
+            "backup_unavailable",
+            "The create target already exists. The patch was not applied.",
+        ));
+    }
+
+    let target_path = repository_root.join(file_path);
+    let metadata = fs::symlink_metadata(&target_path).map_err(|_| {
+        apply_patch_error(
+            "backup_unavailable",
+            "Target-file metadata is unavailable. The patch was not applied.",
+        )
+    })?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_FINGERPRINT_BYTES
+    {
+        return Err(apply_patch_error(
+            "backup_unavailable",
+            "The target file cannot be safely backed up. The patch was not applied.",
+        ));
+    }
+    let canonical_target = fs::canonicalize(&target_path).map_err(|_| {
+        apply_patch_error(
+            "backup_unavailable",
+            "The target file cannot be safely resolved. The patch was not applied.",
+        )
+    })?;
+    if !canonical_target.starts_with(repository_root) {
+        return Err(apply_patch_error(
+            "outside_repository",
+            "The target file resolves outside the selected repository.",
+        ));
+    }
+    let content_bytes = fs::read(canonical_target).map_err(|_| {
+        apply_patch_error(
+            "backup_unavailable",
+            "The target file cannot be read for backup. The patch was not applied.",
+        )
+    })?;
+    let content_hash = sha256_hex(&content_bytes);
+    if expected_fingerprint.content_sha256.as_deref() != Some(content_hash.as_str()) {
+        return Err(apply_patch_error(
+            "stale_target",
+            "The target file changed after validation. Re-run validation before applying.",
+        ));
+    }
+    let content = String::from_utf8(content_bytes).map_err(|_| {
+        apply_patch_error(
+            "backup_unavailable",
+            "Binary target files are outside the safe apply boundary.",
+        )
+    })?;
+
+    Ok(ApplyPatchBackupFile {
+        path: file_path.to_string(),
+        existed_before_apply: true,
+        content_sha256: Some(content_hash),
+        content: Some(content),
+    })
+}
+
+fn validate_apply_target_boundary(
+    repository_root: &Path,
+    file_path: &str,
+) -> Result<(), ApplyPatchError> {
+    if !is_safe_relative_git_path(file_path) || is_forbidden_fingerprint_path(file_path) {
+        return Err(apply_patch_error(
+            "forbidden_path",
+            "The patch targets a protected or unsafe repository path.",
+        ));
+    }
+
+    let relative_path = Path::new(file_path);
+    let mut current_parent = repository_root.to_path_buf();
+    if let Some(parent) = relative_path.parent() {
+        for component in parent.components() {
+            let Component::Normal(segment) = component else {
+                return Err(apply_patch_error(
+                    "forbidden_path",
+                    "The patch target path is not repository-relative.",
+                ));
+            };
+            current_parent.push(segment);
+            let metadata = fs::symlink_metadata(&current_parent).map_err(|_| {
+                apply_patch_error(
+                    "parent_unavailable",
+                    "Every target parent directory must already exist inside the repository.",
+                )
+            })?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(apply_patch_error(
+                    "outside_repository",
+                    "The patch target cannot traverse a symlink or non-directory parent.",
+                ));
+            }
+            let canonical_parent = fs::canonicalize(&current_parent).map_err(|_| {
+                apply_patch_error(
+                    "parent_unavailable",
+                    "The patch target parent could not be resolved safely.",
+                )
+            })?;
+            if !canonical_parent.starts_with(repository_root) {
+                return Err(apply_patch_error(
+                    "outside_repository",
+                    "The patch target resolves outside the selected repository.",
+                ));
+            }
+        }
+    }
+
+    let target_path = repository_root.join(relative_path);
+    if fs::symlink_metadata(target_path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+        return Err(apply_patch_error(
+            "outside_repository",
+            "Symlink targets are outside the safe apply boundary.",
+        ));
     }
 
     Ok(())
@@ -1635,6 +1971,631 @@ fn load_git_file_diff(
     }
 }
 
+async fn apply_approved_patch_artifact_with_pool(
+    pool: &SqlitePool,
+    input: ApplyApprovedPatchArtifactInput,
+) -> Result<ApplyApprovedPatchArtifactResult, ApplyPatchError> {
+    let _apply_guard = PATCH_APPLY_LOCK.lock().await;
+
+    if input.confirmation_phrase != APPLY_CONFIRMATION_PHRASE {
+        return Err(apply_patch_error(
+            "confirmation_required",
+            "Type APPLY PATCH exactly to confirm this working-tree modification.",
+        ));
+    }
+    if [
+        &input.repository_id,
+        &input.proposed_change_id,
+        &input.approval_request_id,
+        &input.patch_artifact_id,
+    ]
+    .iter()
+    .any(|id| id.trim().is_empty() || id.len() > 240 || id.contains('\0'))
+    {
+        return Err(apply_patch_error(
+            "invalid_identifier",
+            "A durable application identifier is invalid.",
+        ));
+    }
+
+    ensure_patch_apply_tables(pool).await?;
+
+    let repository_row =
+        sqlx::query("SELECT path, is_git_repository FROM repositories WHERE id = ? LIMIT 1")
+            .bind(&input.repository_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|_| {
+                apply_patch_error(
+                    "storage_unavailable",
+                    "The saved repository record could not be verified.",
+                )
+            })?
+            .ok_or_else(|| {
+                apply_patch_error(
+                    "repository_not_found",
+                    "The selected saved repository is unavailable.",
+                )
+            })?;
+    let repository_path: String = repository_row.try_get("path").map_err(|_| {
+        apply_patch_error(
+            "repository_not_found",
+            "The selected saved repository is unavailable.",
+        )
+    })?;
+    let is_git_repository: i64 = repository_row.try_get("is_git_repository").unwrap_or(0);
+    if is_git_repository != 1 {
+        return Err(apply_patch_error(
+            "not_git_repository",
+            "Patch application requires a saved Git repository.",
+        ));
+    }
+    let (repository_root, canonical_repository_path) =
+        canonical_selected_git_root(&repository_path).map_err(|_| {
+            apply_patch_error(
+                "repository_unavailable",
+                "The saved repository root could not be verified.",
+            )
+        })?;
+
+    let proposal_row = sqlx::query(
+        "SELECT run_id, approval_request_id, repository_id, status, files_json, patch_artifacts_json FROM proposed_changes WHERE id = ? LIMIT 1",
+    )
+    .bind(&input.proposed_change_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "The persisted proposed change could not be verified.",
+        )
+    })?
+    .ok_or_else(|| {
+        apply_patch_error(
+            "proposal_not_found",
+            "The persisted proposed change is unavailable.",
+        )
+    })?;
+    let proposal_run_id: String = proposal_row.try_get("run_id").unwrap_or_default();
+    let linked_approval_id: Option<String> =
+        proposal_row.try_get("approval_request_id").unwrap_or(None);
+    let proposal_repository_id: String = proposal_row.try_get("repository_id").unwrap_or_default();
+    let proposal_status: String = proposal_row.try_get("status").unwrap_or_default();
+    let files_json: String = proposal_row.try_get("files_json").unwrap_or_default();
+    let patch_artifacts_json: String = proposal_row
+        .try_get("patch_artifacts_json")
+        .unwrap_or_default();
+
+    if proposal_repository_id != input.repository_id
+        || linked_approval_id.as_deref() != Some(input.approval_request_id.as_str())
+    {
+        return Err(apply_patch_error(
+            "link_mismatch",
+            "The repository, proposal, and approval records are not durably linked.",
+        ));
+    }
+    if proposal_status != "approved" {
+        return Err(apply_patch_error(
+            "proposal_not_approved",
+            "The proposed change is not approved for application.",
+        ));
+    }
+
+    let approval_row =
+        sqlx::query("SELECT status, agent_run_id FROM approval_requests WHERE id = ? LIMIT 1")
+            .bind(&input.approval_request_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|_| {
+                apply_patch_error(
+                    "storage_unavailable",
+                    "The persisted approval request could not be verified.",
+                )
+            })?
+            .ok_or_else(|| {
+                apply_patch_error(
+                    "approval_not_found",
+                    "The linked approval request is unavailable.",
+                )
+            })?;
+    let approval_status: String = approval_row.try_get("status").unwrap_or_default();
+    let approval_run_id: String = approval_row.try_get("agent_run_id").unwrap_or_default();
+    if approval_status != "approved" || approval_run_id != proposal_run_id {
+        return Err(apply_patch_error(
+            "approval_required",
+            "The linked human approval has not been granted.",
+        ));
+    }
+
+    let files: Value = serde_json::from_str(&files_json).map_err(|_| {
+        apply_patch_error(
+            "invalid_persisted_record",
+            "The proposed file records are invalid.",
+        )
+    })?;
+    let mut artifacts: Value = serde_json::from_str(&patch_artifacts_json).map_err(|_| {
+        apply_patch_error(
+            "invalid_persisted_record",
+            "The persisted patch artifact records are invalid.",
+        )
+    })?;
+    let artifact = artifacts
+        .as_array()
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item.get("id").and_then(Value::as_str) == Some(input.patch_artifact_id.as_str())
+            })
+        })
+        .cloned()
+        .ok_or_else(|| {
+            apply_patch_error(
+                "artifact_not_found",
+                "The persisted patch artifact is unavailable.",
+            )
+        })?;
+    if artifact.get("proposedChangeId").and_then(Value::as_str)
+        != Some(input.proposed_change_id.as_str())
+    {
+        return Err(apply_patch_error(
+            "link_mismatch",
+            "The patch artifact is not linked to the proposed change.",
+        ));
+    }
+    if matches!(
+        artifact.get("applyStatus").and_then(Value::as_str),
+        Some("applying" | "applied")
+    ) {
+        return Err(apply_patch_error(
+            "already_applied",
+            "This patch artifact is already applying or has been applied.",
+        ));
+    }
+    if artifact.get("status").and_then(Value::as_str) != Some("generated") {
+        return Err(apply_patch_error(
+            "artifact_not_generated",
+            "Only generated patch artifacts can be applied.",
+        ));
+    }
+    if artifact
+        .get("isBinary")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+    {
+        return Err(apply_patch_error(
+            "binary_artifact",
+            "Binary patch artifacts are outside the safe apply boundary.",
+        ));
+    }
+    if artifact
+        .get("isTooLarge")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+    {
+        return Err(apply_patch_error(
+            "artifact_too_large",
+            "The patch artifact exceeds the safe apply size limit.",
+        ));
+    }
+    if artifact.get("validationStatus").and_then(Value::as_str) != Some("dry_run_passed")
+        || artifact
+            .get("validatedAt")
+            .and_then(Value::as_str)
+            .is_none()
+        || artifact.get("dryRunAt").and_then(Value::as_str).is_none()
+    {
+        return Err(apply_patch_error(
+            "dry_run_required",
+            "A current successful validation and dry-run are required.",
+        ));
+    }
+
+    let file_path = artifact
+        .get("filePath")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            apply_patch_error(
+                "invalid_persisted_record",
+                "The persisted artifact path is unavailable.",
+            )
+        })?
+        .to_string();
+    validate_apply_target_boundary(&repository_root, &file_path)?;
+    let proposed_file = files
+        .as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| item.get("path").and_then(Value::as_str) == Some(file_path.as_str()))
+        })
+        .ok_or_else(|| {
+            apply_patch_error(
+                "file_link_missing",
+                "The patch artifact is not linked to a proposed file.",
+            )
+        })?;
+    let operation = proposed_file
+        .get("operation")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string();
+    let relevant_file_paths: Vec<String> = files
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|file| file.get("path").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect();
+    if relevant_file_paths.is_empty()
+        || relevant_file_paths
+            .iter()
+            .any(|path| !is_safe_relative_git_path(path) || is_forbidden_fingerprint_path(path))
+    {
+        return Err(apply_patch_error(
+            "forbidden_path",
+            "A proposed file targets a protected or unsafe repository path.",
+        ));
+    }
+
+    let raw_diff = artifact
+        .get("rawDiff")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            apply_patch_error(
+                "patch_content_unavailable",
+                "The persisted generated patch content is unavailable.",
+            )
+        })?;
+    let patch_for_git = normalized_patch_text(raw_diff);
+    let computed_artifact_digest = sha256_hex(patch_for_git.as_bytes());
+    let artifact_digest = artifact.get("artifactDigest").and_then(Value::as_str);
+    let validated_artifact_digest = artifact
+        .get("validatedArtifactDigest")
+        .and_then(Value::as_str);
+    if artifact_digest != Some(computed_artifact_digest.as_str())
+        || validated_artifact_digest != Some(computed_artifact_digest.as_str())
+    {
+        return Err(apply_patch_error(
+            "stale_artifact",
+            "The patch artifact changed after validation. Re-run validation before applying.",
+        ));
+    }
+    let validation_snapshot: RepositoryValidationSnapshot = serde_json::from_value(
+        artifact
+            .get("validationRepositorySnapshot")
+            .cloned()
+            .ok_or_else(|| {
+                apply_patch_error(
+                    "validation_evidence_missing",
+                    "Authoritative validation evidence is unavailable.",
+                )
+            })?,
+    )
+    .map_err(|_| {
+        apply_patch_error(
+            "validation_evidence_missing",
+            "Authoritative validation evidence is invalid or incomplete.",
+        )
+    })?;
+    if validation_snapshot.repository_id != input.repository_id
+        || validation_snapshot.artifact_digest.as_deref() != Some(computed_artifact_digest.as_str())
+        || validation_snapshot.repository_snapshot_digest.is_none()
+    {
+        return Err(apply_patch_error(
+            "validation_evidence_mismatch",
+            "The persisted validation evidence does not match this artifact.",
+        ));
+    }
+
+    let validation_input = PatchValidationInput {
+        repository_id: input.repository_id.clone(),
+        repository_path: canonical_repository_path.clone(),
+        file_path: file_path.clone(),
+        operation: operation.clone(),
+        is_binary: false,
+        raw_diff: Some(raw_diff.to_string()),
+        artifact_digest: Some(computed_artifact_digest.clone()),
+        relevant_file_paths: relevant_file_paths.clone(),
+    };
+    validate_generated_patch_structure(&validation_input).map_err(|_| {
+        apply_patch_error(
+            "structure_validation_failed",
+            "The persisted patch no longer passes native structure validation.",
+        )
+    })?;
+
+    let current_snapshot = capture_repository_validation_snapshot(
+        &input.repository_id,
+        &repository_root,
+        &canonical_repository_path,
+        &computed_artifact_digest,
+        &relevant_file_paths,
+    )
+    .map_err(|_| {
+        apply_patch_error(
+            "repository_snapshot_unavailable",
+            "The repository snapshot could not be refreshed safely.",
+        )
+    })?;
+    if current_snapshot.head_sha.is_none()
+        || current_snapshot
+            .branch
+            .as_deref()
+            .is_none_or(|branch| branch.is_empty() || branch.starts_with("detached "))
+    {
+        return Err(apply_patch_error(
+            "branch_unavailable",
+            "Safe Patch Application v1 requires a named branch with a current HEAD.",
+        ));
+    }
+    if !current_snapshot.is_clean {
+        return Err(apply_patch_error(
+            "working_tree_dirty",
+            "A clean working tree is required for Safe Patch Application v1.",
+        ));
+    }
+    if current_snapshot.repository_snapshot_digest != validation_snapshot.repository_snapshot_digest
+        || current_snapshot.target_file_fingerprints != validation_snapshot.target_file_fingerprints
+    {
+        return Err(apply_patch_error(
+            "stale_repository",
+            "Repository state changed after validation. Re-run validation before applying.",
+        ));
+    }
+    let expected_target_fingerprint = current_snapshot
+        .target_file_fingerprints
+        .iter()
+        .find(|fingerprint| fingerprint.path == file_path)
+        .ok_or_else(|| {
+            apply_patch_error(
+                "backup_unavailable",
+                "The target-file fingerprint is unavailable. The patch was not applied.",
+            )
+        })?;
+
+    match run_fixed_git_apply(&canonical_repository_path, &patch_for_git, true) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(apply_patch_error(
+                "dry_run_failed",
+                "The final native dry-run failed. The patch was not applied.",
+            ));
+        }
+        Err(()) => {
+            return Err(apply_patch_error(
+                "git_unavailable",
+                "The final native dry-run could not start. The patch was not applied.",
+            ));
+        }
+    }
+
+    let backup_file = create_apply_backup(
+        &repository_root,
+        &file_path,
+        &operation,
+        expected_target_fingerprint,
+    )?;
+    let final_snapshot = capture_repository_validation_snapshot(
+        &input.repository_id,
+        &repository_root,
+        &canonical_repository_path,
+        &computed_artifact_digest,
+        &relevant_file_paths,
+    )
+    .map_err(|_| {
+        apply_patch_error(
+            "repository_snapshot_unavailable",
+            "The final repository snapshot could not be verified.",
+        )
+    })?;
+    if final_snapshot.repository_snapshot_digest != validation_snapshot.repository_snapshot_digest
+        || final_snapshot.target_file_fingerprints != validation_snapshot.target_file_fingerprints
+    {
+        return Err(apply_patch_error(
+            "stale_repository",
+            "Repository state changed during apply preparation. Re-run validation before applying.",
+        ));
+    }
+
+    let started_at = now_unix_seconds();
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let backup_id = format!("backup-{}-{unique_suffix}", input.patch_artifact_id);
+    let attempt_id = format!("apply-{}-{unique_suffix}", input.patch_artifact_id);
+    let backup_files_json = serde_json::to_string(&vec![backup_file]).map_err(|_| {
+        apply_patch_error(
+            "backup_unavailable",
+            "The target-file backup could not be serialized. The patch was not applied.",
+        )
+    })?;
+    sqlx::query(
+        "INSERT INTO patch_apply_backups (id, proposed_change_id, patch_artifact_id, repository_id, files_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&backup_id)
+    .bind(&input.proposed_change_id)
+    .bind(&input.patch_artifact_id)
+    .bind(&input.repository_id)
+    .bind(backup_files_json)
+    .bind(&started_at)
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "backup_unavailable",
+            "The target-file backup could not be persisted. The patch was not applied.",
+        )
+    })?;
+    sqlx::query(
+        "INSERT INTO patch_apply_attempts (id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, backup_id, started_at) VALUES (?, ?, ?, ?, ?, 'applying', ?, ?)",
+    )
+    .bind(&attempt_id)
+    .bind(&input.proposed_change_id)
+    .bind(&input.patch_artifact_id)
+    .bind(&input.approval_request_id)
+    .bind(&input.repository_id)
+    .bind(&backup_id)
+    .bind(&started_at)
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "The native apply attempt could not be recorded. The patch was not applied.",
+        )
+    })?;
+    set_artifact_apply_metadata(
+        &mut artifacts,
+        &input.patch_artifact_id,
+        "applying",
+        Some(&backup_id),
+        None,
+        None,
+        None,
+    )?;
+    let applying_artifacts_json = serde_json::to_string(&artifacts).map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "The apply state could not be persisted. The patch was not applied.",
+        )
+    })?;
+    let applying_update = sqlx::query(
+        "UPDATE proposed_changes SET patch_artifacts_json = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(applying_artifacts_json)
+    .bind(&started_at)
+    .bind(&input.proposed_change_id)
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "The apply state could not be persisted. The patch was not applied.",
+        )
+    })?;
+    if applying_update.rows_affected() != 1 {
+        return Err(apply_patch_error(
+            "storage_unavailable",
+            "The apply state could not be persisted. The patch was not applied.",
+        ));
+    }
+
+    let apply_succeeded =
+        run_fixed_git_apply(&canonical_repository_path, &patch_for_git, false).unwrap_or(false);
+    if !apply_succeeded {
+        let failure_message = "Git could not apply the approved patch. The working tree should be reviewed before retrying.";
+        let completed_at = now_unix_seconds();
+        let _ = set_artifact_apply_metadata(
+            &mut artifacts,
+            &input.patch_artifact_id,
+            "apply_failed",
+            Some(&backup_id),
+            None,
+            Some(failure_message),
+            None,
+        );
+        if let Ok(failed_artifacts_json) = serde_json::to_string(&artifacts) {
+            let _ = sqlx::query(
+                "UPDATE proposed_changes SET patch_artifacts_json = ?, updated_at = ? WHERE id = ?",
+            )
+            .bind(failed_artifacts_json)
+            .bind(&completed_at)
+            .bind(&input.proposed_change_id)
+            .execute(pool)
+            .await;
+        }
+        let _ = sqlx::query(
+            "UPDATE patch_apply_attempts SET status = 'apply_failed', error_code = 'git_apply_failed', completed_at = ? WHERE id = ?",
+        )
+        .bind(&completed_at)
+        .bind(&attempt_id)
+        .execute(pool)
+        .await;
+        return Err(apply_patch_error("git_apply_failed", failure_message));
+    }
+
+    let applied_at = now_unix_seconds();
+    let post_apply_git_status =
+        load_git_status_summary(input.repository_id.clone(), canonical_repository_path);
+    set_artifact_apply_metadata(
+        &mut artifacts,
+        &input.patch_artifact_id,
+        "applied",
+        Some(&backup_id),
+        Some(&applied_at),
+        None,
+        Some(&post_apply_git_status),
+    )?;
+    let applied_artifacts_json = serde_json::to_string(&artifacts).map_err(|_| {
+        apply_patch_error(
+            "apply_state_persistence_failed",
+            "The patch was applied, but its final local state could not be serialized. Review Changes immediately.",
+        )
+    })?;
+    let persisted_result = sqlx::query(
+        "UPDATE proposed_changes SET status = 'applied', patch_artifacts_json = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(applied_artifacts_json)
+    .bind(&applied_at)
+    .bind(&input.proposed_change_id)
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "apply_state_persistence_failed",
+            "The patch was applied, but its final local state could not be saved. Review Changes immediately.",
+        )
+    })?;
+    if persisted_result.rows_affected() != 1 {
+        return Err(apply_patch_error(
+            "apply_state_persistence_failed",
+            "The patch was applied, but its final local state could not be saved. Review Changes immediately.",
+        ));
+    }
+    let post_apply_status_json =
+        serde_json::to_string(&git_status_summary_json(&post_apply_git_status)).ok();
+    let _ = sqlx::query(
+        "UPDATE patch_apply_attempts SET status = 'applied', completed_at = ?, post_apply_git_status_json = ? WHERE id = ?",
+    )
+    .bind(&applied_at)
+    .bind(post_apply_status_json)
+    .bind(&attempt_id)
+    .execute(pool)
+    .await;
+
+    Ok(ApplyApprovedPatchArtifactResult {
+        status: "applied".to_string(),
+        proposed_change_id: input.proposed_change_id,
+        patch_artifact_id: input.patch_artifact_id,
+        backup_id,
+        applied_at,
+        post_apply_git_status,
+        message:
+            "The approved patch was applied to the working tree. No files were staged or committed."
+                .to_string(),
+    })
+}
+
+#[tauri::command]
+async fn apply_approved_patch_artifact(
+    database_instances: tauri::State<'_, DbInstances>,
+    input: ApplyApprovedPatchArtifactInput,
+) -> Result<ApplyApprovedPatchArtifactResult, ApplyPatchError> {
+    let instances = database_instances.0.read().await;
+    let pool = match instances.get(WORKSPACE_DATABASE_URL) {
+        Some(DbPool::Sqlite(pool)) => pool.clone(),
+        _ => {
+            return Err(apply_patch_error(
+                "storage_unavailable",
+                "Native workspace storage is unavailable. The patch was not applied.",
+            ));
+        }
+    };
+    drop(instances);
+
+    apply_approved_patch_artifact_with_pool(&pool, input).await
+}
+
 #[tauri::command]
 fn load_repository_validation_snapshot(
     input: RepositorySnapshotInput,
@@ -1960,6 +2921,7 @@ async fn create_openai_plan(input: OpenAiPlanInput) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -2042,6 +3004,170 @@ mod tests {
             artifact_digest: Some("a".repeat(64)),
             relevant_file_paths: vec![file_path.to_string()],
         }
+    }
+
+    fn commit_test_file(repository_path: &Path, file_path: &str, content: &str) {
+        fs::write(repository_path.join(file_path), content).expect("write committed test file");
+        let add = Command::new("git")
+            .args(["add", "--", file_path])
+            .current_dir(repository_path)
+            .output()
+            .expect("stage test fixture");
+        assert!(add.status.success());
+        let commit = Command::new("git")
+            .args([
+                "-c",
+                "user.name=AI Workspace Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "-m",
+                "test fixture",
+            ])
+            .current_dir(repository_path)
+            .output()
+            .expect("commit test fixture");
+        assert!(
+            commit.status.success(),
+            "git commit failed: {}",
+            String::from_utf8_lossy(&commit.stderr)
+        );
+    }
+
+    async fn create_apply_test_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("create apply test database");
+        sqlx::query(
+            "CREATE TABLE repositories (id TEXT PRIMARY KEY, path TEXT NOT NULL, is_git_repository INTEGER NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("create repositories table");
+        sqlx::query(
+            "CREATE TABLE proposed_changes (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, approval_request_id TEXT, repository_id TEXT NOT NULL, status TEXT NOT NULL, files_json TEXT NOT NULL, patch_artifacts_json TEXT NOT NULL, updated_at TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("create proposed changes table");
+        sqlx::query(
+            "CREATE TABLE approval_requests (id TEXT PRIMARY KEY, status TEXT NOT NULL, agent_run_id TEXT NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .expect("create approvals table");
+        pool
+    }
+
+    async fn seed_apply_test_records(
+        pool: &SqlitePool,
+        repository_path: &Path,
+        approval_status: &str,
+    ) -> ApplyApprovedPatchArtifactInput {
+        let repository_id = "repo-apply";
+        let proposal_id = "proposal-apply";
+        let approval_id = "approval-apply";
+        let artifact_id = "artifact-apply";
+        let run_id = "run-apply";
+        let file_path = "generated.txt";
+        let raw_diff = "diff --git a/generated.txt b/generated.txt\nnew file mode 100644\n--- /dev/null\n+++ b/generated.txt\n@@ -0,0 +1 @@\n+safe generated content\n";
+        let normalized_patch = normalized_patch_text(raw_diff);
+        let artifact_digest = sha256_hex(normalized_patch.as_bytes());
+        let (repository_root, canonical_repository_path) =
+            canonical_selected_git_root(repository_path.to_str().expect("repository path"))
+                .expect("canonical test repository");
+        let snapshot = capture_repository_validation_snapshot(
+            repository_id,
+            &repository_root,
+            &canonical_repository_path,
+            &artifact_digest,
+            &[file_path.to_string()],
+        )
+        .expect("capture validation snapshot");
+        let files = json!([{
+            "id": "file-apply",
+            "path": file_path,
+            "operation": "create",
+            "reason": "Native safe apply test fixture.",
+            "riskLevel": "low",
+            "patchArtifactStatus": "generated"
+        }]);
+        let artifacts = json!([{
+            "id": artifact_id,
+            "proposedChangeId": proposal_id,
+            "filePath": file_path,
+            "status": "generated",
+            "isBinary": false,
+            "isTooLarge": false,
+            "rawDiff": raw_diff,
+            "artifactDigest": artifact_digest,
+            "validationStatus": "dry_run_passed",
+            "validatedArtifactDigest": artifact_digest,
+            "validationRepositorySnapshot": snapshot,
+            "validatedAt": "1783532400",
+            "dryRunAt": "1783532400"
+        }]);
+
+        sqlx::query("INSERT INTO repositories (id, path, is_git_repository) VALUES (?, ?, 1)")
+            .bind(repository_id)
+            .bind(repository_path.to_string_lossy().to_string())
+            .execute(pool)
+            .await
+            .expect("insert repository");
+        sqlx::query("INSERT INTO approval_requests (id, status, agent_run_id) VALUES (?, ?, ?)")
+            .bind(approval_id)
+            .bind(approval_status)
+            .bind(run_id)
+            .execute(pool)
+            .await
+            .expect("insert approval");
+        sqlx::query(
+            "INSERT INTO proposed_changes (id, run_id, approval_request_id, repository_id, status, files_json, patch_artifacts_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(proposal_id)
+        .bind(run_id)
+        .bind(approval_id)
+        .bind(repository_id)
+        .bind(if approval_status == "approved" {
+            "approved"
+        } else {
+            "ready_for_review"
+        })
+        .bind(files.to_string())
+        .bind(artifacts.to_string())
+        .bind("1783532400")
+        .execute(pool)
+        .await
+        .expect("insert proposal");
+
+        ApplyApprovedPatchArtifactInput {
+            repository_id: repository_id.to_string(),
+            proposed_change_id: proposal_id.to_string(),
+            approval_request_id: approval_id.to_string(),
+            patch_artifact_id: artifact_id.to_string(),
+            confirmation_phrase: APPLY_CONFIRMATION_PHRASE.to_string(),
+        }
+    }
+
+    async fn mutate_apply_artifact(pool: &SqlitePool, mutation: impl FnOnce(&mut Value)) {
+        let row = sqlx::query(
+            "SELECT patch_artifacts_json FROM proposed_changes WHERE id = 'proposal-apply'",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("load artifact fixture");
+        let artifacts_json: String = row.try_get("patch_artifacts_json").unwrap();
+        let mut artifacts: Value = serde_json::from_str(&artifacts_json).unwrap();
+        mutation(&mut artifacts);
+        sqlx::query(
+            "UPDATE proposed_changes SET patch_artifacts_json = ? WHERE id = 'proposal-apply'",
+        )
+        .bind(artifacts.to_string())
+        .execute(pool)
+        .await
+        .expect("update artifact fixture");
     }
 
     #[test]
@@ -2288,6 +3414,223 @@ mod tests {
         assert!(!repository_path.join("new-file.txt").exists());
         assert_eq!(status_before, status_after);
         remove_temp_dir(&repository_path);
+    }
+
+    #[test]
+    fn safe_apply_requires_approved_durable_records_and_exact_confirmation() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("safe-apply-approval");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let pool = create_apply_test_pool().await;
+            let mut input = seed_apply_test_records(&pool, &repository_path, "pending").await;
+
+            let unapproved = apply_approved_patch_artifact_with_pool(&pool, input).await;
+            assert_eq!(unapproved.unwrap_err().code, "proposal_not_approved");
+            assert!(!repository_path.join("generated.txt").exists());
+
+            sqlx::query("UPDATE proposed_changes SET status = 'approved'")
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE approval_requests SET status = 'approved'")
+                .execute(&pool)
+                .await
+                .unwrap();
+            input = ApplyApprovedPatchArtifactInput {
+                repository_id: "repo-apply".to_string(),
+                proposed_change_id: "proposal-apply".to_string(),
+                approval_request_id: "approval-apply".to_string(),
+                patch_artifact_id: "artifact-apply".to_string(),
+                confirmation_phrase: "apply patch".to_string(),
+            };
+            let wrong_confirmation = apply_approved_patch_artifact_with_pool(&pool, input).await;
+            assert_eq!(
+                wrong_confirmation.unwrap_err().code,
+                "confirmation_required"
+            );
+            assert!(!repository_path.join("generated.txt").exists());
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    #[test]
+    fn safe_apply_rejects_stale_failed_and_unsafe_artifacts() {
+        tauri::async_runtime::block_on(async {
+            for (name, expected_code, mutation) in [
+                ("stale", "stale_artifact", "stale"),
+                ("failed-dry-run", "dry_run_required", "failed"),
+                ("traversal", "forbidden_path", "traversal"),
+                ("forbidden", "forbidden_path", "forbidden"),
+            ] {
+                let repository_path = create_temp_dir(&format!("safe-apply-{name}"));
+                init_git_repo(&repository_path);
+                commit_test_file(&repository_path, "README.md", "fixture\n");
+                let pool = create_apply_test_pool().await;
+                let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+                mutate_apply_artifact(&pool, |artifacts| {
+                    let artifact = artifacts[0].as_object_mut().unwrap();
+                    match mutation {
+                        "stale" => {
+                            artifact.insert(
+                                "rawDiff".to_string(),
+                                json!("diff --git a/generated.txt b/generated.txt\n--- /dev/null\n+++ b/generated.txt\n@@ -0,0 +1 @@\n+changed after validation\n"),
+                            );
+                        }
+                        "failed" => {
+                            artifact.insert(
+                                "validationStatus".to_string(),
+                                json!("dry_run_failed"),
+                            );
+                        }
+                        "traversal" => {
+                            artifact.insert("filePath".to_string(), json!("../outside.txt"));
+                        }
+                        "forbidden" => {
+                            artifact.insert("filePath".to_string(), json!(".env"));
+                        }
+                        _ => unreachable!(),
+                    }
+                })
+                .await;
+
+                let result = apply_approved_patch_artifact_with_pool(&pool, input).await;
+                assert_eq!(result.unwrap_err().code, expected_code);
+                assert!(!repository_path.join("generated.txt").exists());
+                assert!(!repository_path
+                    .parent()
+                    .unwrap()
+                    .join("outside.txt")
+                    .exists());
+                remove_temp_dir(&repository_path);
+            }
+        });
+    }
+
+    #[test]
+    fn safe_apply_blocks_when_a_complete_backup_cannot_be_created() {
+        let repository_path = create_temp_dir("safe-apply-backup-block");
+        init_git_repo(&repository_path);
+        fs::write(repository_path.join("large.txt"), vec![b'x'; 32]).unwrap();
+        let fingerprint = TargetFileFingerprint {
+            path: "large.txt".to_string(),
+            exists: true,
+            size_bytes: Some(32),
+            modified_at: None,
+            content_sha256: None,
+            status: "too_large".to_string(),
+            reason: Some("Outside backup policy.".to_string()),
+        };
+
+        let result = create_apply_backup(&repository_path, "large.txt", "modify", &fingerprint);
+
+        assert_eq!(result.unwrap_err().code, "backup_unavailable");
+        remove_temp_dir(&repository_path);
+    }
+
+    #[test]
+    fn safe_apply_backup_captures_bounded_text_and_content_hash() {
+        let repository_path = create_temp_dir("safe-apply-backup-content");
+        init_git_repo(&repository_path);
+        fs::write(repository_path.join("safe.txt"), "before apply\n").unwrap();
+        let canonical_repository_path = fs::canonicalize(&repository_path).unwrap();
+        let fingerprint = fingerprint_target_file(&canonical_repository_path, "safe.txt");
+
+        let backup = create_apply_backup(
+            &canonical_repository_path,
+            "safe.txt",
+            "modify",
+            &fingerprint,
+        )
+        .expect("capture bounded backup");
+
+        assert!(backup.existed_before_apply);
+        assert_eq!(backup.content.as_deref(), Some("before apply\n"));
+        assert_eq!(backup.content_sha256, fingerprint.content_sha256);
+        remove_temp_dir(&repository_path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn safe_apply_rejects_symlinked_and_missing_parent_directories() {
+        use std::os::unix::fs::symlink;
+
+        let repository_path = create_temp_dir("safe-apply-parent-boundary");
+        let outside_path = create_temp_dir("safe-apply-parent-outside");
+        init_git_repo(&repository_path);
+        symlink(&outside_path, repository_path.join("linked")).unwrap();
+
+        let symlink_result = validate_apply_target_boundary(&repository_path, "linked/new.txt");
+        let missing_result = validate_apply_target_boundary(&repository_path, "missing/new.txt");
+
+        assert_eq!(symlink_result.unwrap_err().code, "outside_repository");
+        assert_eq!(missing_result.unwrap_err().code, "parent_unavailable");
+        remove_temp_dir(&repository_path);
+        remove_temp_dir(&outside_path);
+    }
+
+    #[test]
+    fn safe_apply_creates_backup_and_changes_only_the_expected_working_tree_file() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("safe-apply-success");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let head_before = git_output(repository_path.to_str().unwrap(), &["rev-parse", "HEAD"]);
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+
+            let result = apply_approved_patch_artifact_with_pool(&pool, input)
+                .await
+                .expect("apply approved patch");
+
+            assert_eq!(
+                fs::read_to_string(repository_path.join("generated.txt")).unwrap(),
+                "safe generated content\n"
+            );
+            assert_eq!(
+                fs::read_to_string(repository_path.join("README.md")).unwrap(),
+                "fixture\n"
+            );
+            assert_eq!(
+                git_output(
+                    repository_path.to_str().unwrap(),
+                    &["diff", "--cached", "--name-only"],
+                )
+                .unwrap_or_default(),
+                ""
+            );
+            assert_eq!(
+                git_output(repository_path.to_str().unwrap(), &["rev-parse", "HEAD"],),
+                head_before
+            );
+            assert_eq!(result.status, "applied");
+            assert_eq!(result.post_apply_git_status.changed_file_count, 1);
+            assert_eq!(result.post_apply_git_status.untracked_count, 1);
+
+            let backup_row = sqlx::query("SELECT files_json FROM patch_apply_backups WHERE id = ?")
+                .bind(&result.backup_id)
+                .fetch_one(&pool)
+                .await
+                .expect("persisted backup");
+            let backup_json: String = backup_row.try_get("files_json").unwrap();
+            assert!(backup_json.contains("\"existedBeforeApply\":false"));
+            assert!(backup_json.contains("\"path\":\"generated.txt\""));
+
+            let proposal_row = sqlx::query(
+                "SELECT status, patch_artifacts_json FROM proposed_changes WHERE id = 'proposal-apply'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                proposal_row.try_get::<String, _>("status").unwrap(),
+                "applied"
+            );
+            let artifacts_json: String = proposal_row.try_get("patch_artifacts_json").unwrap();
+            assert!(artifacts_json.contains("\"applyStatus\":\"applied\""));
+            assert!(artifacts_json.contains("\"backupId\""));
+            remove_temp_dir(&repository_path);
+        });
     }
 
     #[test]
@@ -2614,6 +3957,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
+            apply_approved_patch_artifact,
             create_openai_plan,
             get_openai_provider_configuration,
             load_git_file_diff,

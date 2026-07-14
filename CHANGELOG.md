@@ -2,15 +2,29 @@
 
 ## Unreleased
 
+- Added Safe Patch Application v1 for one approved, generated, single-file
+  artifact through the dedicated native `apply_approved_patch_artifact`
+  command. React supplies durable IDs and exact `APPLY PATCH` confirmation, not
+  patch text or filesystem paths.
+- Added authoritative native SQLite reload, linked approval/proposal/artifact
+  checks, same-request digest/snapshot/fingerprint revalidation, final
+  `git apply --check`, and fixed `git apply --whitespace=nowarn -` application.
+- Added bounded pre-apply backup and application-attempt persistence, applied or
+  failed artifact state, refreshed post-apply Git status, and replay blocking.
+- Added Agent Run and Approval Review typed-confirmation, loading, success,
+  sanitized error, and applied-state UI while keeping blocked gates disabled.
+- Added frontend and native coverage for wrong confirmation, approval-only and
+  dry-run-only boundaries, stale/unsafe artifacts, missing backups, actual
+  disposable-repository application, backup persistence, and no staging or
+  commit creation.
 - Prepared the MVP Demo v1 release checkpoint with a complete root README,
   release-accurate MVP scope, recorded-demo run sheet, release notes, recovery
   guidance, and explicit internal-demo versus production-readiness decisions.
 - Consolidated `docs/mvp-scope.md` as the canonical implemented scope and kept
   the older product-area path as a compatibility link.
-- Updated the patch-application safety design and project state to record that
-  pre-apply evidence is complete for the demo while application authorization,
-  native authoritative record lookup, locking, audit state, and writes remain
-  unimplemented.
+- Recorded the pre-apply evidence checkpoint that preceded Safe Patch
+  Application v1, including its then-unimplemented native authority and write
+  boundary.
 - Added native bounded target-file fingerprints for patch validation evidence,
   including captured, missing, binary, too-large, forbidden, and unavailable
   states without returning file content to React.

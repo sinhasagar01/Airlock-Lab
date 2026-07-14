@@ -84,7 +84,9 @@ The workflow ends at a review decision. No action applies a patch.
   comparison
 - Apply Readiness gates for approval, validation, repository match, Git state,
   paths, artifact limits, fingerprints, and staleness
-- Permanently disabled `Apply unavailable` boundary
+- Native/durable storage eligibility gates and exact `APPLY PATCH` confirmation
+- One persisted single-file artifact application through fixed `git apply`
+- Bounded pre-apply backup, application attempt, and post-apply Git status
 
 ### Human Approval And Git Review
 
@@ -105,8 +107,10 @@ The workflow ends at a review decision. No action applies a patch.
 
 ## Explicitly Out Of Scope
 
-- Applying generated patches
-- Writing, creating, deleting, or renaming repository files from an Agent Run
+- Applying multiple artifacts transactionally
+- Applying directly from an Agent Run, provider, or browser preview without the
+  dedicated confirmation boundary
+- Automated backup rollback
 - Git add, stage, commit, reset, checkout, clean, stash, branch switching, or
   remote operations
 - Autonomous coding or unattended execution
@@ -131,10 +135,13 @@ The checkpoint is ready for a recorded demo when:
 - Artifact digest, target fingerprints, snapshot digest, and staleness gates are
   visible and durable.
 - Approve/reject updates persist across restart.
+- One eligible artifact can be applied in a disposable repository only after
+  exact confirmation, and it remains unstaged and uncommitted.
 - Changes shows real read-only Git status and diff data.
 - Settings shows provider diagnostics and guarded maintenance actions.
 - Typecheck, lint, tests, native tests, build, and diff checks pass.
-- The presenter states that approval and dry-run do not apply patches.
+- The presenter states that approval and dry-run do not apply patches; the
+  separately confirmed native action does.
 
 ## Release Boundary
 
@@ -145,10 +152,8 @@ and broad platform support are not part of this release.
 
 ## Next Product Boundary
 
-The next major capability would be Safe Patch Application v1. It must follow
-the approved design in `docs/security/patch-application-safety.md`, including a
-separate one-shot application authorization, native durable-ID lookup,
-authoritative revalidation in the same protected request, atomic application,
-audit state, and post-apply verification.
-
-No patch-application implementation is included in this checkpoint.
+The next major capability is Safe Patch Recovery and Application Hardening:
+packaged disposable-repository QA, crash reconciliation, cross-process locking,
+unexpected-path post-verification, and explicit user-driven rollback from the
+persisted backups. Multi-artifact application remains out of scope until it has
+its own atomicity design and integration coverage.

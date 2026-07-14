@@ -99,6 +99,10 @@ import { previewRepositoryFile } from "./storage/filePreview";
 import { scanRepositoryFileTree } from "./storage/fileTreeScanner";
 import { loadGitFileDiff, loadGitStatusSummary } from "./storage/gitChanges";
 import { loadRepositoriesGitMetadata } from "./storage/gitMetadata";
+import {
+  applyApprovedPatchArtifact,
+  PatchApplicationError,
+} from "./storage/patchApplication";
 import { dryRunGeneratedPatch } from "./storage/patchValidation";
 import { loadRepositoryValidationSnapshot } from "./storage/repositoryValidationSnapshot";
 import {
@@ -116,6 +120,7 @@ import {
   saveRepositories,
 } from "./storage/repositoryStore";
 import {
+  isTauriRuntime,
   pickRepositoryDirectories,
   RepositoryPickerError,
 } from "./storage/repositoryPicker";
@@ -224,6 +229,14 @@ export function App() {
   const [validatingPatchArtifactId, setValidatingPatchArtifactId] = useState<
     string | null
   >(null);
+  const [applyingPatchArtifactId, setApplyingPatchArtifactId] = useState<
+    string | null
+  >(null);
+  const [patchApplyFeedback, setPatchApplyFeedback] = useState<{
+    artifactId: string;
+    status: "success" | "error";
+    message: string;
+  } | null>(null);
   const [currentFingerprintSnapshot, setCurrentFingerprintSnapshot] = useState<{
     artifactId: string;
     snapshot: RepositoryValidationSnapshot;
@@ -243,6 +256,7 @@ export function App() {
   const [resetConfirmationText, setResetConfirmationText] = useState("");
 
   const hasActiveRepository = repositories.length > 0;
+  const hasNativeRuntime = isTauriRuntime();
   const activeRepository = repositories[0] ?? emptyRepository;
   const indexedRepositoryCount = useMemo(
     () =>
@@ -793,6 +807,94 @@ export function App() {
     }
 
     setValidatingPatchArtifactId(null);
+  }
+
+  async function applyPatchArtifact(
+    change: PersistedProposedChange,
+    artifact: ProposedPatchArtifact,
+    approvalRequest: ApprovalRequest,
+    confirmationPhrase: string,
+  ) {
+    if (applyingPatchArtifactId) {
+      return;
+    }
+
+    setApplyingPatchArtifactId(artifact.id);
+    setPatchApplyFeedback(null);
+
+    try {
+      const result = await applyApprovedPatchArtifact(
+        change.repositoryId,
+        change.id,
+        approvalRequest.id,
+        artifact.id,
+        confirmationPhrase,
+      );
+      const appliedChange: PersistedProposedChange = {
+        ...change,
+        status: "applied",
+        patchArtifacts: change.patchArtifacts.map((candidate) =>
+          candidate.id === artifact.id
+            ? {
+                ...candidate,
+                applyStatus: "applied",
+                appliedAt: result.appliedAt,
+                appliedBy: "local_user",
+                applyError: undefined,
+                backupId: result.backupId,
+                postApplyGitStatus: result.postApplyGitStatus,
+              }
+            : candidate,
+        ),
+        updatedAt: result.appliedAt,
+      };
+
+      setPersistedProposedChanges((currentChanges) =>
+        currentChanges.map((candidate) =>
+          candidate.id === appliedChange.id ? appliedChange : candidate,
+        ),
+      );
+      setGitStatusSummary(result.postApplyGitStatus);
+      setGitStatusState("ready");
+      setRepositories((currentRepositories) =>
+        currentRepositories.map((repository) =>
+          repository.id === result.postApplyGitStatus.repositoryId
+            ? {
+                ...repository,
+                branch: result.postApplyGitStatus.branch ?? repository.branch,
+                openChanges: result.postApplyGitStatus.changedFileCount,
+              }
+            : repository,
+        ),
+      );
+      setCurrentFingerprintSnapshot(null);
+      setPatchApplyFeedback({
+        artifactId: artifact.id,
+        status: "success",
+        message: result.message,
+      });
+
+      try {
+        const savedChanges = await loadProposedChanges();
+        const hydratedChanges = await Promise.all(
+          savedChanges.map(ensureProposedPatchArtifactDigests),
+        );
+        setPersistedProposedChanges(hydratedChanges);
+      } catch {
+        // The native result remains visible even if the follow-up reload fails.
+      }
+    } catch (error) {
+      setPatchApplyFeedback({
+        artifactId: artifact.id,
+        status: "error",
+        message:
+          error instanceof PatchApplicationError
+            ? error.message
+            : "The native patch application failed safely. Review validation and repository state before retrying.",
+      });
+    } finally {
+      setApplyingPatchArtifactId(null);
+    }
   }
 
   function openDemoApprovalReview() {
@@ -2438,9 +2540,9 @@ export function App() {
                     </div>
                   </div>
                   <p className="patch-artifact-copy">
-                    Provider-generated artifacts are persisted review data only.
-                    Missing records remain placeholders; nothing here has been
-                    written or applied to the repository.
+                    Provider-generated artifacts are persisted review records.
+                    Missing records remain placeholders, while any applied
+                    artifact is labeled explicitly.
                   </p>
                   <PatchArtifactList
                     artifacts={
@@ -2455,21 +2557,46 @@ export function App() {
                   <PatchArtifactDetail
                     applyReadinessContext={{
                       approvalStatus: activeRunApproval?.status ?? null,
+                      hasDurableStorage: storageStatus === "ready",
                       hasSelectedRepository: hasActiveRepository,
+                      isNativeRuntime: hasNativeRuntime,
                       repositoryMatches: Boolean(
                         hasActiveRepository &&
-                          activePersistedProposedChange?.repositoryId ===
-                            activeRepository.id,
+                        activePersistedProposedChange?.repositoryId ===
+                          activeRepository.id,
                       ),
                       currentRepositorySnapshot:
                         selectedReadinessRepositorySnapshot,
                       workingTreeState: applyReadinessWorkingTreeState,
                     }}
+                    applyFeedback={
+                      patchApplyFeedback?.artifactId ===
+                      selectedAgentPatchArtifact?.id
+                        ? patchApplyFeedback
+                        : null
+                    }
                     artifact={selectedAgentPatchArtifact}
+                    isApplying={
+                      selectedAgentPatchArtifact?.id === applyingPatchArtifactId
+                    }
                     isValidating={
                       selectedAgentPatchArtifact?.id ===
                       validatingPatchArtifactId
                     }
+                    onApply={(confirmationPhrase) => {
+                      if (
+                        activePersistedProposedChange &&
+                        selectedAgentPatchArtifact &&
+                        activeRunApproval
+                      ) {
+                        void applyPatchArtifact(
+                          activePersistedProposedChange,
+                          selectedAgentPatchArtifact,
+                          activeRunApproval,
+                          confirmationPhrase,
+                        );
+                      }
+                    }}
                     onValidate={() => {
                       if (
                         activePersistedProposedChange &&
@@ -3032,8 +3159,8 @@ export function App() {
                 </div>
                 <p>
                   These are provider-generated proposals or honest placeholder
-                  states. They are not local Git diffs, and no patch has been
-                  written or applied.
+                  states, separate from local Git diffs. Applied artifacts are
+                  labeled and retain their native backup reference.
                 </p>
                 <PatchArtifactList
                   artifacts={
@@ -3045,21 +3172,47 @@ export function App() {
                 <PatchArtifactDetail
                   applyReadinessContext={{
                     approvalStatus: selectedApprovalRequest?.status ?? null,
+                    hasDurableStorage: storageStatus === "ready",
                     hasSelectedRepository: hasActiveRepository,
-                      repositoryMatches: Boolean(
-                        hasActiveRepository &&
-                          selectedApprovalProposedChange?.repositoryId ===
-                            activeRepository.id,
-                      ),
-                      currentRepositorySnapshot:
-                        selectedReadinessRepositorySnapshot,
-                      workingTreeState: applyReadinessWorkingTreeState,
+                    isNativeRuntime: hasNativeRuntime,
+                    repositoryMatches: Boolean(
+                      hasActiveRepository &&
+                      selectedApprovalProposedChange?.repositoryId ===
+                        activeRepository.id,
+                    ),
+                    currentRepositorySnapshot:
+                      selectedReadinessRepositorySnapshot,
+                    workingTreeState: applyReadinessWorkingTreeState,
                   }}
+                  applyFeedback={
+                    patchApplyFeedback?.artifactId ===
+                    selectedApprovalPatchArtifact?.id
+                      ? patchApplyFeedback
+                      : null
+                  }
                   artifact={selectedApprovalPatchArtifact}
+                  isApplying={
+                    selectedApprovalPatchArtifact?.id ===
+                    applyingPatchArtifactId
+                  }
                   isValidating={
                     selectedApprovalPatchArtifact?.id ===
                     validatingPatchArtifactId
                   }
+                  onApply={(confirmationPhrase) => {
+                    if (
+                      selectedApprovalProposedChange &&
+                      selectedApprovalPatchArtifact &&
+                      selectedApprovalRequest
+                    ) {
+                      void applyPatchArtifact(
+                        selectedApprovalProposedChange,
+                        selectedApprovalPatchArtifact,
+                        selectedApprovalRequest,
+                        confirmationPhrase,
+                      );
+                    }
+                  }}
                   onValidate={() => {
                     if (
                       selectedApprovalProposedChange &&
@@ -3197,7 +3350,7 @@ export function App() {
                 <p className="card-eyebrow">Change Review</p>
                 <h2>
                   {effectiveChangedFileCount > 0
-                    ? `${effectiveChangedFileCount} local changes waiting for review`
+                    ? `${effectiveChangedFileCount} local ${effectiveChangedFileCount === 1 ? "change" : "changes"} waiting for review`
                     : "No local changes waiting for review"}
                 </h2>
                 <p>

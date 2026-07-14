@@ -1,3 +1,5 @@
+import type { GitStatusSummary } from "@ai-dev/core";
+
 export type ProviderCapability = {
   id: string;
   supportsStreaming: boolean;
@@ -188,6 +190,14 @@ export type ProposedChangeStatus =
 export type ProposedPatchArtifactStatus =
   "not_generated" | "generated" | "failed" | "unavailable";
 
+export type PatchApplyStatus =
+  | "not_applicable"
+  | "ready_to_apply"
+  | "applying"
+  | "applied"
+  | "apply_failed"
+  | "blocked";
+
 export type PatchValidationStatus =
   | "not_validated"
   | "valid_structure"
@@ -197,12 +207,7 @@ export type PatchValidationStatus =
   | "unavailable";
 
 export type TargetFileFingerprintStatus =
-  | "captured"
-  | "missing"
-  | "too_large"
-  | "binary"
-  | "forbidden"
-  | "unavailable";
+  "captured" | "missing" | "too_large" | "binary" | "forbidden" | "unavailable";
 
 export type TargetFileFingerprint = {
   path: string;
@@ -268,6 +273,12 @@ export type ProposedPatchArtifact = {
   validationRepositorySnapshot?: RepositoryValidationSnapshot;
   validatedAt?: string;
   dryRunAt?: string;
+  applyStatus?: PatchApplyStatus;
+  appliedAt?: string;
+  appliedBy?: "local_user";
+  applyError?: string;
+  backupId?: string;
+  postApplyGitStatus?: GitStatusSummary;
 };
 
 export type ProviderPatchArtifact = {

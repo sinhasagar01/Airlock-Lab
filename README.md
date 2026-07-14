@@ -34,27 +34,30 @@ Select repository
 - SHA-256 artifact digests, target-file fingerprints, and repository snapshot
   digests for staleness detection
 - Read-only local Git status and per-file diff inspection
-- Approval decisions that update review state without writing files
+- Approval decisions separated from explicit Safe Patch Application
+- Native single-artifact application with exact typed confirmation, pre-apply
+  backup, and post-apply Git status
 - Confirmation-gated Settings maintenance actions
 - Frontend, provider-contract, and native safety tests
 - Packaged macOS `.app` and DMG output
 
 ## Safety Boundary
 
-The MVP can inspect and validate proposed patch data, but it cannot apply it.
+The MVP can safely apply one eligible persisted patch artifact through a
+dedicated native command.
 
-- No repository files are written by an Agent Run, approval, validation, or
-  dry-run action.
-- No Git add, commit, reset, checkout, clean, stage, or patch-apply operation is
-  exposed.
-- The only patch-related Git invocation is fixed read-only
-  `git apply --check --whitespace=nowarn -`.
-- `Apply unavailable` is permanently disabled and has no application handler.
-- Approval means the review record was approved. It is not permission to write.
+- Agent Runs, approval, validation, and dry-run do not write repository files.
+- `Apply Patch` appears only after every gate passes and requires the exact
+  phrase `APPLY PATCH`.
+- React sends durable IDs only; native code reloads persisted patch content and
+  runs fixed `git apply --whitespace=nowarn -` over stdin.
+- A bounded backup is persisted before the working-tree write.
+- No Git add, commit, reset, checkout, clean, or staging operation is exposed.
+- Approval means the review record was approved. It does not itself write.
 - Generated patch artifacts and local Git diffs are displayed as separate data.
 
 See [Safe Patch Application Design](docs/security/patch-application-safety.md)
-for the future application contract.
+for the implemented boundary and remaining rollback/concurrency gaps.
 
 ## Prerequisites
 

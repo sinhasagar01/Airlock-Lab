@@ -31,8 +31,8 @@ validation run before any run, proposal, or approval is persisted. OpenAI may
 now return review-only generated patch artifact data alongside the plan.
 Artifact paths must match proposed files, text previews must be single-file
 unified diffs, counts are derived locally, and oversized raw content is not
-retained. Patch application, file writes, tools, streaming, and Git mutation
-remain unavailable.
+retained. Provider tool use, streaming, staging, committing, and arbitrary Git
+mutation remain unavailable.
 
 Generated text artifacts now support persisted structure validation and a
 read-only native applicability dry-run. The dedicated command repeats path,
@@ -44,7 +44,7 @@ seed data is migrated without changing user-created proposals. Agent Run
 completion is derived from durable approval decisions so run summaries remain
 consistent after approval and restart.
 
-Agent Runs and Approval Review now show shared informational Apply Readiness
+Agent Runs and Approval Review now show shared Apply Readiness
 gates for selected artifacts. The evaluator reports approval, generation,
 structure, dry-run, repository, working-tree, path, protected-file, binary,
 size, artifact-digest, validation-snapshot, and repository-staleness state.
@@ -57,8 +57,27 @@ digest, relevant paths, and sorted fingerprints. Existing safe UTF-8 files up
 to 256 KiB are content-hashed; missing, binary, oversized, forbidden, symlink,
 and unavailable targets receive typed states without exposing file content.
 Digest or repository changes block readiness until revalidation.
-`Apply unavailable` is always disabled and has no handler; approval, digest,
-snapshot, and dry-run evidence remain review signals only.
+`Apply unavailable` stays disabled until every gate passes. An eligible artifact
+requires exact `APPLY PATCH` confirmation before the dedicated native command
+can run.
+
+## Safe Patch Application v1
+
+Safe Patch Application v1 applies one persisted, generated, single-file patch
+artifact to a clean selected Git working tree. React passes only repository,
+proposal, approval, and artifact IDs plus the exact confirmation phrase. Native
+code reloads the durable SQLite records, verifies their links and approved
+state, recomputes the artifact digest, repeats structure validation and
+`git apply --check`, refreshes target fingerprints and the repository snapshot,
+and rejects stale, forbidden, binary, oversized, browser, dirty-tree, or replay
+states.
+
+Before the write, native code persists a bounded backup and an `applying` audit
+record. It then runs fixed `git apply --whitespace=nowarn -` with the persisted
+patch over stdin, reloads Git status, and persists `applied` or `apply_failed`
+state. Successful application leaves changes unstaged and uncommitted. Backup
+rollback, multi-artifact transactions, crash reconciliation, cross-process
+locking, and broader packaged security QA remain future work.
 
 Settings now reports whether OpenAI is configured through the native process
 and can run a read-only connection test for the configured model. The test sends
@@ -92,9 +111,11 @@ The release decision is deliberately split:
 
 - Internal recorded MVP demo: ready after the documented preflight passes.
 - Production or autonomous repository modification: not ready.
-- Safe Patch Application v1: future work gated by the approved safety design,
-  separate one-shot authorization, native authoritative lookup, locking,
-  same-request revalidation, audit state, and post-apply verification.
+- Safe Patch Application v1: implemented for one locally reviewed artifact with
+  authoritative native lookup, same-request revalidation, backup persistence,
+  typed confirmation, and post-apply Git status.
+- Recovery and broader distribution: not ready until packaged disposable-repo
+  QA, crash reconciliation, cross-process locking, and rollback are complete.
 
 ## Current UI Direction
 

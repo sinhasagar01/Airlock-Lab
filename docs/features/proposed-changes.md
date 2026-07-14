@@ -2,12 +2,12 @@
 
 ## Purpose
 
-Proposed changes connect agent runs, proposed plans, approval requests, and
-future generated patch artifacts without writing files.
+Proposed changes connect agent runs, proposed plans, approval requests,
+generated patch artifacts, validation evidence, and Safe Patch Application.
 
 This layer is durable review state. It lets the app persist what an agent
-expects to change before implementation, patch generation, or approval side
-effects exist.
+expects to change and preserves the reviewed state before any explicitly
+confirmed working-tree application.
 
 ## MVP Behavior
 
@@ -33,15 +33,20 @@ effects exist.
   `rejected`.
 - Generated text artifacts expose an explicit **Validate & dry-run** action.
   Its persisted validation status is shared by Agent Run and Approval Review.
-- Selected artifact details expose the same informational **Apply Readiness**
+- Selected artifact details expose the same **Apply Readiness**
   gates in Agent Runs and Approval Review. Gates derive from approval,
   generation, validation, repository, Git-state, path, binary, size, artifact
   digest, target-file fingerprint, and validation-snapshot data.
-- Apply readiness can be closer to ready, blocked, or pending checks, but it
-  never authorizes a write. A changed artifact digest or changed repository
-  snapshot blocks readiness and requires revalidation.
-- The only apply control is disabled and labeled **Apply unavailable**. It has
-  no application handler.
+- Apply readiness can be ready to apply, applied, blocked, or pending checks.
+  A changed artifact digest or changed repository snapshot blocks readiness and
+  requires revalidation.
+- **Apply unavailable** remains disabled until every gate passes. Eligible
+  artifacts expose **Apply Patch**, require the exact phrase `APPLY PATCH`, and
+  invoke a native command using durable IDs only.
+- Native application reloads the saved repository, proposal, approval, and
+  artifact; reruns validation and dry-run; creates a bounded target-file backup;
+  applies the persisted patch; and stores applied/failed state plus refreshed
+  Git status.
 - Agent Runs and Approval Review consume persisted proposed-change records while
   keeping the existing structured plan steps, risks, and validation strategy.
 - The MVP seed includes one connected demo proposed change,
@@ -52,14 +57,16 @@ effects exist.
 
 This feature does not:
 
-- Write files
-- Apply diffs
+- Apply from browser preview
+- Accept arbitrary patch content or repository paths from React
 - Stage or commit changes
-- Run real agent execution
+- Automatically roll back an applied artifact
+- Apply multiple artifacts transactionally
 
-Generated patch artifacts are provider-produced, persisted review contracts
-only. Local Git diffs remain separate read-only repository state and must not
-be labeled as agent-generated patch diffs.
+Generated patch artifacts are provider-produced, persisted review contracts.
+Only an approved, fresh, validated artifact can cross the dedicated native
+apply boundary. Local Git diffs remain separate repository state and must not be
+labeled as agent-generated patch diffs.
 
 The demo workflow may show sample generated artifact content, but that content
 is seeded review data. It is not produced by real agent execution.
@@ -112,7 +119,8 @@ The native dry-run is a dedicated Tauri command. It canonicalizes the selected
 Git repository, repeats all structure checks, and invokes only
 `git apply --check --whitespace=nowarn -`. Patch content is sent over stdin.
 The command exposes no arbitrary Git arguments or shell strings, suppresses raw
-Git stderr, and never applies, stages, writes, or commits changes.
+Git stderr, and never applies, stages, writes, or commits changes. The separate
+application command repeats the same checks before its one permitted write.
 
 Retained patch text is normalized to LF line endings with a terminal newline
 and assigned a SHA-256 digest. Generated artifacts persist their current
@@ -134,9 +142,10 @@ require a new validation. Missing native evidence remains explicitly
 unavailable; it is not treated as a pass.
 
 Apply readiness is a frontend explanation of existing review state, not a
-security decision. Approval does not apply a patch, `dry_run_passed` does not
-apply a patch, and future native application must independently repeat every
-authoritative check described in the patch application safety design.
+security decision. Approval does not apply a patch and `dry_run_passed` does not
+apply a patch. The native application command independently repeats every
+authoritative check described in the patch application safety design, requires
+typed confirmation, and applies only persisted patch content.
 
 ## Data Model
 
@@ -152,3 +161,9 @@ The shared model lives in `packages/ai`:
 - `PatchValidationResult`
 - `RepositoryValidationSnapshot`
 - `TargetFileFingerprint`
+- `PatchApplyStatus`
+
+Applied artifacts persist `appliedAt`, the `local_user` marker, backup ID,
+sanitized failure text when applicable, and a post-apply Git status summary.
+The proposed change becomes `applied` only after the native Git command exits
+successfully and final state persistence succeeds.

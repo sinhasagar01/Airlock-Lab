@@ -36,12 +36,14 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "sqlx",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
  "tauri-plugin-shell",
  "tauri-plugin-sql",
+ "tokio",
 ]
 
 [[package]]

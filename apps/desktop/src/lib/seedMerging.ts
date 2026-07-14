@@ -44,6 +44,12 @@ function migrateSeededProposedChange(
         validationRepositorySnapshot: undefined,
         validatedAt: undefined,
         dryRunAt: undefined,
+        applyStatus: undefined,
+        appliedAt: undefined,
+        appliedBy: undefined,
+        applyError: undefined,
+        backupId: undefined,
+        postApplyGitStatus: undefined,
       };
     }),
   };
@@ -52,12 +58,16 @@ function migrateSeededProposedChange(
 export function mergeSeedApprovalRequests(
   savedRequests: ApprovalRequest[],
 ): ApprovalRequest[] {
-  const savedById = new Map(savedRequests.map((request) => [request.id, request]));
+  const savedById = new Map(
+    savedRequests.map((request) => [request.id, request]),
+  );
   const seededIds = new Set(mockApprovalRequests.map((request) => request.id));
   const seededOrSaved = mockApprovalRequests.map(
     (request) => savedById.get(request.id) ?? request,
   );
-  const savedExtras = savedRequests.filter((request) => !seededIds.has(request.id));
+  const savedExtras = savedRequests.filter(
+    (request) => !seededIds.has(request.id),
+  );
 
   return [...seededOrSaved, ...savedExtras];
 }

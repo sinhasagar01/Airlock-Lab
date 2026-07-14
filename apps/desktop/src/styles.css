@@ -2657,6 +2657,77 @@ dt {
   text-align: right;
 }
 
+.apply-confirmation {
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.apply-confirmation h5 {
+  color: var(--color-text-primary);
+  font-size: 14px;
+  font-weight: 720;
+  line-height: 1.35;
+}
+
+.apply-confirmation p,
+.apply-confirmation label {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 540;
+  line-height: 1.5;
+}
+
+.apply-confirmation label {
+  display: grid;
+  gap: 7px;
+}
+
+.apply-confirmation input {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  font: inherit;
+  min-height: 42px;
+  padding: 9px 12px;
+}
+
+.apply-confirmation input:focus-visible {
+  border-color: var(--color-accent-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-focus) 24%, transparent);
+  outline: none;
+}
+
+.apply-confirmation__actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.apply-feedback {
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+  padding: 10px 12px;
+}
+
+.apply-feedback--success {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.apply-feedback--error {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
 .patch-artifact-state {
   align-items: center;
   background: var(--color-surface);

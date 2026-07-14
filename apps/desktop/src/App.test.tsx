@@ -14,6 +14,7 @@ import { previewRepositoryFile } from "./storage/filePreview";
 import { scanRepositoryFileTree } from "./storage/fileTreeScanner";
 import { loadGitFileDiff, loadGitStatusSummary } from "./storage/gitChanges";
 import { dryRunGeneratedPatch } from "./storage/patchValidation";
+import { applyApprovedPatchArtifact } from "./storage/patchApplication";
 import { loadRepositoryValidationSnapshot } from "./storage/repositoryValidationSnapshot";
 import {
   saveApprovalRequest,
@@ -29,6 +30,7 @@ import {
   saveRepositories,
 } from "./storage/repositoryStore";
 import {
+  isTauriRuntime,
   pickRepositoryDirectories,
   RepositoryPickerError,
 } from "./storage/repositoryPicker";
@@ -379,6 +381,7 @@ vi.mock("./storage/repositoryPicker", async (importOriginal) => {
 
   return {
     ...actual,
+    isTauriRuntime: vi.fn(() => true),
     pickRepositoryDirectories: vi.fn(async () => null),
   };
 });
@@ -448,6 +451,16 @@ vi.mock("./storage/patchValidation", () => ({
     dryRunAt: "1783532400",
   })),
 }));
+
+vi.mock("./storage/patchApplication", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./storage/patchApplication")>();
+
+  return {
+    ...actual,
+    applyApprovedPatchArtifact: vi.fn(),
+  };
+});
 
 vi.mock("./storage/repositoryValidationSnapshot", () => ({
   loadRepositoryValidationSnapshot: vi.fn(
@@ -552,7 +565,9 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  vi.mocked(isTauriRuntime).mockReturnValue(true);
   vi.mocked(pickRepositoryDirectories).mockResolvedValue(null);
+  vi.mocked(applyApprovedPatchArtifact).mockReset();
   vi.mocked(saveRepositories).mockResolvedValue(undefined);
   vi.mocked(loadOpenAiProviderConfiguration).mockResolvedValue({
     configured: false,
@@ -1256,7 +1271,7 @@ describe("App smoke tests", () => {
     expect(screen.getByText("Generated Patch Artifacts")).toBeInTheDocument();
     expect(screen.getByText("Reviewable patch proposals")).toBeInTheDocument();
     expect(
-      screen.getByText(/nothing here has been written or applied/),
+      screen.getByText(/any applied artifact is labeled explicitly/),
     ).toBeInTheDocument();
     expect(screen.getAllByText("Patch not generated").length).toBeGreaterThan(
       0,
@@ -1351,7 +1366,7 @@ describe("App smoke tests", () => {
     );
   });
 
-  it("shows informational apply readiness with no enabled apply action", async () => {
+  it("keeps patch application disabled while safety gates are blocked", async () => {
     const { user } = renderApp();
 
     await user.click(screen.getByRole("button", { name: "Agent Runs" }));
@@ -1361,7 +1376,7 @@ describe("App smoke tests", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Apply is not implemented yet. These checks only show whether this artifact is close to being eligible for future safe application.",
+        "Applying modifies files in your working tree. It does not commit or stage changes, and approval alone never applies a patch.",
       ),
     ).toBeInTheDocument();
     expect(
@@ -1376,6 +1391,148 @@ describe("App smoke tests", () => {
     expect(
       screen.getByRole("button", { name: "Apply unavailable" }),
     ).toBeDisabled();
+  });
+
+  it("requires typed confirmation and applies only through the ID-only native boundary", async () => {
+    const cleanGitStatus: GitStatusSummary = {
+      ...defaultGitStatus,
+      isClean: true,
+      changedFileCount: 0,
+      stagedCount: 0,
+      unstagedCount: 0,
+      untrackedCount: 0,
+      files: [],
+    };
+    const postApplyGitStatus: GitStatusSummary = {
+      ...cleanGitStatus,
+      isClean: false,
+      changedFileCount: 1,
+      unstagedCount: 1,
+      files: [
+        {
+          path: "packages/ai/src/index.ts",
+          kind: "modified",
+          stage: "unstaged",
+          statusCode: " M",
+        },
+      ],
+      refreshedAt: "1783532500",
+    };
+    vi.mocked(applyApprovedPatchArtifact)
+      .mockRejectedValueOnce(new Error("private native path and stderr"))
+      .mockImplementation(
+        async (
+          repositoryId,
+          proposedChangeId,
+          _approvalRequestId,
+          patchArtifactId,
+        ) => {
+          mockState.gitStatus = postApplyGitStatus;
+          mockState.proposedChanges = mockState.proposedChanges.map((change) =>
+            change.id === proposedChangeId
+              ? {
+                  ...change,
+                  status: "applied",
+                  patchArtifacts: change.patchArtifacts.map((artifact) =>
+                    artifact.id === patchArtifactId
+                      ? {
+                          ...artifact,
+                          applyStatus: "applied",
+                          appliedAt: "1783532500",
+                          appliedBy: "local_user",
+                          backupId: "backup-1",
+                          postApplyGitStatus,
+                        }
+                      : artifact,
+                  ),
+                  updatedAt: "1783532500",
+                }
+              : change,
+          );
+
+          return {
+            status: "applied",
+            proposedChangeId,
+            patchArtifactId,
+            backupId: "backup-1",
+            appliedAt: "1783532500",
+            postApplyGitStatus: {
+              ...postApplyGitStatus,
+              repositoryId,
+            },
+            message:
+              "The approved patch was applied to the working tree. No files were staged or committed.",
+          };
+        },
+      );
+    const { user } = renderApp({ gitStatus: cleanGitStatus });
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(
+      screen.getByRole("button", {
+        name: /generated packages\/ai\/src\/index\.ts/,
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Validate & dry-run" }),
+    );
+    await screen.findByText("dry run passed");
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
+    await user.click(
+      screen.getByRole("button", {
+        name: /generated packages\/ai\/src\/index\.ts/,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Apply Patch" }),
+    );
+
+    const confirmation = screen.getByRole("textbox", {
+      name: "Confirmation phrase",
+    });
+    const confirmButton = screen.getByRole("button", {
+      name: "Confirm Apply Patch",
+    });
+    await user.type(confirmation, "WRONG");
+    expect(confirmButton).toBeDisabled();
+    expect(applyApprovedPatchArtifact).not.toHaveBeenCalled();
+    await user.clear(confirmation);
+    await user.type(confirmation, "APPLY PATCH");
+    expect(confirmButton).toBeEnabled();
+    await user.click(confirmButton);
+    expect(
+      await screen.findByText(
+        "The native patch application failed safely. Review validation and repository state before retrying.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/private native path/)).not.toBeInTheDocument();
+    expect(applyApprovedPatchArtifact).toHaveBeenCalledTimes(1);
+    await user.click(confirmButton);
+
+    await waitFor(() =>
+      expect(applyApprovedPatchArtifact).toHaveBeenCalledWith(
+        "repo-workspace",
+        "proposal-mvp-shell",
+        "approval-provider-rfc",
+        "proposal-file-ai-patch-artifact",
+        "APPLY PATCH",
+      ),
+    );
+    expect(
+      await screen.findByText(
+        /The approved patch was applied to the working tree.*No files were staged or committed/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Patch applied" }),
+    ).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Changes" }));
+    expect(
+      await screen.findByRole("heading", {
+        name: "1 local change waiting for review",
+      }),
+    ).toBeInTheDocument();
   });
 
   it("creates a persisted mock agent run with a review-only proposal and approval", async () => {
@@ -1567,7 +1724,9 @@ describe("App smoke tests", () => {
     expect(
       screen.getByText("Artifact digest matches validation"),
     ).toBeInTheDocument();
-    expect(screen.getByText("Validation snapshot captured")).toBeInTheDocument();
+    expect(
+      screen.getByText("Validation snapshot captured"),
+    ).toBeInTheDocument();
     expect(screen.getByText("Target files fingerprinted")).toBeInTheDocument();
     expect(screen.getByText("Repository state unchanged")).toBeInTheDocument();
     expect(
@@ -1586,9 +1745,7 @@ describe("App smoke tests", () => {
             expect.objectContaining({
               validationStatus: "dry_run_passed",
               artifactDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
-              validatedArtifactDigest: expect.stringMatching(
-                /^[a-f0-9]{64}$/,
-              ),
+              validatedArtifactDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
               validationRepositorySnapshot: expect.objectContaining({
                 headSha: "abc1234",
               }),
@@ -1758,7 +1915,7 @@ describe("App smoke tests", () => {
     expect(screen.getByText("Patch Artifacts")).toBeInTheDocument();
     expect(screen.getByText("Patch artifact review")).toBeInTheDocument();
     expect(
-      screen.getByText(/They are not local Git diffs, and no patch has been/),
+      screen.getByText(/separate from local Git diffs/),
     ).toBeInTheDocument();
     await user.click(
       screen.getAllByRole("button", {
@@ -1824,6 +1981,7 @@ describe("App smoke tests", () => {
     expect(screen.getByText("Request approved")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Reject" })).toBeDisabled();
+    expect(applyApprovedPatchArtifact).not.toHaveBeenCalled();
 
     await user.click(
       screen.getByRole("button", {

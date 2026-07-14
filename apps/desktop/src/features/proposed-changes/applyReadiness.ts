@@ -6,18 +6,19 @@ import {
 } from "@ai-dev/ai";
 
 export type ApplyReadinessGateStatus =
-  | "passed"
-  | "blocked"
-  | "not_checked"
-  | "future";
+  "passed" | "blocked" | "not_checked" | "future";
 
 export type ApplyReadinessGate = {
   id:
+    | "native_runtime"
+    | "durable_storage"
+    | "apply_state"
     | "approval"
     | "generated"
     | "structure"
     | "dry_run"
     | "repository"
+    | "branch_head"
     | "working_tree"
     | "path"
     | "forbidden_path"
@@ -34,15 +35,18 @@ export type ApplyReadinessGate = {
 
 export type ApplyReadinessContext = {
   approvalStatus: ApprovalRequestStatus | null;
+  hasDurableStorage: boolean;
   hasSelectedRepository: boolean;
+  isNativeRuntime: boolean;
   repositoryMatches: boolean;
   currentRepositorySnapshot: RepositoryValidationSnapshot | null;
   workingTreeState: "clean" | "dirty" | "unknown";
 };
 
 export type ApplyReadinessResult = {
+  canApply: boolean;
   gates: ApplyReadinessGate[];
-  status: "closer_to_ready" | "blocked" | "checks_pending";
+  status: "ready_to_apply" | "applied" | "blocked" | "checks_pending";
   summary: string;
 };
 
@@ -70,7 +74,9 @@ function hasAllowedRelativePath(path: string) {
 
   return path
     .split("/")
-    .every((segment) => Boolean(segment) && segment !== "." && segment !== "..");
+    .every(
+      (segment) => Boolean(segment) && segment !== "." && segment !== "..",
+    );
 }
 
 function isForbiddenPath(path: string) {
@@ -126,16 +132,44 @@ export function evaluateApplyReadiness(
   );
   const hasComparableNativeSnapshot = Boolean(
     validationSnapshot?.repositorySnapshotDigest &&
-      currentSnapshot?.repositorySnapshotDigest,
+    currentSnapshot?.repositorySnapshotDigest,
   );
   const repositoryIsUnchanged = Boolean(
     validationSnapshot &&
-      currentSnapshot &&
-      validationSnapshot.repositorySnapshotDigest ===
-        currentSnapshot.repositorySnapshotDigest,
+    currentSnapshot &&
+    validationSnapshot.repositorySnapshotDigest ===
+      currentSnapshot.repositorySnapshotDigest,
   );
 
   const gates: ApplyReadinessGate[] = [
+    gate(
+      "native_runtime",
+      "Native desktop runtime",
+      context.isNativeRuntime ? "passed" : "blocked",
+      context.isNativeRuntime
+        ? "Patch application is available only through the native Tauri command."
+        : "The browser preview cannot apply repository patches.",
+    ),
+    gate(
+      "durable_storage",
+      "Durable records available",
+      context.hasDurableStorage ? "passed" : "blocked",
+      context.hasDurableStorage
+        ? "The native command can reload the persisted proposal, approval, and artifact."
+        : "Native workspace persistence is required before a patch can be applied.",
+    ),
+    gate(
+      "apply_state",
+      "Artifact has not already been applied",
+      artifact.applyStatus === "applied" || artifact.applyStatus === "applying"
+        ? "blocked"
+        : "passed",
+      artifact.applyStatus === "applied"
+        ? "This artifact has already been applied to the working tree."
+        : artifact.applyStatus === "applying"
+          ? "A native application attempt is already in progress."
+          : "No completed or in-progress application attempt blocks this artifact.",
+    ),
     gate(
       "approval",
       "Approval request approved",
@@ -201,6 +235,24 @@ export function evaluateApplyReadiness(
         : context.repositoryMatches
           ? "The selected repository matches the proposal."
           : "The selected repository does not match the proposal.",
+    ),
+    gate(
+      "branch_head",
+      "Named branch and HEAD available",
+      !context.currentRepositorySnapshot
+        ? "not_checked"
+        : context.currentRepositorySnapshot.branch &&
+            !context.currentRepositorySnapshot.branch.startsWith("detached ") &&
+            context.currentRepositorySnapshot.headSha
+          ? "passed"
+          : "blocked",
+      !context.currentRepositorySnapshot
+        ? "Refresh repository state before application."
+        : context.currentRepositorySnapshot.branch &&
+            !context.currentRepositorySnapshot.branch.startsWith("detached ") &&
+            context.currentRepositorySnapshot.headSha
+          ? `Branch ${context.currentRepositorySnapshot.branch} at ${context.currentRepositorySnapshot.headSha} is available for comparison.`
+          : "Safe Patch Application v1 requires a named branch with a current HEAD.",
     ),
     gate(
       "working_tree",
@@ -307,7 +359,9 @@ export function evaluateApplyReadiness(
       "Repository state unchanged",
       !validationHasRun
         ? "not_checked"
-        : !validationSnapshot || !currentSnapshot || !hasComparableNativeSnapshot
+        : !validationSnapshot ||
+            !currentSnapshot ||
+            !hasComparableNativeSnapshot
           ? "future"
           : repositoryIsUnchanged
             ? "passed"
@@ -316,7 +370,7 @@ export function evaluateApplyReadiness(
         ? "Repository staleness cannot be checked before validation."
         : !validationSnapshot || !currentSnapshot
           ? "A validation or current repository snapshot is unavailable."
-        : !hasComparableNativeSnapshot
+          : !hasComparableNativeSnapshot
             ? "An authoritative current or validation snapshot digest is unavailable."
             : repositoryIsUnchanged
               ? "Branch, HEAD, Git state, artifact digest, relevant paths, and target fingerprints match validation."
@@ -326,11 +380,22 @@ export function evaluateApplyReadiness(
 
   const blockedCount = gates.filter((item) => item.status === "blocked").length;
   const pendingCount = gates.filter(
-    (item) => item.status === "not_checked",
+    (item) => item.status === "not_checked" || item.status === "future",
   ).length;
+
+  if (artifact.applyStatus === "applied") {
+    return {
+      canApply: false,
+      gates,
+      status: "applied",
+      summary:
+        "This patch artifact was applied to the working tree. It was not staged or committed.",
+    };
+  }
 
   if (blockedCount > 0) {
     return {
+      canApply: false,
       gates,
       status: "blocked",
       summary: `${blockedCount} current gate${blockedCount === 1 ? "" : "s"} block future application readiness.`,
@@ -339,6 +404,7 @@ export function evaluateApplyReadiness(
 
   if (pendingCount > 0) {
     return {
+      canApply: false,
       gates,
       status: "checks_pending",
       summary: `${pendingCount} check${pendingCount === 1 ? " has" : "s have"} not completed yet.`,
@@ -346,10 +412,11 @@ export function evaluateApplyReadiness(
   }
 
   return {
+    canApply: true,
     gates,
-    status: "closer_to_ready",
+    status: "ready_to_apply",
     summary:
-      "All currently checkable gates pass. Future authorization and staleness checks still remain.",
+      "All application gates pass. Explicit typed confirmation is still required.",
   };
 }
 
@@ -365,7 +432,7 @@ export function applyReadinessGateStatusLabel(
   }
 
   if (status === "future") {
-    return "Requires future apply implementation";
+    return "Unavailable";
   }
 
   return "Not checked yet";

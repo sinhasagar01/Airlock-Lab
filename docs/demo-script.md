@@ -56,20 +56,21 @@ reads require the Tauri runtime.
 
 ## Recorded Demo Run Sheet
 
-| Time | Scene           | Required proof                                           |
-| ---- | --------------- | -------------------------------------------------------- |
-| 0:00 | Overview        | Local-first positioning and review-only boundary         |
-| 0:40 | Repositories    | Native selection, indexing, and intelligence             |
-| 1:45 | Agent Runs      | User prompt, provider choice, persisted plan             |
-| 3:15 | Patch artifacts | Generated state, preview, digest, and validation         |
-| 4:30 | Apply Readiness | Fingerprints, snapshot digest, staleness, disabled Apply |
-| 5:45 | Approvals       | Linked evidence and approve/reject decision              |
-| 6:45 | Changes         | Separate real local Git status and diff                  |
-| 7:30 | Settings        | Provider diagnostic and guarded maintenance              |
-| 8:15 | Restart         | Durable run, proposal, approval, and validation state    |
+| Time | Scene           | Required proof                                        |
+| ---- | --------------- | ----------------------------------------------------- |
+| 0:00 | Overview        | Local-first positioning and review-only boundary      |
+| 0:40 | Repositories    | Native selection, indexing, and intelligence          |
+| 1:45 | Agent Runs      | User prompt, provider choice, persisted plan          |
+| 3:15 | Patch artifacts | Generated state, preview, digest, and validation      |
+| 4:30 | Apply Readiness | Fingerprints, snapshot digest, staleness, gated Apply |
+| 5:45 | Approvals       | Linked evidence and approve/reject decision           |
+| 6:30 | Safe Apply      | Typed confirmation, backup, no-stage/no-commit result |
+| 7:15 | Changes         | Separate real local Git status and diff               |
+| 8:00 | Settings        | Provider diagnostic and guarded maintenance           |
+| 8:45 | Restart         | Durable validation, approval, and applied state       |
 
-Do not cut from approval directly to a changed working tree. That edit would
-imply application behavior the MVP does not have.
+Do not cut from approval directly to a changed working tree. Show the separate
+typed-confirmation action so approval is never mistaken for application.
 
 ## Full Walkthrough
 
@@ -155,8 +156,8 @@ In the selected Agent Run, walk through:
 - Persisted structure and dry-run validation status
 
 Say: "Affected files are proposed scope. They are not proof that a file was
-changed. Patch artifacts are provider proposals, not local Git state, and none
-of them has been applied."
+changed. Patch artifacts are provider proposals, not local Git state. Applied
+state is shown only after the separate native action succeeds."
 
 For a generated text artifact, select **Validate & dry-run**. Explain that the
 app first validates the bounded single-file diff, then uses read-only
@@ -164,17 +165,17 @@ app first validates the bounded single-file diff, then uses read-only
 applicable now,” not “approved” or “applied.”
 
 Show **Apply Readiness** and walk through passed, blocked, not-checked, and
-future-only gates. Point out the artifact digest, validation snapshot, and
+unavailable gates. Point out the artifact digest, validation snapshot, and
 repository-state comparison. The SHA-256 digest binds validation to the exact
 normalized patch text, while the snapshot records branch, short HEAD, clean
 state, changed-file count, relevant paths, bounded target-file fingerprints,
 and capture time without storing file contents. Existing safe text targets get
 content hashes; missing, binary, oversized, forbidden, or unavailable targets
-show typed states. Select the disabled **Apply unavailable** control and explain
-that it has no action behind it.
+show typed states. Explain that **Apply unavailable** remains disabled until
+every gate passes.
 
 If the digest or repository state changes, show the blocked copy and explain:
-"Stale review evidence must be revalidated. The app still cannot apply the
+"Stale review evidence must be revalidated. The native command will refuse the
 patch." The current native snapshot digest is recomputed for comparison, while
 capture timestamps are excluded from that digest. Missing authoritative native
 evidence stays explicitly unavailable rather than being treated as a pass.
@@ -220,14 +221,31 @@ Choose either **Approve** or **Reject**. Confirm that the selected request and
 linked proposed-change statuses update, the linked Agent Run is completed, the
 pending count decreases, and both decision buttons become disabled.
 
-Say: "This decision updates local review metadata only. It does not apply a
-patch, write files, or execute a Git command."
+Say: "This decision updates local review metadata only. It does not itself
+apply a patch, write files, or execute a Git command."
 
-Revisit Apply Readiness after the decision. Approval may clear one gate, but it
-does not enable application and does not turn the review decision into write
-authorization.
+Revisit Apply Readiness after the decision. Approval clears one gate, but every
+other gate and explicit confirmation remain mandatory.
 
-### 9. Inspect Real Git State
+### 9. Apply One Eligible Artifact
+
+Use only the prepared disposable repository. Confirm the working tree is clean,
+the selected artifact is generated, validation and dry-run passed, digest and
+snapshot evidence match, and the linked approval is approved.
+
+Select **Apply Patch**. Read the warning aloud, type `APPLY PATCH`, and confirm.
+Show the loading and success state. Explain that the native command reloads the
+durable IDs, repeats all checks, persists a bounded pre-apply backup, and passes
+only the stored patch to fixed `git apply --whitespace=nowarn -` over stdin.
+
+Say: "This changed one working-tree file. It did not stage or commit anything.
+Approval and dry-run did not perform the write; this separately confirmed native
+action did."
+
+If no artifact is eligible, do not weaken a gate. Show **Apply unavailable** and
+record the blocking reason instead.
+
+### 10. Inspect Real Git State
 
 Open **Changes** and select **Refresh Git status**.
 
@@ -237,7 +255,10 @@ changes, select a changed file and show its read-only diff.
 Say: "Changes is the real repository state, loaded through fixed read-only Git
 commands. It remains separate from proposed and generated artifacts."
 
-### 10. Close With Guarded Maintenance
+Confirm the applied file appears as an unstaged or untracked change and inspect
+its local diff separately from the generated patch artifact.
+
+### 11. Close With Guarded Maintenance
 
 Open **Settings** and show the Mock Provider adapter status, local storage
 status, reindex action, disabled cache clearing with explanation, and guarded
@@ -247,15 +268,15 @@ Say: "Maintenance actions stay unavailable until their app-local deletion
 boundaries are implemented and tested. Repository files and Git state are never
 targets of these controls."
 
-### 11. Restart And Confirm Persistence
+### 12. Restart And Confirm Persistence
 
 Quit and reopen the native app. Confirm that the selected repository, indexed
-facts, created Agent Run, linked proposal, approval decision, and artifact
-validation result reload. Reopen Agent Runs and Approval Review to show the same
-decision and validation status on both surfaces.
+facts, created Agent Run, linked proposal, approval decision, artifact
+validation result, backup reference, and applied state reload. Reopen Agent Runs
+and Approval Review to show the same state on both surfaces.
 
-Say: "Runs, proposals, approvals, and validation results are durable local
-review records. Restarting does not apply a patch or mutate Git state."
+Say: "Runs, proposals, approvals, validation, and application results are
+durable local records. Restarting does not repeat the application."
 
 ## Recovery Notes
 
@@ -268,7 +289,8 @@ review records. Restarting does not apply a patch or mutate Git state."
 - **No local Git diffs:** this is valid for a clean repository or non-matching
   proposed paths. Show the honest empty state.
 - **No generated patch:** this is expected for Mock Provider. OpenAI can return
-  review-only generated artifacts when configured, but it never applies them.
+  generated artifacts when configured; application remains a separate reviewed
+  native action.
 - **Dry-run unavailable after structure validation:** select the proposal's
   linked repository. The app intentionally refuses to dry-run an artifact
   against a different saved repository.
@@ -282,8 +304,8 @@ review records. Restarting does not apply a patch or mutate Git state."
 3. Inspect plan, proposed files, risks, and artifact validation.
 4. Open the linked approval.
 5. Contrast generated artifact states with local Git diffs.
-6. Approve or reject and show the updated pending count.
-7. Close on Changes, guarded Settings maintenance, and restart persistence.
+6. Approve, satisfy readiness, and apply one artifact in a disposable repo.
+7. Show the unstaged result in Changes, then restart to confirm persistence.
 
 ## Demo Boundaries
 
@@ -295,7 +317,8 @@ Real today:
 - Persisted generated artifact validation and read-only `git apply --check`
 - Artifact digests, bounded native target fingerprints, repository snapshot
   digests, and staleness comparison
-- Informational Apply Readiness gates with a disabled apply boundary
+- Native-authoritative Apply Readiness gates and typed confirmation
+- One persisted single-file artifact application with a pre-apply backup
 - Read-only Git status and local diffs
 - Approval/rejection metadata updates
 
@@ -312,15 +335,18 @@ Optional real capability today:
 
 Not implemented:
 
-- Patch application or file writes
-- Git staging, reset, checkout, commit, clean, or other mutation
+- Automated rollback
+- Multi-artifact transactional application
+- Git staging, reset, checkout, commit, clean, or other mutation beyond the
+  single approved patch application
 
 ## Post-Recording Checklist
 
 1. Verify the recording never displays a credential or sensitive local file.
 2. Confirm generated artifacts and local Git diffs were described separately.
 3. Confirm the narration states that approval and dry-run do not apply patches.
-4. Confirm `Apply unavailable` is visible and disabled.
-5. Confirm the recording shows at least one persisted state after restart.
+4. Confirm typed `APPLY PATCH`, backup creation, and no-stage/no-commit copy are
+   visible.
+5. Confirm the recording shows the persisted applied state after restart.
 6. Record the build date, platform, and provider path in the published caption.
 7. Link `docs/release-notes/mvp-demo-v1.md` from the recording description.

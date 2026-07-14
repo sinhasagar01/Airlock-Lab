@@ -33,7 +33,9 @@ const validationSnapshot: RepositoryValidationSnapshot = {
 
 const readyContext: ApplyReadinessContext = {
   approvalStatus: "approved",
+  hasDurableStorage: true,
   hasSelectedRepository: true,
+  isNativeRuntime: true,
   repositoryMatches: true,
   currentRepositorySnapshot: validationSnapshot,
   workingTreeState: "clean",
@@ -69,16 +71,42 @@ function gateStatus(
 }
 
 describe("evaluateApplyReadiness", () => {
-  it("marks an approved dry-run-passed artifact closer to ready", () => {
+  it("marks an approved dry-run-passed native artifact ready to apply", () => {
     const result = evaluateApplyReadiness(generatedArtifact(), readyContext);
 
-    expect(result.status).toBe("closer_to_ready");
+    expect(result.status).toBe("ready_to_apply");
+    expect(result.canApply).toBe(true);
+    expect(gateStatus(result, "native_runtime")).toBe("passed");
+    expect(gateStatus(result, "durable_storage")).toBe("passed");
     expect(gateStatus(result, "approval")).toBe("passed");
     expect(gateStatus(result, "dry_run")).toBe("passed");
     expect(gateStatus(result, "artifact_digest")).toBe("passed");
     expect(gateStatus(result, "validation_snapshot")).toBe("passed");
     expect(gateStatus(result, "target_fingerprints")).toBe("passed");
     expect(gateStatus(result, "repository_staleness")).toBe("passed");
+  });
+
+  it("blocks browser preview and unavailable durable storage", () => {
+    const result = evaluateApplyReadiness(generatedArtifact(), {
+      ...readyContext,
+      hasDurableStorage: false,
+      isNativeRuntime: false,
+    });
+
+    expect(result.canApply).toBe(false);
+    expect(gateStatus(result, "native_runtime")).toBe("blocked");
+    expect(gateStatus(result, "durable_storage")).toBe("blocked");
+  });
+
+  it("prevents an applied artifact from being applied twice", () => {
+    const result = evaluateApplyReadiness(
+      generatedArtifact({ applyStatus: "applied" }),
+      readyContext,
+    );
+
+    expect(result.status).toBe("applied");
+    expect(result.canApply).toBe(false);
+    expect(gateStatus(result, "apply_state")).toBe("blocked");
   });
 
   it("blocks an artifact while approval is pending", () => {
@@ -166,8 +194,7 @@ describe("evaluateApplyReadiness", () => {
 
     expect(gateStatus(result, "repository_staleness")).toBe("blocked");
     expect(
-      result.gates.find((gate) => gate.id === "repository_staleness")
-        ?.detail,
+      result.gates.find((gate) => gate.id === "repository_staleness")?.detail,
     ).toContain("Repository state changed after validation");
   });
 

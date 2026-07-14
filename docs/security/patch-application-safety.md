@@ -2,21 +2,21 @@
 
 ## Status
 
-- Status: Proposed safety design
-- Scope: Future application of approved generated patch artifacts
-- Implementation status: Application not implemented; informational readiness
-  gates implemented
-- Pre-apply evidence status: Complete for the MVP Demo v1 checkpoint
-- Release classification: Internal demo only; not production authorization
+- Status: Safe Patch Application v1 implemented
+- Scope: Native application of one approved, generated, single-file patch
+  artifact
+- Implementation status: Enabled only after every native safety gate and exact
+  typed confirmation pass
+- Recovery status: Pre-apply backups implemented; automated rollback remains
+  future work
+- Release classification: Local MVP capability; packaged security QA still
+  required before broader distribution
 - Last updated: 2026-07-15
 
-This document is a prerequisite for patch application work. It defines the
-security, approval, native-command, persistence, recovery, UX, and test
-contracts that must exist before the product may write a generated patch to a
-repository.
-
-Nothing in this document grants the current application permission to write
-files or mutate Git state.
+This document defines the implemented Safe Patch Application v1 boundary and
+the remaining hardening work. The application may modify one working-tree file
+only through the dedicated native command described here. It still cannot
+stage, commit, reset, checkout, clean, or run arbitrary commands.
 
 For the release checkpoint and recorded-demo boundary, see
 [`docs/mvp-scope.md`](../mvp-scope.md) and
@@ -26,9 +26,9 @@ For the release checkpoint and recorded-demo boundary, see
 
 The first patch application capability must follow these decisions:
 
-1. Existing plan or change approval is not patch-application authorization.
-   Application requires a new, explicit, one-shot approval scoped to exact
-   artifact digests and an exact repository snapshot.
+1. The linked proposed-change approval must be approved, but approval alone
+   never applies a patch. Application additionally requires current artifact
+   and repository evidence plus exact typed confirmation.
 2. React may request application by durable IDs only. It must not choose an
    arbitrary repository path, file path, Git command, argument list, or patch
    body at apply time.
@@ -37,15 +37,15 @@ The first patch application capability must follow these decisions:
 4. The native boundary must repeat all path and structure checks and run a
    fresh `git apply --check` immediately before application.
 5. Version 1 requires a clean Git working tree and a named, unchanged branch.
-6. Version 1 supports only create and modify operations for regular UTF-8 text
-   files. Delete, rename, binary, symlink, submodule, executable-mode, and
-   metadata-only patches remain unavailable.
-7. All artifacts in one approved proposal must be applied in one fixed Git
-   invocation. Partial per-file application is not allowed.
+6. Version 1 applies one single-file UTF-8 unified diff at a time. Rename,
+   binary, symlink, submodule, executable-mode, and metadata-only patches remain
+   unavailable.
+7. React sends repository, proposal, approval, and artifact IDs plus the exact
+   phrase `APPLY PATCH`; it never sends patch content.
 8. Application changes working-tree files only. It must not stage, commit,
    reset, checkout, clean, stash, switch branches, or contact a remote.
-9. Approval is consumed once. Retry requires a fresh snapshot, validation,
-   dry-run, and application approval.
+9. An artifact in `applying` or `applied` state cannot be replayed. A failed
+   attempt requires refreshed validation before retry.
 10. The system must persist an application attempt before the native write and
     verify repository state afterward. It must never hide an uncertain or
     partially observed outcome.
@@ -66,18 +66,24 @@ The current product can:
   validation evidence with a fresh read-only native snapshot digest.
 - Record approval or rejection without applying a patch.
 - Read real local Git status and diffs separately from generated artifacts.
-- Derive informational apply-readiness gates in Agent Runs and Approval Review.
-- Show a disabled `Apply unavailable` control with no application handler.
+- Derive apply-readiness gates in Agent Runs and Approval Review.
+- Enable `Apply Patch` only when every frontend eligibility signal passes.
+- Reload durable records and repeat every authoritative check in the native
+  command.
+- Persist a bounded pre-apply backup and application-attempt record before the
+  write.
+- Apply one persisted patch through fixed `git apply --whitespace=nowarn -`.
+- Persist applied/failed state and refreshed Git status after the attempt.
 
 The current product cannot:
 
-- Apply generated artifacts.
-- Write repository files.
 - Stage or commit changes.
-- Treat `approved` or `dry_run_passed` as write permission.
+- Apply from browser preview or accept raw patch text from React.
+- Apply more than one artifact in one action.
+- Automatically roll back a backup.
 
-These boundaries remain in force until every required gate in this document is
-implemented and verified.
+Approval and `dry_run_passed` remain review evidence, not independent write
+permission. Exact confirmation and the native command are always required.
 
 ### Informational Readiness Gates
 
@@ -96,16 +102,16 @@ The current UI evaluates only data already available to the review surfaces:
 - Current authoritative snapshot digest compared with the validation snapshot
   digest.
 
-Readiness results are `closer to ready`, `blocked`, or `checks pending`. They do
-not grant authority and are not consumed by a native write command. A digest
-mismatch blocks readiness with a revalidation instruction. A repository
-snapshot mismatch also blocks readiness. Missing native branch or HEAD data is
-labeled `Requires future apply implementation`; validation that has not run is
-`Not checked yet`. The native snapshot digest binds repository identity,
+Readiness results are `ready to apply`, `applied`, `blocked`, or `checks
+pending`. They do not grant authority; the native command independently reloads
+and verifies durable records. A digest or repository snapshot mismatch blocks
+application with a revalidation instruction. Missing native evidence is
+labeled `Unavailable`; validation that has not run is `Not checked yet`. The
+native snapshot digest binds repository identity,
 branch, HEAD, Git state, relevant paths, artifact digest, and sorted target-file
 fingerprints. Capture timestamps are stored but intentionally excluded from the
-comparison digest. All readiness checks must still be repeated by the future
-native apply authority rather than trusted as frontend security decisions.
+comparison digest. All readiness checks are repeated by the native apply
+authority rather than trusted as frontend security decisions.
 
 ### Current Target Fingerprint Boundary
 
@@ -169,21 +175,19 @@ The implementation must preserve all of these invariants:
 - Every patch artifact must belong to the approved proposed change.
 - Every artifact must be in `generated` state and contain retained text diff
   content.
-- Every artifact digest must match the digest shown during application
-  approval.
-- The approved ordered artifact set must match the applied ordered artifact
-  set exactly.
-- Regenerating, editing, replacing, reordering, adding, or removing an artifact
-  invalidates application approval.
+- The selected artifact digest must match the digest bound to its successful
+  native validation evidence.
+- Regenerating, editing, or replacing the selected artifact invalidates its
+  validation evidence and blocks application.
 
 ### Approval Boundary
 
-- Plan approval and change acceptance do not authorize application.
-- Application requires an `apply_patch` approval with exact repository,
-  snapshot, proposal, artifact, and operation scope.
-- Approval must be pending before confirmation and consumed after one attempt.
-- Replaying a consumed, expired, rejected, superseded, or stale approval must
-  fail before any write.
+- The linked proposed-change approval must be `approved` before application is
+  available.
+- Approval alone does not authorize a write; all native evidence and typed
+  confirmation gates remain mandatory.
+- An artifact already in `applying` or `applied` state must fail before any
+  write.
 - Providers and agent runtimes cannot approve their own output.
 
 ### Repository-State Boundary
@@ -244,20 +248,20 @@ The design must address:
 
 Every condition is required. Missing or unknown values are ineligible.
 
-| Area                 | Required state                                                                              | Failure result               |
-| -------------------- | ------------------------------------------------------------------------------------------- | ---------------------------- |
-| Runtime              | Native Tauri runtime                                                                        | `native_runtime_required`    |
-| Repository           | Saved, selected, canonical, Git-backed root                                                 | `repository_unavailable`     |
-| Repository link      | Proposal and approval repository IDs match active repository                                | `repository_mismatch`        |
-| Branch               | Named branch matching approved snapshot                                                     | `branch_changed`             |
-| HEAD                 | Current commit matches approved snapshot                                                    | `head_changed`               |
-| Git state            | Index and working tree are clean                                                            | `working_tree_not_clean`     |
-| Proposal             | `ready_for_review` or approved for application review; not rejected, superseded, or applied | `proposal_not_applicable`    |
-| Artifacts            | All required artifacts are generated text with retained content                             | `artifact_unavailable`       |
-| Validation           | Structure valid and fresh dry-run passes                                                    | `validation_required`        |
-| Application approval | Exact, unexpired, approved, unused `apply_patch` scope                                      | `application_not_authorized` |
-| Operation            | Create or modify regular UTF-8 text file                                                    | `operation_unsupported`      |
-| Limits               | Existing per-artifact and future proposal aggregate limits pass                             | `patch_limit_exceeded`       |
+| Area            | Required state                                                  | Failure result            |
+| --------------- | --------------------------------------------------------------- | ------------------------- |
+| Runtime         | Native Tauri runtime                                            | `native_runtime_required` |
+| Repository      | Saved, selected, canonical, Git-backed root                     | `repository_unavailable`  |
+| Repository link | Proposal and approval repository IDs match active repository    | `repository_mismatch`     |
+| Branch          | Named branch matching approved snapshot                         | `branch_changed`          |
+| HEAD            | Current commit matches approved snapshot                        | `head_changed`            |
+| Git state       | Index and working tree are clean                                | `working_tree_not_clean`  |
+| Proposal        | Persisted and `approved`; not rejected, superseded, or applied  | `proposal_not_approved`   |
+| Artifact        | Selected artifact is generated text with retained content       | `artifact_not_generated`  |
+| Validation      | Structure valid and fresh dry-run passes                        | `validation_required`     |
+| Confirmation    | Exact phrase `APPLY PATCH`                                      | `confirmation_required`   |
+| Operation       | Create or modify regular UTF-8 text file                        | `operation_unsupported`   |
+| Limits          | Existing per-artifact and future proposal aggregate limits pass | `patch_limit_exceeded`    |
 
 The first implementation should use the existing 64 KiB and 4,000-line limits
 for each artifact. Before implementation, an aggregate proposal file-count,
@@ -285,39 +289,17 @@ For create operations, native code must validate every existing parent path and
 must reject any symlink component. It must not create missing parent
 directories in version 1.
 
-## Separate Application Approval
+## Approval And Confirmation Boundary
 
-The current `ApprovalRequest` is not sufficient as write authorization. A
-future application approval must include at least:
+Safe Patch Application v1 requires the durable approval already linked to the
+proposed change to be `approved`. That decision alone has no write side effect.
+The selected artifact must separately pass current validation, dry-run, digest,
+snapshot, fingerprint, path, size, text, repository, and clean-tree checks.
 
-```ts
-type PatchApplicationApproval = {
-  id: string;
-  action: "apply_patch";
-  repositoryId: string;
-  proposedChangeId: string;
-  artifactDigests: Array<{
-    artifactId: string;
-    filePath: string;
-    operation: "create" | "modify";
-    sha256: string;
-  }>;
-  snapshot: RepositoryApplicationSnapshot;
-  status:
-    "pending" | "approved" | "rejected" | "consumed" | "expired" | "stale";
-  createdAt: string;
-  decidedAt?: string;
-  expiresAt: string;
-  consumedAt?: string;
-};
-```
-
-Application approval must be generated only after artifacts exist and the
-repository snapshot has been captured. Existing approvals must not be migrated
-to approved application permissions.
-
-Changing any scoped field creates a new approval request. The UI must never
-silently broaden or refresh approval scope.
+The user must then type `APPLY PATCH` in the apply surface. The native command
+checks that phrase again and rejects artifacts already marked `applying` or
+`applied`. A separately versioned, expiring, one-shot application-approval
+record remains a future defense-in-depth improvement.
 
 ## Repository Snapshot
 
@@ -351,13 +333,16 @@ approval stale and requires a new review cycle.
 Patch application must be owned by a dedicated native application service, not
 by a generic filesystem API and not by the provider adapter.
 
-The preferred request contract contains durable identifiers and optimistic
-concurrency values only:
+The implemented request contract contains durable identifiers and the explicit
+confirmation phrase only:
 
 ```ts
 type ApplyApprovedPatchRequest = {
-  applicationApprovalId: string;
-  expectedApprovalVersion: number;
+  repositoryId: string;
+  proposedChangeId: string;
+  approvalRequestId: string;
+  patchArtifactId: string;
+  confirmationPhrase: "APPLY PATCH";
 };
 ```
 
@@ -370,14 +355,13 @@ The request must not contain:
 - Shell command text.
 - Flags that weaken validation.
 
-The native service must load the authoritative approval, proposal, artifacts,
-repository record, and latest application attempt from the local database. If
-the current SQLite integration cannot provide a native authoritative read, that
-boundary must be designed before application work begins. Trusting a React
-payload containing approved state is not acceptable.
+The native service loads the authoritative approval, proposal, artifact,
+repository record, and latest application state from the existing SQLite pool.
+Trusting a React payload containing approved state or patch text is not
+acceptable.
 
-The future Tauri capability should expose only the dedicated command. It must
-not grant broad filesystem write scope or arbitrary command execution.
+The Tauri capability exposes only the dedicated command. It does not grant
+broad filesystem write scope or arbitrary command execution.
 
 ## Application Sequence
 
@@ -389,19 +373,18 @@ sequenceDiagram
     participant N as Native Apply Service
     participant G as Git
 
-    U->>UI: Review exact artifacts and request application
-    UI->>DB: Create scoped application approval
-    U->>UI: Confirm exact one-shot application
-    UI->>N: Apply by approval ID and expected version
+    U->>UI: Review exact artifact and linked approval
+    U->>UI: Type APPLY PATCH
+    UI->>N: Apply by durable IDs and confirmation phrase
     N->>DB: Load repository, approval, proposal, artifacts
-    N->>N: Verify IDs, digests, paths, operations, limits
+    N->>N: Verify links, approval, digests, paths, operation, limits
     N->>G: Read branch, HEAD, and clean status
-    N->>N: Compare approved snapshot and target fingerprints
+    N->>N: Compare validation snapshot and target fingerprints
     N->>G: Run fixed git apply --check with patch on stdin
-    N->>DB: Persist started application attempt
-    N->>G: Run one fixed git apply with patch on stdin
+    N->>DB: Persist backup and started application attempt
+    N->>G: Run fixed git apply with one persisted patch on stdin
     N->>G: Read status and resulting diffs
-    N->>DB: Finalize result and consume approval
+    N->>DB: Finalize artifact and proposal result
     N-->>UI: Return sanitized typed result
 ```
 
@@ -426,10 +409,10 @@ Working-tree application:
 git apply --whitespace=nowarn -
 ```
 
-Both invocations must:
+Both invocations:
 
 - Run with the canonical repository root as the working directory.
-- Receive the exact normalized approved artifact set over stdin.
+- Receive the exact normalized persisted artifact over stdin.
 - Use null stdout unless a bounded result is explicitly required.
 - Capture stderr only for internal classification, with a strict size limit.
 - Return sanitized error categories rather than raw patch or repository data.
@@ -440,22 +423,35 @@ arbitrary path rewriting are forbidden.
 
 ## Atomicity
 
-All artifacts in one approved proposed change must be normalized into one
-ordered patch stream and passed to one Git invocation. The implementation must
-not loop over artifacts and apply them separately.
-
-Before release, native tests must prove that a failure in any artifact leaves
-all target files unchanged. The design must not assume atomic behavior without
-an integration test against temporary Git repositories.
+Version 1 applies one validated single-file artifact in one Git invocation.
+`git apply` is invoked without `--reject`, so failed hunks are not intentionally
+written as partial reject files. Native integration tests prove successful
+single-file application and fail-closed rejection paths against disposable Git
+repositories. Multi-artifact transactional application is not implemented.
 
 The application service must prevent concurrent attempts for the same
 repository and approval. Use both:
 
-- A durable one-at-a-time application lease or unique active-attempt
-  constraint.
-- An in-process repository lock for concurrent windows in the same process.
+- An in-process application lock for concurrent windows in the same process.
+- Persisted `applying` and `applied` states that block replay.
 
 The snapshot must still be rechecked after acquiring both protections.
+
+## Pre-Apply Backup Foundation
+
+Before the mutating command starts, native code creates one backup record for
+the artifact's target file:
+
+- The record links repository, proposal, and artifact IDs and a timestamp.
+- Missing create targets record `existedBeforeApply: false` without content.
+- Existing regular UTF-8 targets up to 256 KiB store their pre-apply text and
+  SHA-256 content hash in app-local SQLite.
+- Forbidden, binary, oversized, unreadable, symlinked, outside-root, or
+  otherwise incomplete targets block application.
+- Backup bytes never cross into React. The UI receives only the backup ID.
+
+These records are recovery evidence, not an implemented rollback action.
+Automatic or user-triggered restore remains future work.
 
 ## Application Attempt And Audit State
 
@@ -464,19 +460,12 @@ Persist an immutable attempt before invoking the mutating command:
 ```ts
 type PatchApplicationAttempt = {
   id: string;
-  applicationApprovalId: string;
+  approvalRequestId: string;
   repositoryId: string;
   proposedChangeId: string;
-  artifactDigests: string[];
-  snapshotDigest: string;
-  status:
-    | "prepared"
-    | "applying"
-    | "applied"
-    | "failed_no_change"
-    | "stale"
-    | "outcome_unknown"
-    | "partial_write_detected";
+  patchArtifactId: string;
+  backupId: string;
+  status: "applying" | "applied" | "apply_failed";
   startedAt: string;
   completedAt?: string;
   errorCode?: PatchApplicationErrorCode;
@@ -488,9 +477,9 @@ Audit records may include IDs, digests, branch, counts, timestamps, status,
 duration, and sanitized error codes. They must not include raw patch bodies,
 file contents, provider credentials, raw Git stderr, or environment variables.
 
-`PersistedProposedChange.status` may become `applied` only after post-apply
-verification succeeds. Approval must become `consumed` regardless of success
-once the mutating command was attempted; a retry requires a new approval.
+`PersistedProposedChange.status` becomes `applied` only after Git exits
+successfully and refreshed Git status is available. The linked approval remains
+an immutable human decision in v1; artifact apply state prevents replay.
 
 ## Post-Apply Verification
 
@@ -519,8 +508,8 @@ defined by the error category.
 
 ### Git Reports Failure
 
-The service must reload status and target fingerprints. If they match the
-pre-apply snapshot, record `failed_no_change` and consume the one-shot approval.
+The service persists `apply_failed` with a sanitized error and retains the
+backup record. The user must inspect Git status before any retry.
 
 ### Unexpected Change Or Process Interruption
 
@@ -542,11 +531,12 @@ Recovery UI should:
 
 ## UX Contract
 
-No enabled Apply button should be added until all native and persistence gates
-exist. The current review UI may show the disabled `Apply unavailable` control
-only as an informational boundary; it has no click handler or write path.
+Agent Runs and Approval Review keep `Apply unavailable` disabled until every
+eligibility gate passes. When ready, `Apply Patch` opens a distinct typed
+confirmation surface showing the working-tree warning and the exact phrase
+`APPLY PATCH`.
 
-The future application review surface must show:
+The application review surface shows:
 
 - Repository name and display path.
 - Branch and `HEAD` summary.
@@ -558,10 +548,9 @@ The future application review surface must show:
 - Clear statement that application does not stage, commit, push, or deploy.
 - A warning that approval is one-shot and invalidated by repository changes.
 
-Confirmation must be a distinct step after artifact review. It should require
-an explicit control such as `Apply N reviewed files`, not a generic `Continue`
-button. High-risk paths or future destructive operations require a stronger
-confirmation than the version 1 create/modify flow.
+Confirmation is a distinct step after artifact review. The final action remains
+disabled until the exact phrase matches. High-risk paths and unsupported
+operations remain blocked rather than receiving a weaker confirmation.
 
 Every disabled state must explain the failed gate, such as dirty working tree,
 stale approval, unsupported operation, repository mismatch, missing artifact,
@@ -600,50 +589,45 @@ type PatchApplicationErrorCode =
 Errors must not contain raw patch content, full file content, credentials, or
 unbounded Git output.
 
-## Required Tests Before Implementation Can Ship
+## Test Coverage
 
 ### Shared Model Tests
 
-- Application approval is separate from plan/change approval.
-- Artifact digest changes invalidate approval.
-- Artifact set additions, removals, and reordering invalidate approval.
-- Expired, rejected, stale, and consumed approvals cannot apply.
-- Unsupported operations and aggregate limits fail closed.
+- Artifact digest changes block readiness.
+- Pending approval, failed dry-run, dirty repository, unavailable native
+  runtime, and stale snapshots block application.
+- Applied artifacts cannot be replayed.
 
 ### Native Unit Tests
 
 - Repository resolution uses saved IDs, not request paths.
 - Traversal, absolute paths, `.git`, symlinks, submodules, and secret paths are
   rejected.
-- Create targets validate their nearest existing parent.
+- Create and existing targets require complete bounded backup evidence.
 - Dirty index, dirty working tree, untracked files, detached `HEAD`, changed
   branch, changed `HEAD`, and changed target hashes are rejected.
 - Raw patch, paths, commands, and arguments cannot be overridden by the caller.
 - Raw stderr and patch content are absent from serialized errors and logs.
-- Approval replay and concurrent application are rejected.
+- Artifact replay and concurrent in-process application are rejected.
 
 ### Native Integration Tests
 
 - A valid create patch applies to a clean temporary repository.
-- A valid modify patch applies to a clean temporary repository.
 - The resulting files are unstaged.
 - Git `HEAD`, branch, and index do not change.
-- A multi-artifact failure leaves every target unchanged.
 - A stale patch fails before application.
-- A process timeout produces no write or an explicit uncertain outcome.
-- Post-apply verification detects unexpected paths.
 - No command other than the fixed read and apply commands is invoked.
 
 ### Frontend Tests
 
 - Approval alone never triggers application.
 - Apply remains absent or disabled until every eligibility gate passes.
-- Confirmation shows exact files, branch, and no-stage/no-commit copy.
+- Exact typed confirmation and no-stage/no-commit copy are required.
 - Repository mismatch, dirty state, stale snapshot, unsupported operation,
   validation failure, and unavailable native runtime are explained.
-- Success navigates to read-only Changes review.
+- Success refreshes the read-only Changes data.
 - Failure and uncertain outcomes never claim that files are unchanged.
-- Reload preserves the application attempt and consumed approval state.
+- Reload preserves applied artifact and proposal state.
 
 ### Packaged Desktop QA
 
@@ -654,51 +638,20 @@ unbounded Git output.
   states.
 - Verify logs and diagnostics contain no patch body or file content.
 
-## Rollout Plan
+## Remaining Hardening
 
-1. Approve this design and resolve the blocking decisions below.
-2. Add application approval, snapshot, attempt, digest, and error contracts.
-3. Add native read-only eligibility evaluation and tests. Keep apply disabled.
-4. Add authoritative native persistence reads and concurrency controls.
-5. Add native application behind a development-only feature flag and test only
-   against disposable repositories.
-6. Add confirmation and result UX after native safety tests pass.
-7. Perform packaged desktop security QA before enabling the capability in MVP.
-8. Consider delete, rename, binary, dirty-tree, or non-Git support only through
-   separate design reviews.
+Safe Patch Application v1 is implemented and covered by disposable-repository
+native tests. Before broader distribution, complete:
 
-MVP Demo v1 completes the read-only evidence subset of step 3: structure
-validation, dry-run, artifact digest, target fingerprints, snapshot digest, and
-informational eligibility display. It does not complete authoritative native
-record lookup, application approval, attempt persistence, locking, or any
-write-capable step.
+- Packaged desktop QA against disposable create, modify, and delete fixtures.
+- Crash reconciliation for attempts left in `applying` state.
+- Cross-process repository locking beyond the current in-process mutex.
+- Post-apply verification that no unexpected path changed.
+- Automated rollback design using the persisted backup records.
+- A separately scoped, expiring application approval if the threat model grows
+  beyond the current trusted local desktop UI.
+- Timeouts for native Git child processes.
 
-## Blocking Decisions
-
-The following must be resolved before implementation begins:
-
-- Exact aggregate file, byte, and line limits for one application.
-- Native authoritative access to the current SQLite records.
-- Cross-process repository locking strategy.
-- Approval expiry duration and versioning rules.
-- Supported Git versions and platform-specific process behavior.
-- Crash-reconciliation rules for an attempt left in `applying` state.
-- Exact secret-path deny policy and whether narrowly scoped exceptions can ever
-  be approved.
-
-## Implementation Entry Criteria
-
-Patch application implementation may begin only when:
-
-- This spec is reviewed and accepted.
-- Blocking decisions have written outcomes.
-- Application approval is explicitly separate from existing approvals.
-- The native authority and persistence boundary is agreed.
-- Version 1 operation and path restrictions are accepted.
-- Aggregate limits are fixed.
-- Test fixtures use disposable repositories only.
-- The feature remains disabled in production builds until native integration
-  and packaged desktop QA pass.
-
-Until then, generated artifacts remain review-only, dry-run remains read-only,
-and approval continues to produce no repository side effect.
+Until those items land, application remains a local MVP capability for one
+reviewed artifact at a time. Rollback, staging, committing, and multi-artifact
+transactions are not available.

@@ -1,10 +1,17 @@
+import { useEffect, useState } from "react";
 import {
   initialPatchValidationStatus,
   type PatchValidationStatus,
   type ProposedPatchArtifact,
 } from "@ai-dev/ai";
-import { IconBadge, SecondaryButton, StatusPill } from "@ai-dev/ui";
+import {
+  IconBadge,
+  PrimaryButton,
+  SecondaryButton,
+  StatusPill,
+} from "@ai-dev/ui";
 import { patchArtifactTone } from "../../lib/uiState";
+import { APPLY_PATCH_CONFIRMATION } from "../../storage/patchApplication";
 import {
   applyReadinessGateStatusLabel,
   evaluateApplyReadiness,
@@ -115,7 +122,9 @@ export function PatchArtifactList({
               <strong>{artifact.filePath}</strong>
               <span>
                 {patchArtifactSummary(artifact)} · Validation:{" "}
-                {initialPatchValidationStatus(artifact).replaceAll("_", " ")}
+                {initialPatchValidationStatus(artifact).replaceAll("_", " ")} ·
+                Apply:{" "}
+                {artifact.applyStatus?.replaceAll("_", " ") ?? "not applied"}
               </span>
             </div>
           </>
@@ -149,15 +158,21 @@ export function PatchArtifactList({
 
 type PatchArtifactDetailProps = {
   applyReadinessContext: ApplyReadinessContext;
+  applyFeedback?: {
+    status: "success" | "error";
+    message: string;
+  } | null;
   artifact: ProposedPatchArtifact | null;
+  isApplying?: boolean;
   isValidating?: boolean;
+  onApply?: (confirmationPhrase: string) => void;
   onValidate?: () => void;
 };
 
 function readinessTone(
-  status: "closer_to_ready" | "blocked" | "checks_pending",
+  status: "ready_to_apply" | "applied" | "blocked" | "checks_pending",
 ) {
-  if (status === "closer_to_ready") {
+  if (status === "ready_to_apply" || status === "applied") {
     return "success" as const;
   }
 
@@ -186,10 +201,15 @@ function readinessGateTone(status: ApplyReadinessGateStatus) {
 
 export function PatchArtifactDetail({
   applyReadinessContext,
+  applyFeedback = null,
   artifact,
+  isApplying = false,
   isValidating = false,
+  onApply,
   onValidate,
 }: PatchArtifactDetailProps) {
+  const [isConfirmingApply, setIsConfirmingApply] = useState(false);
+  const [confirmationPhrase, setConfirmationPhrase] = useState("");
   const validationStatus = artifact
     ? initialPatchValidationStatus(artifact)
     : "unavailable";
@@ -202,6 +222,12 @@ export function PatchArtifactDetail({
   const applyReadiness = artifact
     ? evaluateApplyReadiness(artifact, applyReadinessContext)
     : null;
+  const canApply = Boolean(applyReadiness?.canApply && onApply);
+
+  useEffect(() => {
+    setIsConfirmingApply(false);
+    setConfirmationPhrase("");
+  }, [artifact?.id]);
 
   return (
     <section
@@ -238,6 +264,12 @@ export function PatchArtifactDetail({
         <div>
           <dt>Generated</dt>
           <dd>{artifact?.createdAt ?? "Not generated"}</dd>
+        </div>
+        <div>
+          <dt>Apply state</dt>
+          <dd>
+            {artifact?.applyStatus?.replaceAll("_", " ") ?? "Not applied"}
+          </dd>
         </div>
       </dl>
 
@@ -277,7 +309,7 @@ export function PatchArtifactDetail({
             <div className="apply-readiness__heading">
               <IconBadge icon="approval" tone="agent" size="md" />
               <div>
-                <p className="card-eyebrow">Future Safety Gate</p>
+                <p className="card-eyebrow">Native Safety Gate</p>
                 <h4>Apply Readiness</h4>
               </div>
             </div>
@@ -290,8 +322,8 @@ export function PatchArtifactDetail({
             </StatusPill>
           </div>
           <p className="apply-readiness__notice">
-            Apply is not implemented yet. These checks only show whether this
-            artifact is close to being eligible for future safe application.
+            Applying modifies files in your working tree. It does not commit or
+            stage changes, and approval alone never applies a patch.
           </p>
           <p className="apply-readiness__summary">{applyReadiness.summary}</p>
           <ul className="apply-readiness__gates">
@@ -312,14 +344,99 @@ export function PatchArtifactDetail({
             ))}
           </ul>
           <div className="apply-readiness__action">
-            <SecondaryButton disabled icon="changes">
-              Apply unavailable
-            </SecondaryButton>
+            {artifact?.applyStatus === "applied" ? (
+              <SecondaryButton disabled icon="approval">
+                Patch applied
+              </SecondaryButton>
+            ) : canApply ? (
+              <PrimaryButton
+                disabled={isApplying}
+                icon="changes"
+                onClick={() => setIsConfirmingApply(true)}
+              >
+                {isApplying ? "Applying patch" : "Apply Patch"}
+              </PrimaryButton>
+            ) : (
+              <SecondaryButton disabled icon="changes">
+                Apply unavailable
+              </SecondaryButton>
+            )}
             <span>
-              Approval and dry-run remain review signals only. Neither action
-              writes repository files.
+              A bounded backup is required before the native command can modify
+              the selected target file.
             </span>
           </div>
+          {isConfirmingApply && canApply && artifact ? (
+            <div
+              className="apply-confirmation"
+              role="group"
+              aria-labelledby={`apply-confirmation-${artifact.id}`}
+            >
+              <div>
+                <h5 id={`apply-confirmation-${artifact.id}`}>
+                  Confirm working-tree modification
+                </h5>
+                <p>
+                  This will modify files in your working tree. It will not
+                  commit or stage changes. Type <strong>APPLY PATCH</strong> to
+                  continue.
+                </p>
+              </div>
+              <label>
+                Confirmation phrase
+                <input
+                  autoComplete="off"
+                  disabled={isApplying}
+                  onChange={(event) =>
+                    setConfirmationPhrase(event.currentTarget.value)
+                  }
+                  spellCheck={false}
+                  value={confirmationPhrase}
+                />
+              </label>
+              <div className="apply-confirmation__actions">
+                <SecondaryButton
+                  disabled={isApplying}
+                  onClick={() => {
+                    setIsConfirmingApply(false);
+                    setConfirmationPhrase("");
+                  }}
+                >
+                  Cancel
+                </SecondaryButton>
+                <PrimaryButton
+                  disabled={
+                    isApplying ||
+                    confirmationPhrase !== APPLY_PATCH_CONFIRMATION
+                  }
+                  icon="changes"
+                  onClick={() => onApply?.(confirmationPhrase)}
+                >
+                  {isApplying ? "Applying patch" : "Confirm Apply Patch"}
+                </PrimaryButton>
+              </div>
+            </div>
+          ) : null}
+          {artifact?.applyStatus === "applied" ? (
+            <p className="apply-feedback apply-feedback--success" role="status">
+              The approved patch was applied to the working tree. No files were
+              staged or committed. Applied at{" "}
+              {artifact.appliedAt ?? "an unknown time"}.
+              {artifact.backupId
+                ? ` Pre-apply backup: ${artifact.backupId}.`
+                : " Backup reference unavailable."}
+            </p>
+          ) : null}
+          {applyFeedback &&
+          (applyFeedback.status === "error" ||
+            artifact?.applyStatus !== "applied") ? (
+            <p
+              className={`apply-feedback apply-feedback--${applyFeedback.status}`}
+              role={applyFeedback.status === "error" ? "alert" : "status"}
+            >
+              {applyFeedback.message}
+            </p>
+          ) : null}
         </section>
       ) : null}
 
