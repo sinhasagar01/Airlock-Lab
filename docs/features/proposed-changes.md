@@ -33,6 +33,13 @@ effects exist.
   `rejected`.
 - Generated text artifacts expose an explicit **Validate & dry-run** action.
   Its persisted validation status is shared by Agent Run and Approval Review.
+- Selected artifact details expose the same informational **Apply Readiness**
+  gates in Agent Runs and Approval Review. Gates derive from approval,
+  generation, validation, repository, Git-state, path, binary, and size data.
+- Apply readiness can be closer to ready, blocked, or pending checks, but it
+  never authorizes a write. Staleness remains a future-only gate.
+- The only apply control is disabled and labeled **Apply unavailable**. It has
+  no application handler.
 - Agent Runs and Approval Review consume persisted proposed-change records while
   keeping the existing structured plan steps, risks, and validation strategy.
 - The MVP seed includes one connected demo proposed change,
@@ -104,6 +111,11 @@ Git repository, repeats all structure checks, and invokes only
 `git apply --check --whitespace=nowarn -`. Patch content is sent over stdin.
 The command exposes no arbitrary Git arguments or shell strings, suppresses raw
 Git stderr, and never applies, stages, writes, or commits changes.
+
+Apply readiness is a frontend explanation of existing review state, not a
+security decision. Approval does not apply a patch, `dry_run_passed` does not
+apply a patch, and future native application must independently repeat every
+authoritative check described in the patch application safety design.
 
 ## Data Model
 

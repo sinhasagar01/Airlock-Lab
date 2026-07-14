@@ -1275,6 +1275,33 @@ describe("App smoke tests", () => {
     );
   });
 
+  it("shows informational apply readiness with no enabled apply action", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+
+    expect(
+      screen.getByRole("heading", { name: "Apply Readiness" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Apply is not implemented yet. These checks only show whether this artifact is close to being eligible for future safe application.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Apply unavailable" }),
+    ).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
+
+    expect(
+      screen.getByRole("heading", { name: "Apply Readiness" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Apply unavailable" }),
+    ).toBeDisabled();
+  });
+
   it("creates a persisted mock agent run with a review-only proposal and approval", async () => {
     const { user } = renderApp();
 

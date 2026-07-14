@@ -44,6 +44,12 @@ seed data is migrated without changing user-created proposals. Agent Run
 completion is derived from durable approval decisions so run summaries remain
 consistent after approval and restart.
 
+Agent Runs and Approval Review now show shared informational Apply Readiness
+gates for selected artifacts. The evaluator reports approval, generation,
+structure, dry-run, repository, working-tree, path, protected-file, binary,
+size, and future staleness state. `Apply unavailable` is always disabled and
+has no handler; approval and dry-run remain review signals only.
+
 Settings now reports whether OpenAI is configured through the native process
 and can run a read-only connection test for the configured model. The test sends
 no repository or task context, reads no provider response body, persists no

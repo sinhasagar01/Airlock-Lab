@@ -4,7 +4,8 @@
 
 - Status: Proposed safety design
 - Scope: Future application of approved generated patch artifacts
-- Implementation status: Not implemented
+- Implementation status: Application not implemented; informational readiness
+  gates implemented
 - Last updated: 2026-07-14
 
 This document is a prerequisite for patch application work. It defines the
@@ -55,6 +56,8 @@ The current product can:
 - Persist validation results and show them in Agent Runs and Approval Review.
 - Record approval or rejection without applying a patch.
 - Read real local Git status and diffs separately from generated artifacts.
+- Derive informational apply-readiness gates in Agent Runs and Approval Review.
+- Show a disabled `Apply unavailable` control with no application handler.
 
 The current product cannot:
 
@@ -65,6 +68,25 @@ The current product cannot:
 
 These boundaries remain in force until every required gate in this document is
 implemented and verified.
+
+### Informational Readiness Gates
+
+The current UI evaluates only data already available to the review surfaces:
+
+- Linked approval status.
+- Generated artifact state.
+- Structure and dry-run validation status.
+- Selected repository and proposal repository match.
+- Latest known clean, dirty, or unknown working-tree state.
+- Informational relative-path and protected-path checks.
+- Binary and size-limit state.
+
+Readiness results are `closer to ready`, `blocked`, or `checks pending`. They do
+not grant authority and are not consumed by a native write command. Repository
+snapshot and artifact-digest staleness checks are explicitly labeled
+`Requires future apply implementation` because those contracts do not exist.
+All readiness checks must be repeated by the future native authority rather
+than trusted as frontend security decisions.
 
 ## Goals
 
@@ -484,7 +506,9 @@ Recovery UI should:
 
 ## UX Contract
 
-No Apply button should be added until all native and persistence gates exist.
+No enabled Apply button should be added until all native and persistence gates
+exist. The current review UI may show the disabled `Apply unavailable` control
+only as an informational boundary; it has no click handler or write path.
 
 The future application review surface must show:
 

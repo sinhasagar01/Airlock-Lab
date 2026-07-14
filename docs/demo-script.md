@@ -118,6 +118,11 @@ app first validates the bounded single-file diff, then uses read-only
 `git apply --check` in the selected repository. A pass means “potentially
 applicable now,” not “approved” or “applied.”
 
+Show **Apply Readiness** and walk through passed, blocked, not-checked, and
+future-only gates. Point out that staleness requires future repository snapshot
+and artifact-digest work. Select the disabled **Apply unavailable** control and
+explain that it has no action behind it.
+
 The seeded generated sample always demonstrates structure validation. Native
 dry-run proceeds only when the selected repository is the proposal's linked
 repository. Otherwise the UI keeps the `valid structure` result and explains
@@ -161,6 +166,10 @@ pending count decreases, and both decision buttons become disabled.
 
 Say: "This decision updates local review metadata only. It does not apply a
 patch, write files, or execute a Git command."
+
+Revisit Apply Readiness after the decision. Approval may clear one gate, but it
+does not enable application and does not turn the review decision into write
+authorization.
 
 ### 9. Inspect Real Git State
 
@@ -228,6 +237,7 @@ Real today:
 - Indexing and Repository Intelligence facts
 - SQLite run, proposal, and approval persistence
 - Persisted generated artifact validation and read-only `git apply --check`
+- Informational Apply Readiness gates with a disabled apply boundary
 - Read-only Git status and local diffs
 - Approval/rejection metadata updates
 

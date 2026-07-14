@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added shared informational Apply Readiness gates to Agent Run and Approval
+  artifact details without adding a write-capable application path.
+- Added a permanently disabled `Apply unavailable` boundary and explicit copy
+  that approval, validation, and dry-run do not apply repository changes.
+- Added readiness tests for approved/dry-run-passed, pending approval, failed
+  structure, failed dry-run, missing repository, binary, oversized, and
+  protected-path states.
 - Completed a native MVP demo rehearsal across repository indexing,
   Repository Intelligence, mock run creation, approval decisions, artifact
   validation, Changes, Settings, and restart hydration.

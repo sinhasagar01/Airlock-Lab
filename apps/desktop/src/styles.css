@@ -2546,6 +2546,117 @@ dt {
   margin-top: 6px;
 }
 
+.apply-readiness {
+  background: var(--color-surface);
+  border: 1px solid #dfe6ee;
+  border-radius: var(--radius-lg);
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.apply-readiness__header,
+.apply-readiness__heading,
+.apply-readiness__action {
+  align-items: center;
+  display: flex;
+}
+
+.apply-readiness__header {
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.apply-readiness__heading {
+  gap: 12px;
+}
+
+.apply-readiness__heading h4 {
+  color: var(--color-text-primary);
+  font-size: 16px;
+  font-weight: 760;
+  line-height: 1.3;
+  margin-top: 4px;
+}
+
+.apply-readiness__notice {
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.5;
+}
+
+.apply-readiness__summary {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 540;
+  line-height: 1.5;
+}
+
+.apply-readiness__gates {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.apply-readiness__gates li {
+  align-items: center;
+  background: var(--color-surface-muted);
+  border: 1px solid #e4eaf1;
+  border-radius: var(--radius-md);
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 12px;
+}
+
+.apply-readiness__gates li > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.apply-readiness__gates strong {
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 720;
+  line-height: 1.35;
+}
+
+.apply-readiness__gates span:not(.status-pill) {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 520;
+  line-height: 1.45;
+}
+
+.apply-readiness__gates .status-pill {
+  flex: 0 0 auto;
+  max-width: 180px;
+  text-align: center;
+  white-space: normal;
+}
+
+.apply-readiness__action {
+  border-top: 1px solid #e4eaf1;
+  gap: 12px;
+  justify-content: space-between;
+  padding-top: 14px;
+}
+
+.apply-readiness__action > span {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 540;
+  line-height: 1.45;
+  max-width: 420px;
+  text-align: right;
+}
+
 .patch-artifact-state {
   align-items: center;
   background: var(--color-surface);
@@ -4314,9 +4425,21 @@ dd {
   .approval-decision-card,
   .approval-card-grid,
   .patch-validation-panel,
+  .apply-readiness__gates,
   .settings-row,
   .maintenance-action {
     grid-template-columns: 1fr;
+  }
+
+  .apply-readiness__action,
+  .apply-readiness__header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .apply-readiness__action > span {
+    max-width: none;
+    text-align: left;
   }
 
   .agent-run-create-actions {

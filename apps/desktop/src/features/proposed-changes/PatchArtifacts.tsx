@@ -5,6 +5,12 @@ import {
 } from "@ai-dev/ai";
 import { IconBadge, SecondaryButton, StatusPill } from "@ai-dev/ui";
 import { patchArtifactTone } from "../../lib/uiState";
+import {
+  applyReadinessGateStatusLabel,
+  evaluateApplyReadiness,
+  type ApplyReadinessContext,
+  type ApplyReadinessGateStatus,
+} from "./applyReadiness";
 
 type PatchArtifactListProps = {
   artifacts: ProposedPatchArtifact[];
@@ -142,12 +148,44 @@ export function PatchArtifactList({
 }
 
 type PatchArtifactDetailProps = {
+  applyReadinessContext: ApplyReadinessContext;
   artifact: ProposedPatchArtifact | null;
   isValidating?: boolean;
   onValidate?: () => void;
 };
 
+function readinessTone(
+  status: "closer_to_ready" | "blocked" | "checks_pending",
+) {
+  if (status === "closer_to_ready") {
+    return "success" as const;
+  }
+
+  if (status === "blocked") {
+    return "danger" as const;
+  }
+
+  return "neutral" as const;
+}
+
+function readinessGateTone(status: ApplyReadinessGateStatus) {
+  if (status === "passed") {
+    return "success" as const;
+  }
+
+  if (status === "blocked") {
+    return "danger" as const;
+  }
+
+  if (status === "future") {
+    return "warning" as const;
+  }
+
+  return "neutral" as const;
+}
+
 export function PatchArtifactDetail({
+  applyReadinessContext,
   artifact,
   isValidating = false,
   onValidate,
@@ -161,6 +199,9 @@ export function PatchArtifactDetail({
     !artifact.isTooLarge &&
     artifact.rawDiff,
   );
+  const applyReadiness = artifact
+    ? evaluateApplyReadiness(artifact, applyReadinessContext)
+    : null;
 
   return (
     <section
@@ -228,6 +269,58 @@ export function PatchArtifactDetail({
             {isValidating ? "Checking patch" : "Validate & dry-run"}
           </SecondaryButton>
         </div>
+      ) : null}
+
+      {applyReadiness ? (
+        <section className="apply-readiness" aria-label="Apply readiness">
+          <div className="apply-readiness__header">
+            <div className="apply-readiness__heading">
+              <IconBadge icon="approval" tone="agent" size="md" />
+              <div>
+                <p className="card-eyebrow">Future Safety Gate</p>
+                <h4>Apply Readiness</h4>
+              </div>
+            </div>
+            <StatusPill
+              tone={readinessTone(applyReadiness.status)}
+              size="sm"
+              showDot={false}
+            >
+              {applyReadiness.status.replaceAll("_", " ")}
+            </StatusPill>
+          </div>
+          <p className="apply-readiness__notice">
+            Apply is not implemented yet. These checks only show whether this
+            artifact is close to being eligible for future safe application.
+          </p>
+          <p className="apply-readiness__summary">{applyReadiness.summary}</p>
+          <ul className="apply-readiness__gates">
+            {applyReadiness.gates.map((readinessGate) => (
+              <li key={readinessGate.id}>
+                <div>
+                  <strong>{readinessGate.label}</strong>
+                  <span>{readinessGate.detail}</span>
+                </div>
+                <StatusPill
+                  tone={readinessGateTone(readinessGate.status)}
+                  size="sm"
+                  showDot={false}
+                >
+                  {applyReadinessGateStatusLabel(readinessGate.status)}
+                </StatusPill>
+              </li>
+            ))}
+          </ul>
+          <div className="apply-readiness__action">
+            <SecondaryButton disabled icon="changes">
+              Apply unavailable
+            </SecondaryButton>
+            <span>
+              Approval and dry-run remain review signals only. Neither action
+              writes repository files.
+            </span>
+          </div>
+        </section>
       ) : null}
 
       {!artifact ? (

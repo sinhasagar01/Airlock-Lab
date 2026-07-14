@@ -117,6 +117,11 @@ Approval review should distinguish three related concepts:
 - Generated text artifacts may carry a structure/dry-run validation status.
   `dry_run_passed` means only that `git apply --check` succeeded against the
   current working tree; it does not apply the patch or grant permission.
+- Agent Runs and Approval Review show informational Apply Readiness gates for
+  the selected artifact. Approval state is one input, but even an approved,
+  dry-run-passed artifact is only `closer to ready` because application
+  authorization, artifact digests, and repository snapshots are future work.
+- `Apply unavailable` is disabled and has no write-capable action.
 - Matching local Git diffs are read-only repository diffs for affected files
   that currently appear in Git status.
 - Generated patch diffs are future artifacts produced when proposed changes are

@@ -329,6 +329,13 @@ export function App() {
   const effectiveBranch = gitStatusSummary?.branch ?? activeRepository.branch;
   const isWorkingDirectoryClean =
     gitStatusSummary?.isClean ?? activeRepository.openChanges === 0;
+  const applyReadinessWorkingTreeState = !hasActiveRepository
+    ? ("unknown" as const)
+    : gitStatusState === "ready" && gitStatusSummary
+      ? gitStatusSummary.isClean
+        ? ("clean" as const)
+        : ("dirty" as const)
+      : ("unknown" as const);
   const selectedGitChangedFile =
     gitStatusSummary?.files.find((file) => file.path === selectedGitFilePath) ??
     gitStatusSummary?.files[0] ??
@@ -2314,6 +2321,16 @@ export function App() {
 
                 <section className="plan-section patch-artifact-detail-section">
                   <PatchArtifactDetail
+                    applyReadinessContext={{
+                      approvalStatus: activeRunApproval?.status ?? null,
+                      hasSelectedRepository: hasActiveRepository,
+                      repositoryMatches: Boolean(
+                        hasActiveRepository &&
+                          activePersistedProposedChange?.repositoryId ===
+                            activeRepository.id,
+                      ),
+                      workingTreeState: applyReadinessWorkingTreeState,
+                    }}
                     artifact={selectedAgentPatchArtifact}
                     isValidating={
                       selectedAgentPatchArtifact?.id ===
@@ -2892,6 +2909,16 @@ export function App() {
                   selectedArtifactId={selectedApprovalPatchArtifact?.id}
                 />
                 <PatchArtifactDetail
+                  applyReadinessContext={{
+                    approvalStatus: selectedApprovalRequest?.status ?? null,
+                    hasSelectedRepository: hasActiveRepository,
+                    repositoryMatches: Boolean(
+                      hasActiveRepository &&
+                        selectedApprovalProposedChange?.repositoryId ===
+                          activeRepository.id,
+                    ),
+                    workingTreeState: applyReadinessWorkingTreeState,
+                  }}
                   artifact={selectedApprovalPatchArtifact}
                   isValidating={
                     selectedApprovalPatchArtifact?.id ===
