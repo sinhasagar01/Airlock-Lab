@@ -3059,10 +3059,9 @@ dt {
   border-radius: var(--radius-md);
   display: grid;
   gap: 16px;
-  grid-template-columns: 44px minmax(0, 1fr) minmax(
-      148px,
-      max-content
-    ) max-content;
+  grid-template-columns:
+    44px minmax(0, 1fr) minmax(148px, max-content)
+    max-content;
   min-height: 92px;
   padding: 18px;
 }
@@ -3083,6 +3082,21 @@ dt {
   font-weight: 500;
   line-height: 1.45;
   max-width: 620px;
+}
+
+.provider-connection-status {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.provider-connection-status > span:last-child {
+  color: var(--color-text-subtle);
+  font-size: 12px;
+  font-weight: 520;
+  line-height: 1.45;
 }
 
 .settings-row__value {

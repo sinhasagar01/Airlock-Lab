@@ -88,6 +88,12 @@ approval, and `not_generated` patch-artifact workflow. If OpenAI is unavailable
 or returns malformed output, show the error state and confirm that no partial
 review records were created.
 
+Before this variant, open **Settings**, locate **Provider adapters**, and select
+**Test connection**. Show the configured model and sanitized result. Explain
+that the test verifies credential/model access through the native process
+without sending repository context or exposing the API key to the UI. If the
+button is disabled, restart the native app with `OPENAI_API_KEY` configured.
+
 ### 5. Inspect The Proposed Plan
 
 In the selected Agent Run, walk through:

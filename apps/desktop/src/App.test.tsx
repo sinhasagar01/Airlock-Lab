@@ -33,6 +33,7 @@ import {
 import {
   loadOpenAiProviderConfiguration,
   requestOpenAiPlan,
+  testOpenAiConnection,
 } from "./storage/providerRuntime";
 
 const mockState = vi.hoisted(() => {
@@ -443,6 +444,7 @@ vi.mock("./storage/providerRuntime", () => ({
     reason: "Set OPENAI_API_KEY in the native app environment.",
   })),
   requestOpenAiPlan: vi.fn(),
+  testOpenAiConnection: vi.fn(),
 }));
 
 function renderApp(options?: {
@@ -494,6 +496,7 @@ beforeEach(() => {
     reason: "Set OPENAI_API_KEY in the native app environment.",
   });
   vi.mocked(requestOpenAiPlan).mockReset();
+  vi.mocked(testOpenAiConnection).mockReset();
   vi.mocked(previewRepositoryFile).mockImplementation(() =>
     Promise.resolve(mockState.preview),
   );
@@ -764,6 +767,120 @@ describe("App smoke tests", () => {
         /Reset is unavailable until app-local delete boundaries are formalized/,
       ),
     ).toBeInTheDocument();
+  });
+
+  it("keeps OpenAI connection testing disabled when credentials are unavailable", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+
+    expect(
+      await screen.findByText(
+        "Set OPENAI_API_KEY in the native app environment.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Test connection" }),
+    ).toBeDisabled();
+    expect(testOpenAiConnection).not.toHaveBeenCalled();
+  });
+
+  it("tests configured OpenAI credentials through the native boundary", async () => {
+    vi.mocked(loadOpenAiProviderConfiguration).mockResolvedValue({
+      configured: true,
+      model: "test-model",
+    });
+    vi.mocked(testOpenAiConnection).mockResolvedValue({
+      status: "connected",
+      configured: true,
+      model: "test-model",
+      checkedAt: "1720951200",
+      latencyMs: 42,
+      message: "OpenAI credentials and configured model access were verified.",
+    });
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    const testButton = screen.getByRole("button", {
+      name: "Test connection",
+    });
+    await waitFor(() => expect(testButton).toBeEnabled());
+    expect(
+      screen.getByText(
+        "Credential source: native environment. Connection not tested in this session.",
+      ),
+    ).toBeInTheDocument();
+
+    await user.click(testButton);
+
+    expect(testOpenAiConnection).toHaveBeenCalledOnce();
+    expect(
+      await screen.findByText(
+        /credentials and configured model access were verified/i,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Model test-model\. 42 ms\./)).toBeInTheDocument();
+    expect(screen.getByText("connected")).toBeInTheDocument();
+  });
+
+  it("renders sanitized provider diagnostics without upstream error details", async () => {
+    vi.mocked(loadOpenAiProviderConfiguration).mockResolvedValue({
+      configured: true,
+      model: "test-model",
+    });
+    vi.mocked(testOpenAiConnection).mockResolvedValue({
+      status: "authentication_failed",
+      configured: true,
+      model: "test-model",
+      checkedAt: "1720951200",
+      message: "OpenAI authentication or model access was denied.",
+    });
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    const testButton = screen.getByRole("button", {
+      name: "Test connection",
+    });
+    await waitFor(() => expect(testButton).toBeEnabled());
+    await user.click(testButton);
+
+    expect(
+      await screen.findByText(
+        /OpenAI authentication or model access was denied/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("authentication failed")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/response body|api key|sk-/i),
+    ).not.toBeInTheDocument();
+    expect(testButton).toBeEnabled();
+  });
+
+  it("handles unavailable native connection testing without exposing exceptions", async () => {
+    vi.mocked(loadOpenAiProviderConfiguration).mockResolvedValue({
+      configured: true,
+      model: "test-model",
+    });
+    vi.mocked(testOpenAiConnection).mockRejectedValue(
+      new Error("private native exception"),
+    );
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    const testButton = screen.getByRole("button", {
+      name: "Test connection",
+    });
+    await waitFor(() => expect(testButton).toBeEnabled());
+    await user.click(testButton);
+
+    expect(
+      await screen.findByText(
+        /native OpenAI connection test is unavailable. No credentials were exposed/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/private native exception/),
+    ).not.toBeInTheDocument();
   });
 
   it("disables reindex maintenance when no repository is selected", async () => {

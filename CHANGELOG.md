@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Added a native OpenAI connection test that performs a fixed read-only model
+  lookup with a short timeout and sends no repository or task context.
+- Added sanitized connection diagnostics for configured, connected,
+  authentication-failed, model-unavailable, rate-limited, timeout, invalid
+  configuration, and unavailable states without returning response bodies,
+  headers, account data, or credentials.
+- Updated the Settings provider row with native configuration source, model,
+  connection-test action, loading state, last session result, timestamp, and
+  latency while keeping the action disabled when credentials are unavailable.
+- Added frontend and native tests for secure model URL construction, diagnostic
+  serialization, status mapping, configured/unconfigured UI, successful tests,
+  sanitized failures, and unavailable native runtime behavior.
 - Fixed native repository selection by granting the existing app-local SQLite
   persistence path `sql:allow-execute`, which prevents a successful Tauri
   directory selection from failing while repositories are saved.

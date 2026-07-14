@@ -75,6 +75,11 @@ Where model output is nondeterministic, tests should focus on contracts, schemas
 
 Provider adapters should be tested against:
 
+- Native configuration unavailable and configured states
+- Read-only connection-test success, authentication, model, rate-limit,
+  timeout, and unavailable diagnostics
+- Diagnostic serialization that excludes credentials, headers, and provider
+  response bodies
 - Request mapping
 - Response normalization
 - Error normalization

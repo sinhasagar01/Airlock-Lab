@@ -626,6 +626,14 @@ function normalizeOpenAiTransportError(error: unknown): AgentProviderError {
     );
   }
 
+  if (normalized.includes("invalid_configuration")) {
+    return new AgentProviderError(
+      "invalid_input",
+      "openai",
+      "The OpenAI model configuration is invalid. No review records were created.",
+    );
+  }
+
   if (normalized.includes("invalid_output")) {
     return new AgentProviderError(
       "invalid_output",

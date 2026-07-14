@@ -2,7 +2,7 @@ use std::{
     env, fs,
     path::{Component, Path, PathBuf},
     process::Command,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
@@ -17,6 +17,7 @@ const MAX_PROVIDER_FOLDERS: usize = 20;
 const MAX_PROVIDER_EXTENSIONS: usize = 12;
 const DEFAULT_OPENAI_MODEL: &str = "gpt-5.6-luna";
 const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
+const OPENAI_MODELS_URL: &str = "https://api.openai.com/v1/models";
 const IGNORED_DIRECTORIES: &[&str] = &[
     ".git",
     "node_modules",
@@ -118,6 +119,17 @@ struct OpenAiProviderConfiguration {
     configured: bool,
     model: String,
     reason: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenAiConnectionDiagnostic {
+    status: String,
+    configured: bool,
+    model: String,
+    checked_at: String,
+    latency_ms: Option<u64>,
+    message: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -299,12 +311,67 @@ fn is_safe_relative_path(file_path: &str) -> bool {
     })
 }
 
-fn openai_model() -> String {
-    env::var("OPENAI_MODEL")
+fn openai_model() -> Result<String, String> {
+    let Some(model) = env::var("OPENAI_MODEL")
         .ok()
         .map(|model| model.trim().to_string())
         .filter(|model| !model.is_empty())
-        .unwrap_or_else(|| DEFAULT_OPENAI_MODEL.to_string())
+    else {
+        return Ok(DEFAULT_OPENAI_MODEL.to_string());
+    };
+
+    if is_safe_openai_model_id(&model) {
+        Ok(model)
+    } else {
+        Err("invalid_configuration".to_string())
+    }
+}
+
+fn is_safe_openai_model_id(model: &str) -> bool {
+    !model.is_empty()
+        && model.len() <= 120
+        && model.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':')
+        })
+}
+
+fn openai_model_url(model: &str) -> Result<reqwest::Url, String> {
+    if !is_safe_openai_model_id(model) {
+        return Err("invalid_model".to_string());
+    }
+
+    let mut url =
+        reqwest::Url::parse(OPENAI_MODELS_URL).map_err(|_| "invalid_model".to_string())?;
+    url.path_segments_mut()
+        .map_err(|_| "invalid_model".to_string())?
+        .push(model);
+    Ok(url)
+}
+
+fn openai_connection_status(status: reqwest::StatusCode) -> (&'static str, &'static str) {
+    match status.as_u16() {
+        200..=299 => (
+            "connected",
+            "OpenAI credentials and configured model access were verified.",
+        ),
+        401 | 403 => (
+            "authentication_failed",
+            "OpenAI authentication or model access was denied.",
+        ),
+        404 => (
+            "model_unavailable",
+            "The configured OpenAI model is not available to this credential.",
+        ),
+        408 | 504 => ("timeout", "The OpenAI connection test timed out."),
+        429 => (
+            "rate_limited",
+            "OpenAI rate limited the connection test. Try again later.",
+        ),
+        _ => (
+            "unavailable",
+            "OpenAI could not be reached for a connection test.",
+        ),
+    }
 }
 
 fn is_sensitive_provider_path(file_path: &str) -> bool {
@@ -1131,17 +1198,117 @@ fn load_git_file_diff(
 
 #[tauri::command]
 fn get_openai_provider_configuration() -> OpenAiProviderConfiguration {
-    let configured = env::var("OPENAI_API_KEY")
+    let has_api_key = env::var("OPENAI_API_KEY")
         .ok()
         .is_some_and(|key| !key.trim().is_empty());
+    let model_configuration = openai_model();
+    let configured = has_api_key && model_configuration.is_ok();
+    let reason = if !has_api_key {
+        Some(
+            "Set OPENAI_API_KEY in the native app environment to enable OpenAI planning."
+                .to_string(),
+        )
+    } else if model_configuration.is_err() {
+        Some("OPENAI_MODEL contains unsupported characters or exceeds the safe length.".to_string())
+    } else {
+        None
+    };
 
     OpenAiProviderConfiguration {
         configured,
-        model: openai_model(),
-        reason: (!configured).then(|| {
-            "Set OPENAI_API_KEY in the native app environment to enable OpenAI planning."
-                .to_string()
-        }),
+        model: model_configuration.unwrap_or_else(|_| DEFAULT_OPENAI_MODEL.to_string()),
+        reason,
+    }
+}
+
+#[tauri::command]
+async fn test_openai_connection() -> OpenAiConnectionDiagnostic {
+    let model_configuration = openai_model();
+    let display_model = model_configuration
+        .as_ref()
+        .cloned()
+        .unwrap_or_else(|_| DEFAULT_OPENAI_MODEL.to_string());
+    let checked_at = now_unix_seconds();
+    let Some(api_key) = env::var("OPENAI_API_KEY")
+        .ok()
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty())
+    else {
+        return OpenAiConnectionDiagnostic {
+            status: "not_configured".to_string(),
+            configured: false,
+            model: display_model,
+            checked_at,
+            latency_ms: None,
+            message: "OpenAI is not configured in the native environment.".to_string(),
+        };
+    };
+    let Ok(model) = model_configuration else {
+        return OpenAiConnectionDiagnostic {
+            status: "invalid_configuration".to_string(),
+            configured: false,
+            model: display_model,
+            checked_at,
+            latency_ms: None,
+            message: "The configured OpenAI model identifier is invalid.".to_string(),
+        };
+    };
+    let Ok(url) = openai_model_url(&model) else {
+        return OpenAiConnectionDiagnostic {
+            status: "invalid_configuration".to_string(),
+            configured: true,
+            model,
+            checked_at,
+            latency_ms: None,
+            message: "The configured OpenAI model identifier is invalid.".to_string(),
+        };
+    };
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+    else {
+        return OpenAiConnectionDiagnostic {
+            status: "unavailable".to_string(),
+            configured: true,
+            model,
+            checked_at,
+            latency_ms: None,
+            message: "The native HTTP client could not start the connection test.".to_string(),
+        };
+    };
+    let started_at = Instant::now();
+    let response = client.get(url).bearer_auth(api_key).send().await;
+    let latency_ms = Some(started_at.elapsed().as_millis().min(u64::MAX as u128) as u64);
+
+    match response {
+        Ok(response) => {
+            let (status, message) = openai_connection_status(response.status());
+
+            OpenAiConnectionDiagnostic {
+                status: status.to_string(),
+                configured: true,
+                model,
+                checked_at,
+                latency_ms,
+                message: message.to_string(),
+            }
+        }
+        Err(error) => OpenAiConnectionDiagnostic {
+            status: if error.is_timeout() {
+                "timeout".to_string()
+            } else {
+                "unavailable".to_string()
+            },
+            configured: true,
+            model,
+            checked_at,
+            latency_ms,
+            message: if error.is_timeout() {
+                "The OpenAI connection test timed out.".to_string()
+            } else {
+                "OpenAI could not be reached for a connection test.".to_string()
+            },
+        },
     }
 }
 
@@ -1154,7 +1321,7 @@ async fn create_openai_plan(input: OpenAiPlanInput) -> Result<Value, String> {
         .map(|key| key.trim().to_string())
         .filter(|key| !key.is_empty())
         .ok_or_else(|| "provider_not_configured".to_string())?;
-    let model = openai_model();
+    let model = openai_model()?;
     let request_body = build_openai_plan_request(&input, &model);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(90))
@@ -1275,6 +1442,71 @@ mod tests {
             validate_openai_plan_input(&test_openai_plan_input()),
             Ok(())
         );
+    }
+
+    #[test]
+    fn openai_model_url_accepts_bounded_ids_and_rejects_path_injection() {
+        let url = openai_model_url("gpt-5.6-luna").expect("valid model URL");
+
+        assert_eq!(
+            url.as_str(),
+            "https://api.openai.com/v1/models/gpt-5.6-luna"
+        );
+        assert_eq!(
+            openai_model_url("../models"),
+            Err("invalid_model".to_string())
+        );
+        assert_eq!(
+            openai_model_url("model/other"),
+            Err("invalid_model".to_string())
+        );
+    }
+
+    #[test]
+    fn openai_connection_http_statuses_map_to_sanitized_diagnostics() {
+        assert_eq!(
+            openai_connection_status(reqwest::StatusCode::OK),
+            (
+                "connected",
+                "OpenAI credentials and configured model access were verified."
+            )
+        );
+        assert_eq!(
+            openai_connection_status(reqwest::StatusCode::UNAUTHORIZED).0,
+            "authentication_failed"
+        );
+        assert_eq!(
+            openai_connection_status(reqwest::StatusCode::NOT_FOUND).0,
+            "model_unavailable"
+        );
+        assert_eq!(
+            openai_connection_status(reqwest::StatusCode::TOO_MANY_REQUESTS).0,
+            "rate_limited"
+        );
+        assert_eq!(
+            openai_connection_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR).0,
+            "unavailable"
+        );
+    }
+
+    #[test]
+    fn openai_connection_diagnostic_serializes_without_credentials_or_response_body() {
+        let diagnostic = OpenAiConnectionDiagnostic {
+            status: "connected".to_string(),
+            configured: true,
+            model: "test-model".to_string(),
+            checked_at: "123".to_string(),
+            latency_ms: Some(20),
+            message: "Connection verified.".to_string(),
+        };
+        let value = serde_json::to_value(diagnostic).expect("serialize diagnostic");
+
+        assert_eq!(value["status"], "connected");
+        assert_eq!(value["checkedAt"], "123");
+        assert_eq!(value["latencyMs"], 20);
+        assert!(value.get("apiKey").is_none());
+        assert!(value.get("responseBody").is_none());
+        assert!(value.get("headers").is_none());
     }
 
     #[test]
@@ -1528,7 +1760,8 @@ pub fn run() {
             load_git_status_summary,
             load_repository_git_metadata,
             preview_repository_file,
-            scan_repository_file_tree
+            scan_repository_file_tree,
+            test_openai_connection
         ])
         .run(tauri::generate_context!())
         .expect("error while running AI Developer Workspace");

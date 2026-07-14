@@ -113,11 +113,26 @@ import {
 import {
   loadOpenAiProviderConfiguration,
   requestOpenAiPlan,
+  testOpenAiConnection,
+  type OpenAiConnectionDiagnostic,
   type OpenAiProviderConfiguration,
 } from "./storage/providerRuntime";
 
 function agentProviderName(providerId: AgentProviderId) {
   return providerId === "openai" ? "OpenAI" : "Mock Provider";
+}
+
+function formatProviderCheckTime(checkedAt: string) {
+  const unixSeconds = Number(checkedAt);
+
+  if (!Number.isFinite(unixSeconds)) {
+    return checkedAt;
+  }
+
+  return new Date(unixSeconds * 1000).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 export function App() {
@@ -159,6 +174,11 @@ export function App() {
   const [openAiConfigurationState, setOpenAiConfigurationState] = useState<
     "loading" | "ready" | "unavailable"
   >("loading");
+  const [openAiConnectionTestState, setOpenAiConnectionTestState] = useState<
+    "idle" | "running" | "success" | "error"
+  >("idle");
+  const [openAiConnectionDiagnostic, setOpenAiConnectionDiagnostic] =
+    useState<OpenAiConnectionDiagnostic | null>(null);
   const [agentExecutionState, setAgentExecutionState] = useState<
     "idle" | "running" | "success" | "error"
   >("idle");
@@ -1079,6 +1099,43 @@ export function App() {
     setMaintenanceReindexMessage(
       "Reindex failed. No repository files were changed.",
     );
+  }
+
+  async function runOpenAiConnectionTest() {
+    if (!openAiProviderConfiguration.configured) {
+      setOpenAiConnectionTestState("error");
+      setOpenAiConnectionDiagnostic({
+        status: "not_configured",
+        configured: false,
+        model: openAiProviderConfiguration.model,
+        checkedAt: String(Math.floor(Date.now() / 1000)),
+        message:
+          openAiProviderConfiguration.reason ??
+          "OpenAI is not configured in the native environment.",
+      });
+      return;
+    }
+
+    setOpenAiConnectionTestState("running");
+    setOpenAiConnectionDiagnostic(null);
+
+    try {
+      const diagnostic = await testOpenAiConnection();
+      setOpenAiConnectionDiagnostic(diagnostic);
+      setOpenAiConnectionTestState(
+        diagnostic.status === "connected" ? "success" : "error",
+      );
+    } catch {
+      setOpenAiConnectionDiagnostic({
+        status: "unavailable",
+        configured: openAiProviderConfiguration.configured,
+        model: openAiProviderConfiguration.model,
+        checkedAt: String(Math.floor(Date.now() / 1000)),
+        message:
+          "The native OpenAI connection test is unavailable. No credentials were exposed.",
+      });
+      setOpenAiConnectionTestState("error");
+    }
   }
 
   async function updateApprovalStatus(
@@ -3044,24 +3101,60 @@ export function App() {
 
             <div className="settings-row-list">
               {settingsRows.map((row) => {
-                const value =
-                  row.title === "Provider adapters"
-                    ? openAiProviderConfiguration.configured
-                      ? "Mock Provider + OpenAI"
-                      : provider.displayName
-                    : row.title === "Local storage"
-                      ? storageStatus
-                      : row.title === "Indexing policy"
-                        ? scanTarget.includes.join(", ")
-                        : `${pendingApprovalCount} pending`;
+                const isProviderAdapters = row.title === "Provider adapters";
+                const value = isProviderAdapters
+                  ? openAiProviderConfiguration.configured
+                    ? `OpenAI · ${openAiProviderConfiguration.model}`
+                    : "Mock Provider only"
+                  : row.title === "Local storage"
+                    ? storageStatus
+                    : row.title === "Indexing policy"
+                      ? scanTarget.includes.join(", ")
+                      : `${pendingApprovalCount} pending`;
                 const isIndexingPolicy = row.title === "Indexing policy";
-                const action = isIndexingPolicy
+                const action = isProviderAdapters
                   ? () => {
-                      void runMaintenanceReindex();
+                      void runOpenAiConnectionTest();
                     }
-                  : row.title === "Approval defaults"
-                    ? () => setActiveSection("approvals")
-                    : undefined;
+                  : isIndexingPolicy
+                    ? () => {
+                        void runMaintenanceReindex();
+                      }
+                    : row.title === "Approval defaults"
+                      ? () => setActiveSection("approvals")
+                      : undefined;
+                const providerStatus =
+                  openAiConnectionTestState === "running"
+                    ? "testing"
+                    : (openAiConnectionDiagnostic?.status.replaceAll(
+                        "_",
+                        " ",
+                      ) ??
+                      (openAiProviderConfiguration.configured
+                        ? "configured"
+                        : "not configured"));
+                const providerStatusTone =
+                  openAiConnectionTestState === "running"
+                    ? "warning"
+                    : openAiConnectionDiagnostic?.status === "connected"
+                      ? "success"
+                      : openAiConnectionDiagnostic
+                        ? "danger"
+                        : openAiProviderConfiguration.configured
+                          ? "context"
+                          : "neutral";
+                const providerDiagnosticMessage = openAiConnectionDiagnostic
+                  ? `${openAiConnectionDiagnostic.message} Model ${openAiConnectionDiagnostic.model}.${
+                      openAiConnectionDiagnostic.latencyMs === undefined
+                        ? ""
+                        : ` ${openAiConnectionDiagnostic.latencyMs} ms.`
+                    } Checked ${formatProviderCheckTime(openAiConnectionDiagnostic.checkedAt)}.`
+                  : openAiConfigurationState === "loading"
+                    ? "Checking native provider configuration."
+                    : openAiProviderConfiguration.configured
+                      ? "Credential source: native environment. Connection not tested in this session."
+                      : (openAiProviderConfiguration.reason ??
+                        "OpenAI is not configured in the native environment.");
 
                 return (
                   <div className="settings-row" key={row.title}>
@@ -3069,15 +3162,39 @@ export function App() {
                     <div className="settings-row__content">
                       <h3>{row.title}</h3>
                       <p>{row.description}</p>
+                      {isProviderAdapters ? (
+                        <div
+                          className="provider-connection-status"
+                          id="provider-connection-status"
+                          role="status"
+                        >
+                          <StatusPill
+                            tone={providerStatusTone}
+                            size="sm"
+                            showDot={false}
+                          >
+                            {providerStatus}
+                          </StatusPill>
+                          <span>{providerDiagnosticMessage}</span>
+                        </div>
+                      ) : null}
                     </div>
                     <span className="settings-row__value">{value}</span>
                     <SecondaryButton
                       disabled={
-                        !action || (isIndexingPolicy && !hasActiveRepository)
+                        !action ||
+                        (isProviderAdapters &&
+                          (!openAiProviderConfiguration.configured ||
+                            openAiConnectionTestState === "running")) ||
+                        (isIndexingPolicy && !hasActiveRepository)
                       }
                       onClick={action}
                     >
-                      {row.action}
+                      {isProviderAdapters
+                        ? openAiConnectionTestState === "running"
+                          ? "Testing..."
+                          : "Test connection"
+                        : row.action}
                     </SecondaryButton>
                   </div>
                 );

@@ -30,6 +30,12 @@ summary facts; it receives no arbitrary file contents. Strict schema and app
 validation run before any run, proposal, or approval is persisted. Patch
 generation, file writes, tools, streaming, and Git mutation remain unavailable.
 
+Settings now reports whether OpenAI is configured through the native process
+and can run a read-only connection test for the configured model. The test sends
+no repository or task context, reads no provider response body, persists no
+diagnostic state, and returns only sanitized status, model, timestamp, latency,
+and message fields to React. API keys remain native environment state only.
+
 `App.tsx` remains the top-level state orchestrator, but stable seed data,
 desktop shell components, UI-state helpers, generated patch artifact panels,
 local Git diff preview, and indexed-file browser/preview now live in focused

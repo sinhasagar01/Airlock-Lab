@@ -29,6 +29,34 @@ OPENAI_API_KEY="..." npm run dev:tauri
 default planning model. The UI reads only a safe configuration result:
 `configured`, `model`, and an unavailable reason.
 
+Native configuration rejects model identifiers longer than 120 characters or
+containing path separators, whitespace, or unsupported punctuation. Invalid
+model configuration is reported explicitly and never silently replaced for a
+provider request.
+
+## Connection Testing
+
+Settings exposes a confirmation-free, read-only **Test connection** action only
+when OpenAI is configured. The action calls a native Tauri command that performs
+a fixed lookup for the configured model with a 15-second timeout. It sends no
+task, repository context, file paths, file contents, or generated artifacts.
+
+The native process does not read or return the provider response body. React
+receives only:
+
+- Sanitized connection status
+- Whether native configuration exists
+- Configured model identifier
+- Check timestamp
+- Optional request latency
+- A stable user-facing message
+
+Authentication, model access, rate limiting, timeout, invalid configuration,
+and provider availability remain distinct diagnostics. Raw errors, response
+bodies, headers, account metadata, and API keys never cross the native boundary.
+Connection results are session state only and are not written to SQLite or
+local storage.
+
 ## OpenAI Planning Boundary
 
 The OpenAI adapter uses the Responses API with strict structured output. The
