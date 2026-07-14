@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Executed and retained the MVP Demo v1 disposable-repository safety matrix at
+  `docs/qa/evidence/mvp-demo-v1-disposable-apply-qa.md`, including production
+  bundle identity, isolated packaged launch, apply, quarantine, reconciliation,
+  lock, timeout, frontend-state, and full verification results.
+- Added a native QA fixture proving that unexpected-path verification persists
+  `quarantine_required`, preserves backup linkage, and blocks future apply.
 - Added authoritative native post-apply path verification. A successful Git
   process is finalized as `applied_verified` only when the artifact path,
   proposal path, parsed unified-diff path, backup path, target fingerprint, and

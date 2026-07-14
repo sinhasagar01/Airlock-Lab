@@ -123,6 +123,13 @@ repository. The packaged `.app` and DMG demonstrate the macOS ARM64 build path;
 they do not imply signing, notarization, public distribution, or production
 support.
 
+The automated disposable-repository apply, quarantine, reconciliation, lock,
+and timeout matrix passed on 2026-07-15. The production `.app` launched with an
+isolated disposable home, and exact bundle hashes and results are retained in
+`docs/qa/evidence/mvp-demo-v1-disposable-apply-qa.md`. A human-driven packaged
+UI click-through and screenshots remain pending and are not claimed by that
+record.
+
 The release decision is deliberately split:
 
 - Internal recorded MVP demo: ready after the documented preflight passes.

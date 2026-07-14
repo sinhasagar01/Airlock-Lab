@@ -1,5 +1,8 @@
 # Disposable Repository Safe-Apply QA
 
+Latest retained execution evidence:
+`docs/qa/evidence/mvp-demo-v1-disposable-apply-qa.md`.
+
 ## Purpose
 
 This checklist verifies Safe Patch Application v1 and interrupted-attempt
@@ -57,7 +60,7 @@ Keep the baseline HEAD value for every comparison below.
 6. Run validation and dry-run.
 7. Confirm every Apply Readiness gate passes.
 8. Select **Apply Patch**, type `APPLY PATCH`, and confirm once.
-9. Verify the artifact reports `applied` and shows a backup ID.
+9. Verify the artifact reports `applied_verified` and shows a backup ID.
 10. Open Changes and confirm the expected single working-tree change appears.
 11. Quit and relaunch the packaged app. Confirm the applied state persists.
 
@@ -87,7 +90,7 @@ Verify all four tests pass:
 
 - `reconciliation_repairs_clearly_applied_disposable_repository_attempt`
   - Expected target content exists exactly once.
-  - Attempt and artifact are repaired to `applied`.
+  - Attempt and artifact are repaired to `applied_verified`.
   - No patch is re-applied.
 - `reconciliation_marks_untouched_disposable_repository_attempt_failed`
   - Working tree still matches pre-apply evidence.

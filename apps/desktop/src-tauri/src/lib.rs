@@ -5411,6 +5411,96 @@ mod tests {
     }
 
     #[test]
+    fn post_apply_quarantine_persists_evidence_and_blocks_reapply() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("post-apply-quarantine");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let result = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
+                .await
+                .expect("apply disposable fixture patch");
+            let unexpected_status =
+                post_apply_status(&[("generated.txt", "??"), ("unexpected.txt", "??")], 0);
+            let parsed_paths = BTreeSet::from(["generated.txt".to_string()]);
+            let verification = verify_post_apply_changed_paths(
+                "generated.txt",
+                "generated.txt",
+                &parsed_paths,
+                "generated.txt",
+                "generated.txt",
+                &unexpected_status,
+            );
+            assert_eq!(verification.status, "quarantine_required");
+
+            persist_reconciled_artifact(
+                &pool,
+                "proposal-apply",
+                "artifact-apply",
+                "quarantine_required",
+                Some(&result.backup_id),
+                Some(&verification.message),
+                Some(&unexpected_status),
+            )
+            .await
+            .expect("persist quarantined artifact");
+            persist_reconciled_attempt(
+                &pool,
+                &result.apply_attempt_id,
+                "quarantine_required",
+                Some(&verification.message),
+                None,
+                Some(&unexpected_status),
+            )
+            .await
+            .expect("persist quarantined attempt");
+            persist_reconciled_post_apply_verification(
+                &pool,
+                "proposal-apply",
+                "artifact-apply",
+                &result.apply_attempt_id,
+                &verification,
+            )
+            .await
+            .expect("persist quarantine path evidence");
+
+            let attempt_status: String =
+                sqlx::query_scalar("SELECT status FROM patch_apply_attempts WHERE id = ?")
+                    .bind(&result.apply_attempt_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            let proposal_row = sqlx::query(
+                "SELECT status, patch_artifacts_json FROM proposed_changes WHERE id = 'proposal-apply'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            let proposal_status: String = proposal_row.try_get("status").unwrap();
+            let artifacts_json: String = proposal_row.try_get("patch_artifacts_json").unwrap();
+            assert_eq!(attempt_status, "quarantine_required");
+            assert_eq!(proposal_status, "quarantine_required");
+            assert!(artifacts_json.contains("\"applyStatus\":\"quarantine_required\""));
+            assert!(artifacts_json.contains("\"unexpectedPaths\":[\"unexpected.txt\"]"));
+
+            let blocked = acquire_repository_apply_lock(
+                &pool,
+                &lock_directory,
+                "repo-apply",
+                "artifact-apply",
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(blocked.code, "unresolved_apply_attempt");
+            assert!(repository_path.join("generated.txt").exists());
+            assert!(!repository_path.join("unexpected.txt").exists());
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    #[test]
     fn reconciliation_repairs_clearly_applied_disposable_repository_attempt() {
         tauri::async_runtime::block_on(async {
             let repository_path = create_temp_dir("reconcile-clearly-applied");
