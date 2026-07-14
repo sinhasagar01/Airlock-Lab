@@ -53,7 +53,11 @@ The current product can:
 - Reject unsafe, mismatched, binary, oversized, and unsupported artifacts.
 - Run read-only `git apply --check --whitespace=nowarn -` inside the selected
   repository.
-- Persist validation results and show them in Agent Runs and Approval Review.
+- Persist validation results, normalized SHA-256 artifact digests, and a
+  lightweight repository snapshot containing branch, short HEAD, clean state,
+  changed-file count, relevant paths, and capture time.
+- Recompute artifact digests when retained patch content changes and compare
+  validation evidence with the latest read-only Git status snapshot.
 - Record approval or rejection without applying a patch.
 - Read real local Git status and diffs separately from generated artifacts.
 - Derive informational apply-readiness gates in Agent Runs and Approval Review.
@@ -80,13 +84,20 @@ The current UI evaluates only data already available to the review surfaces:
 - Latest known clean, dirty, or unknown working-tree state.
 - Informational relative-path and protected-path checks.
 - Binary and size-limit state.
+- Current artifact digest compared with the digest bound to validation.
+- Native validation snapshot availability.
+- Current branch, HEAD, clean state, and changed-file count compared with the
+  validation snapshot.
 
 Readiness results are `closer to ready`, `blocked`, or `checks pending`. They do
-not grant authority and are not consumed by a native write command. Repository
-snapshot and artifact-digest staleness checks are explicitly labeled
-`Requires future apply implementation` because those contracts do not exist.
-All readiness checks must be repeated by the future native authority rather
-than trusted as frontend security decisions.
+not grant authority and are not consumed by a native write command. A digest
+mismatch blocks readiness with a revalidation instruction. A repository
+snapshot mismatch also blocks readiness. Missing native branch or HEAD data is
+labeled `Requires future apply implementation`; validation that has not run is
+`Not checked yet`. These lightweight checks do not include target-file content
+fingerprints or an authoritative status digest, so all readiness checks must be
+repeated by the future native authority rather than trusted as frontend
+security decisions.
 
 ## Goals
 

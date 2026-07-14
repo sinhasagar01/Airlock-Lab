@@ -7,12 +7,15 @@ import {
   type ApprovalRequestStatus,
   createMockAgentProviderAdapter,
   createOpenAiAgentProviderAdapter,
+  computePatchArtifactDigest,
+  ensureProposedPatchArtifactDigests,
   executeAgentRun,
   type PersistedProposedChange,
   type PatchValidationResult,
   type ProposedPatchArtifact,
   type ProposedChangePlan,
   type ProposedChangeFileOperation,
+  type RepositoryValidationSnapshot,
   validatePatchArtifactStructure,
 } from "@ai-dev/ai";
 import {
@@ -336,6 +339,18 @@ export function App() {
         ? ("clean" as const)
         : ("dirty" as const)
       : ("unknown" as const);
+  const currentRepositoryValidationSnapshot: RepositoryValidationSnapshot | null =
+    gitStatusState === "ready" && gitStatusSummary
+      ? {
+          repositoryId: gitStatusSummary.repositoryId,
+          branch: gitStatusSummary.branch,
+          headSha: gitStatusSummary.headSha,
+          isClean: gitStatusSummary.isClean,
+          changedFileCount: gitStatusSummary.changedFileCount,
+          relevantFilePaths: [],
+          capturedAt: gitStatusSummary.refreshedAt,
+        }
+      : null;
   const selectedGitChangedFile =
     gitStatusSummary?.files.find((file) => file.path === selectedGitFilePath) ??
     gitStatusSummary?.files[0] ??
@@ -641,17 +656,39 @@ export function App() {
 
     setValidatingPatchArtifactId(artifact.id);
     const validatedAt = new Date().toISOString();
+    let artifactDigest = artifact.artifactDigest;
+
+    if (artifact.rawDiff) {
+      try {
+        artifactDigest = await computePatchArtifactDigest(artifact.rawDiff);
+      } catch {
+        artifactDigest = undefined;
+      }
+    }
+
     let validation: PatchValidationResult = {
       ...validatePatchArtifactStructure(artifact, file),
+      artifactDigest,
       validatedAt,
     };
 
     if (validation.status === "valid_structure") {
-      if (!hasActiveRepository || change.repositoryId !== activeRepository.id) {
+      if (!artifactDigest) {
+        validation = {
+          status: "valid_structure",
+          message:
+            "Patch structure is valid, but its SHA-256 digest is unavailable. Re-run validation in a supported runtime.",
+          validatedAt,
+        };
+      } else if (
+        !hasActiveRepository ||
+        change.repositoryId !== activeRepository.id
+      ) {
         validation = {
           status: "valid_structure",
           message:
             "Patch structure is valid. Select its linked repository to run the native Git dry-run.",
+          artifactDigest,
           validatedAt,
         };
       } else {
@@ -661,12 +698,15 @@ export function App() {
             activeRepository.path,
             artifact,
             file,
+            artifactDigest,
+            change.files.map((candidate) => candidate.path),
           );
         } catch {
           validation = {
             status: "valid_structure",
             message:
               "Patch structure is valid. The native Git dry-run is unavailable in this runtime.",
+            artifactDigest,
             validatedAt,
           };
         }
@@ -681,7 +721,11 @@ export function App() {
               ...candidate,
               validationStatus: validation.status,
               validationMessage: validation.message,
+              artifactDigest,
+              validatedArtifactDigest: validation.artifactDigest,
+              validationRepositorySnapshot: validation.repositorySnapshot,
               validatedAt: validation.validatedAt,
+              dryRunAt: validation.dryRunAt,
             }
           : candidate,
       ),
@@ -717,6 +761,10 @@ export function App() {
           ),
         );
       }
+    }
+
+    if (hasActiveRepository && change.repositoryId === activeRepository.id) {
+      await refreshGitStatus(activeRepository);
     }
 
     setValidatingPatchArtifactId(null);
@@ -1037,10 +1085,13 @@ export function App() {
         setApprovalRequests(hydratedApprovalRequests);
         await saveApprovalRequests(hydratedApprovalRequests);
 
-        const hydratedProposedChanges =
+        const mergedProposedChanges =
           savedProposedChanges.length > 0
             ? mergeSeedProposedChanges(savedProposedChanges)
             : mockProposedChanges;
+        const hydratedProposedChanges = await Promise.all(
+          mergedProposedChanges.map(ensureProposedPatchArtifactDigests),
+        );
         setPersistedProposedChanges(hydratedProposedChanges);
         await saveProposedChanges(hydratedProposedChanges);
 
@@ -2329,6 +2380,8 @@ export function App() {
                           activePersistedProposedChange?.repositoryId ===
                             activeRepository.id,
                       ),
+                      currentRepositorySnapshot:
+                        currentRepositoryValidationSnapshot,
                       workingTreeState: applyReadinessWorkingTreeState,
                     }}
                     artifact={selectedAgentPatchArtifact}
@@ -2912,12 +2965,14 @@ export function App() {
                   applyReadinessContext={{
                     approvalStatus: selectedApprovalRequest?.status ?? null,
                     hasSelectedRepository: hasActiveRepository,
-                    repositoryMatches: Boolean(
-                      hasActiveRepository &&
-                        selectedApprovalProposedChange?.repositoryId ===
-                          activeRepository.id,
-                    ),
-                    workingTreeState: applyReadinessWorkingTreeState,
+                      repositoryMatches: Boolean(
+                        hasActiveRepository &&
+                          selectedApprovalProposedChange?.repositoryId ===
+                            activeRepository.id,
+                      ),
+                      currentRepositorySnapshot:
+                        currentRepositoryValidationSnapshot,
+                      workingTreeState: applyReadinessWorkingTreeState,
                   }}
                   artifact={selectedApprovalPatchArtifact}
                   isValidating={

@@ -5,8 +5,10 @@ import {
   MAX_GENERATED_PATCH_ARTIFACT_LINES,
   createMockAgentProviderAdapter,
   createOpenAiAgentProviderAdapter,
+  computePatchArtifactDigest,
   executeAgentRun,
   executeMockAgentRun,
+  ensureProposedPatchArtifactDigests,
   ensureProposedPatchArtifacts,
   validatePatchArtifactStructure,
 } from "./index";
@@ -188,6 +190,37 @@ describe("patch artifact structure validation", () => {
     });
 
     expect(change.patchArtifacts[0].validationStatus).toBe("not_validated");
+  });
+
+  it("computes a normalized SHA-256 digest for patch content", async () => {
+    await expect(computePatchArtifactDigest("hello")).resolves.toBe(
+      "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+    );
+    await expect(computePatchArtifactDigest("hello\r\n")).resolves.toBe(
+      "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+    );
+  });
+
+  it("stores digests only for artifacts with retained raw diff content", async () => {
+    const change = await ensureProposedPatchArtifactDigests({
+      id: "proposal-app",
+      runId: "run-app",
+      repositoryId: "repo-app",
+      title: "Update app",
+      summary: "Review app changes.",
+      status: "ready_for_review",
+      files: [file],
+      patchArtifacts: [artifact],
+      createdAt: "2026-07-14T00:00:00.000Z",
+      updatedAt: "2026-07-14T00:00:00.000Z",
+    });
+    const unavailable = await ensureProposedPatchArtifactDigests({
+      ...change,
+      patchArtifacts: [{ ...artifact, rawDiff: undefined }],
+    });
+
+    expect(change.patchArtifacts[0].artifactDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(unavailable.patchArtifacts[0].artifactDigest).toBeUndefined();
   });
 });
 

@@ -37,9 +37,13 @@ function migrateSeededProposedChange(
       return {
         ...artifact,
         rawDiff: seededArtifact.rawDiff,
+        artifactDigest: undefined,
         validationStatus: "not_validated",
         validationMessage: undefined,
+        validatedArtifactDigest: undefined,
+        validationRepositorySnapshot: undefined,
         validatedAt: undefined,
+        dryRunAt: undefined,
       };
     }),
   };

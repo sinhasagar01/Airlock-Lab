@@ -2,6 +2,7 @@ import {
   initialPatchValidationStatus,
   type ApprovalRequestStatus,
   type ProposedPatchArtifact,
+  type RepositoryValidationSnapshot,
 } from "@ai-dev/ai";
 
 export type ApplyReadinessGateStatus =
@@ -22,7 +23,9 @@ export type ApplyReadinessGate = {
     | "forbidden_path"
     | "binary"
     | "size"
-    | "staleness";
+    | "artifact_digest"
+    | "validation_snapshot"
+    | "repository_staleness";
   label: string;
   detail: string;
   status: ApplyReadinessGateStatus;
@@ -32,6 +35,7 @@ export type ApplyReadinessContext = {
   approvalStatus: ApprovalRequestStatus | null;
   hasSelectedRepository: boolean;
   repositoryMatches: boolean;
+  currentRepositorySnapshot: RepositoryValidationSnapshot | null;
   workingTreeState: "clean" | "dirty" | "unknown";
 };
 
@@ -88,6 +92,23 @@ function isForbiddenPath(path: string) {
   });
 }
 
+function shortDigest(digest: string) {
+  return `SHA-256 ${digest.slice(0, 12)}...`;
+}
+
+function repositorySnapshotMatches(
+  validationSnapshot: RepositoryValidationSnapshot,
+  currentSnapshot: RepositoryValidationSnapshot,
+) {
+  return (
+    validationSnapshot.repositoryId === currentSnapshot.repositoryId &&
+    validationSnapshot.branch === currentSnapshot.branch &&
+    validationSnapshot.headSha === currentSnapshot.headSha &&
+    validationSnapshot.isClean === currentSnapshot.isClean &&
+    validationSnapshot.changedFileCount === currentSnapshot.changedFileCount
+  );
+}
+
 export function evaluateApplyReadiness(
   artifact: ProposedPatchArtifact,
   context: ApplyReadinessContext,
@@ -99,6 +120,24 @@ export function evaluateApplyReadiness(
     validationStatus === "valid_structure" ||
     validationStatus === "dry_run_passed" ||
     validationStatus === "dry_run_failed";
+  const validationHasRun =
+    Boolean(artifact.validatedAt) && validationStatus !== "not_validated";
+  const hasCurrentDigest = Boolean(artifact.artifactDigest);
+  const hasValidatedDigest = Boolean(artifact.validatedArtifactDigest);
+  const artifactDigestMatches =
+    hasCurrentDigest &&
+    hasValidatedDigest &&
+    artifact.artifactDigest === artifact.validatedArtifactDigest;
+  const validationSnapshot = artifact.validationRepositorySnapshot;
+  const currentSnapshot = context.currentRepositorySnapshot;
+  const hasComparableNativeSnapshot = Boolean(
+    validationSnapshot?.headSha && currentSnapshot?.headSha,
+  );
+  const repositoryIsUnchanged = Boolean(
+    validationSnapshot &&
+      currentSnapshot &&
+      repositorySnapshotMatches(validationSnapshot, currentSnapshot),
+  );
 
   const gates: ApplyReadinessGate[] = [
     gate(
@@ -214,10 +253,56 @@ export function evaluateApplyReadiness(
         : "The artifact is within the current per-artifact size boundary.",
     ),
     gate(
-      "staleness",
-      "Artifact not stale",
-      "future",
-      "Repository snapshots and artifact digests are not implemented yet.",
+      "artifact_digest",
+      "Artifact digest matches validation",
+      !validationHasRun
+        ? "not_checked"
+        : !hasCurrentDigest || !hasValidatedDigest
+          ? "future"
+          : artifactDigestMatches
+            ? "passed"
+            : "blocked",
+      !validationHasRun
+        ? "Run validation to bind a digest to the reviewed patch content."
+        : !hasCurrentDigest || !hasValidatedDigest
+          ? "A comparable SHA-256 validation digest is unavailable."
+          : artifactDigestMatches
+            ? `${shortDigest(artifact.artifactDigest!)} matches the validated patch content.`
+            : "Patch artifact changed after validation. Re-run validation before future apply.",
+    ),
+    gate(
+      "validation_snapshot",
+      "Validation snapshot captured",
+      !validationHasRun
+        ? "not_checked"
+        : validationSnapshot
+          ? "passed"
+          : "future",
+      !validationHasRun
+        ? "Run validation to capture repository state."
+        : validationSnapshot
+          ? `Captured ${validationSnapshot.branch ?? "detached or unknown branch"} at ${validationSnapshot.headSha ?? "an unavailable HEAD"} with ${validationSnapshot.changedFileCount} changed file${validationSnapshot.changedFileCount === 1 ? "" : "s"}.`
+          : "The native repository snapshot was unavailable during validation.",
+    ),
+    gate(
+      "repository_staleness",
+      "Repository state unchanged",
+      !validationHasRun
+        ? "not_checked"
+        : !validationSnapshot || !currentSnapshot || !hasComparableNativeSnapshot
+          ? "future"
+          : repositoryIsUnchanged
+            ? "passed"
+            : "blocked",
+      !validationHasRun
+        ? "Repository staleness cannot be checked before validation."
+        : !validationSnapshot || !currentSnapshot
+          ? "A validation or current repository snapshot is unavailable."
+          : !hasComparableNativeSnapshot
+            ? "Branch or HEAD metadata is unavailable for a complete comparison."
+            : repositoryIsUnchanged
+              ? "Branch, HEAD, clean state, and changed-file count match validation."
+              : "Repository state changed after validation. Re-run validation before future apply.",
     ),
   ];
 

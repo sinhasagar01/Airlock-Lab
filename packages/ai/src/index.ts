@@ -196,10 +196,23 @@ export type PatchValidationStatus =
   | "dry_run_failed"
   | "unavailable";
 
+export type RepositoryValidationSnapshot = {
+  repositoryId: string;
+  branch?: string;
+  headSha?: string;
+  isClean: boolean;
+  changedFileCount: number;
+  relevantFilePaths: string[];
+  capturedAt: string;
+};
+
 export type PatchValidationResult = {
   status: PatchValidationStatus;
   message: string;
+  artifactDigest?: string;
+  repositorySnapshot?: RepositoryValidationSnapshot;
   validatedAt?: string;
+  dryRunAt?: string;
 };
 
 export type ProposedChangeFileOperation =
@@ -226,9 +239,13 @@ export type ProposedPatchArtifact = {
   deletions?: number;
   rawDiff?: string;
   createdAt?: string;
+  artifactDigest?: string;
   validationStatus?: PatchValidationStatus;
   validationMessage?: string;
+  validatedArtifactDigest?: string;
+  validationRepositorySnapshot?: RepositoryValidationSnapshot;
   validatedAt?: string;
+  dryRunAt?: string;
 };
 
 export type ProviderPatchArtifact = {
@@ -240,6 +257,23 @@ export type ProviderPatchArtifact = {
 
 export const MAX_GENERATED_PATCH_ARTIFACT_BYTES = 64 * 1024;
 export const MAX_GENERATED_PATCH_ARTIFACT_LINES = 4_000;
+
+export function normalizePatchArtifactText(rawDiff: string) {
+  const normalized = rawDiff.replace(/\r\n?/g, "\n");
+  return normalized.endsWith("\n") ? normalized : `${normalized}\n`;
+}
+
+export async function computePatchArtifactDigest(rawDiff: string) {
+  const normalizedPatch = normalizePatchArtifactText(rawDiff);
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(normalizedPatch),
+  );
+
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
 
 const PATCH_VALIDATION_STATUSES: PatchValidationStatus[] = [
   "not_validated",
@@ -470,6 +504,25 @@ export function ensureProposedPatchArtifacts(
         patchArtifactStatus: artifact?.status ?? file.patchArtifactStatus,
       };
     }),
+    patchArtifacts,
+  };
+}
+
+export async function ensureProposedPatchArtifactDigests(
+  change: PersistedProposedChange,
+): Promise<PersistedProposedChange> {
+  const normalizedChange = ensureProposedPatchArtifacts(change);
+  const patchArtifacts = await Promise.all(
+    normalizedChange.patchArtifacts.map(async (artifact) => ({
+      ...artifact,
+      artifactDigest: artifact.rawDiff
+        ? await computePatchArtifactDigest(artifact.rawDiff)
+        : undefined,
+    })),
+  );
+
+  return {
+    ...normalizedChange,
     patchArtifacts,
   };
 }
@@ -1236,19 +1289,21 @@ export async function executeAgentRun(
           : undefined,
       };
     });
-  const proposedChange = ensureProposedPatchArtifacts({
-    id: proposedChangeId,
-    runId: request.id,
-    approvalRequestId,
-    repositoryId: request.repositoryId,
-    title,
-    summary: plan.summary,
-    status: "ready_for_review",
-    files,
-    patchArtifacts,
-    createdAt: request.startedAt,
-    updatedAt: request.startedAt,
-  });
+  const proposedChange = await ensureProposedPatchArtifactDigests(
+    ensureProposedPatchArtifacts({
+      id: proposedChangeId,
+      runId: request.id,
+      approvalRequestId,
+      repositoryId: request.repositoryId,
+      title,
+      summary: plan.summary,
+      status: "ready_for_review",
+      files,
+      patchArtifacts,
+      createdAt: request.startedAt,
+      updatedAt: request.startedAt,
+    }),
+  );
   const approvalRequest: ApprovalRequest = {
     id: approvalRequestId,
     title: `Review ${title}`,

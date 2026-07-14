@@ -119,9 +119,17 @@ app first validates the bounded single-file diff, then uses read-only
 applicable now,” not “approved” or “applied.”
 
 Show **Apply Readiness** and walk through passed, blocked, not-checked, and
-future-only gates. Point out that staleness requires future repository snapshot
-and artifact-digest work. Select the disabled **Apply unavailable** control and
-explain that it has no action behind it.
+future-only gates. Point out the artifact digest, validation snapshot, and
+repository-state comparison. The SHA-256 digest binds validation to the exact
+normalized patch text, while the snapshot records branch, short HEAD, clean
+state, changed-file count, relevant paths, and capture time without storing file
+contents. Select the disabled **Apply unavailable** control and explain that it
+has no action behind it.
+
+If the digest or repository state changes, show the blocked copy and explain:
+"Stale review evidence must be revalidated. The app still cannot apply the
+patch." Missing native branch or HEAD data stays explicitly unavailable rather
+than being treated as a pass.
 
 The seeded generated sample always demonstrates structure validation. Native
 dry-run proceeds only when the selected repository is the proposal's linked

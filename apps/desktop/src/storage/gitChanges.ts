@@ -21,6 +21,7 @@ type NativeGitStatusSummary = {
   repository_id: string;
   repository_path: string;
   branch?: string | null;
+  head_sha?: string | null;
   is_git_repository: boolean;
   is_clean: boolean;
   changed_file_count: number;
@@ -105,6 +106,7 @@ export async function loadGitStatusSummary(
     repositoryId: status.repository_id,
     repositoryPath: status.repository_path,
     branch: status.branch ?? undefined,
+    headSha: status.head_sha ?? undefined,
     isGitRepository: status.is_git_repository,
     isClean: status.is_clean,
     changedFileCount: status.changed_file_count,

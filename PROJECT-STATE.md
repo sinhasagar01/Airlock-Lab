@@ -47,8 +47,13 @@ consistent after approval and restart.
 Agent Runs and Approval Review now show shared informational Apply Readiness
 gates for selected artifacts. The evaluator reports approval, generation,
 structure, dry-run, repository, working-tree, path, protected-file, binary,
-size, and future staleness state. `Apply unavailable` is always disabled and
-has no handler; approval and dry-run remain review signals only.
+size, artifact-digest, validation-snapshot, and repository-staleness state.
+Retained patch text receives a normalized SHA-256 digest. Validation persists
+the checked digest plus a read-only snapshot of repository ID, branch, short
+HEAD, clean state, changed-file count, relevant proposal paths, and capture
+time. Digest or repository changes block readiness until revalidation.
+`Apply unavailable` is always disabled and has no handler; approval, digest,
+snapshot, and dry-run evidence remain review signals only.
 
 Settings now reports whether OpenAI is configured through the native process
 and can run a read-only connection test for the configured model. The test sends

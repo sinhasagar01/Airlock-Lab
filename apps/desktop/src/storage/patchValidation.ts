@@ -3,6 +3,7 @@ import type {
   PatchValidationResult,
   ProposedChangeFile,
   ProposedPatchArtifact,
+  RepositoryValidationSnapshot,
 } from "@ai-dev/ai";
 
 type NativePatchValidationResult = {
@@ -10,7 +11,10 @@ type NativePatchValidationResult = {
   filePath: string;
   status: PatchValidationResult["status"];
   message: string;
+  artifactDigest?: string | null;
+  repositorySnapshot?: RepositoryValidationSnapshot | null;
   validatedAt: string;
+  dryRunAt?: string | null;
 };
 
 export async function dryRunGeneratedPatch(
@@ -18,6 +22,8 @@ export async function dryRunGeneratedPatch(
   repositoryPath: string,
   artifact: ProposedPatchArtifact,
   file: ProposedChangeFile,
+  artifactDigest: string,
+  relevantFilePaths: string[],
 ): Promise<PatchValidationResult> {
   const result = await invoke<NativePatchValidationResult>(
     "validate_generated_patch",
@@ -29,6 +35,8 @@ export async function dryRunGeneratedPatch(
         operation: file.operation,
         isBinary: artifact.isBinary,
         rawDiff: artifact.rawDiff,
+        artifactDigest,
+        relevantFilePaths,
       },
     },
   );
@@ -36,6 +44,9 @@ export async function dryRunGeneratedPatch(
   return {
     status: result.status,
     message: result.message,
+    artifactDigest: result.artifactDigest ?? undefined,
+    repositorySnapshot: result.repositorySnapshot ?? undefined,
     validatedAt: result.validatedAt,
+    dryRunAt: result.dryRunAt ?? undefined,
   };
 }

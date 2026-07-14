@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Added normalized SHA-256 digests for retained generated patch content and
+  persisted the digest checked by validation.
+- Added read-only validation snapshots with repository ID, branch, short HEAD,
+  clean state, changed-file count, relevant paths, and capture time.
+- Replaced the future-only staleness placeholder with digest, snapshot, and
+  current-repository comparison gates that require revalidation after changes.
+- Added AI, frontend, and native coverage for digest availability, validation
+  evidence persistence, unchanged snapshots, stale artifacts, stale
+  repositories, and pre-validation states.
 - Added shared informational Apply Readiness gates to Agent Run and Approval
   artifact details without adding a write-capable application path.
 - Added a permanently disabled `Apply unavailable` boundary and explicit copy

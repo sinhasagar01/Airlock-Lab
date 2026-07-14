@@ -35,9 +35,11 @@ effects exist.
   Its persisted validation status is shared by Agent Run and Approval Review.
 - Selected artifact details expose the same informational **Apply Readiness**
   gates in Agent Runs and Approval Review. Gates derive from approval,
-  generation, validation, repository, Git-state, path, binary, and size data.
+  generation, validation, repository, Git-state, path, binary, size, artifact
+  digest, and validation-snapshot data.
 - Apply readiness can be closer to ready, blocked, or pending checks, but it
-  never authorizes a write. Staleness remains a future-only gate.
+  never authorizes a write. A changed artifact digest or changed repository
+  snapshot blocks readiness and requires revalidation.
 - The only apply control is disabled and labeled **Apply unavailable**. It has
   no application handler.
 - Agent Runs and Approval Review consume persisted proposed-change records while
@@ -112,6 +114,19 @@ Git repository, repeats all structure checks, and invokes only
 The command exposes no arbitrary Git arguments or shell strings, suppresses raw
 Git stderr, and never applies, stages, writes, or commits changes.
 
+Retained patch text is normalized to LF line endings with a terminal newline
+and assigned a SHA-256 digest. Generated artifacts persist their current
+digest. Validation persists the digest it checked, `validatedAt`, `dryRunAt`
+when Git completed the check, and a lightweight repository snapshot. The
+snapshot contains no file contents: only repository ID, branch, short HEAD,
+clean state, changed-file count, relevant proposal paths, and capture time.
+
+Apply Readiness derives staleness by comparing the current artifact digest with
+the validated digest and the latest read-only Git summary with the validation
+snapshot. Digest or repository changes produce a blocked state and require a
+new validation. Missing native snapshot data remains explicitly unavailable;
+it is not treated as a pass.
+
 Apply readiness is a frontend explanation of existing review state, not a
 security decision. Approval does not apply a patch, `dry_run_passed` does not
 apply a patch, and future native application must independently repeat every
@@ -129,3 +144,4 @@ The shared model lives in `packages/ai`:
 - `ProposedPatchArtifactStatus`
 - `PatchValidationStatus`
 - `PatchValidationResult`
+- `RepositoryValidationSnapshot`

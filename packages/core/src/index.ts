@@ -46,6 +46,7 @@ export type GitStatusSummary = {
   repositoryId: string;
   repositoryPath: string;
   branch?: string;
+  headSha?: string;
   isGitRepository: boolean;
   isClean: boolean;
   changedFileCount: number;

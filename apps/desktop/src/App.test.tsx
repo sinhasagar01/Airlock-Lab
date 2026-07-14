@@ -184,6 +184,7 @@ const mockState = vi.hoisted(() => {
       repositoryId: repository.id,
       repositoryPath: repository.path,
       branch: "main",
+      headSha: "abc1234",
       isGitRepository: true,
       isClean: false,
       changedFileCount: 3,
@@ -417,11 +418,22 @@ vi.mock("./storage/gitChanges", () => ({
 }));
 
 vi.mock("./storage/patchValidation", () => ({
-  dryRunGeneratedPatch: vi.fn(async () => ({
+  dryRunGeneratedPatch: vi.fn(async (...args: unknown[]) => ({
     status: "dry_run_passed",
     message:
       "Git reports that the patch can apply to the current working tree without writing it.",
+    artifactDigest: args[4] as string,
+    repositorySnapshot: {
+      repositoryId: "repo-workspace",
+      branch: "main",
+      headSha: "abc1234",
+      isClean: false,
+      changedFileCount: 3,
+      relevantFilePaths: args[5] as string[],
+      capturedAt: "1783532400",
+    },
     validatedAt: "1783532400",
+    dryRunAt: "1783532400",
   })),
 }));
 
@@ -533,12 +545,23 @@ beforeEach(() => {
       kind: file.stage === "staged" ? "staged" : mockState.gitDiff.kind,
     };
   });
-  vi.mocked(dryRunGeneratedPatch).mockResolvedValue({
+  vi.mocked(dryRunGeneratedPatch).mockImplementation(async (...args) => ({
     status: "dry_run_passed",
     message:
       "Git reports that the patch can apply to the current working tree without writing it.",
+    artifactDigest: args[4],
+    repositorySnapshot: {
+      repositoryId: "repo-workspace",
+      branch: "main",
+      headSha: "abc1234",
+      isClean: false,
+      changedFileCount: 3,
+      relevantFilePaths: args[5],
+      capturedAt: "1783532400",
+    },
     validatedAt: "1783532400",
-  });
+    dryRunAt: "1783532400",
+  }));
   vi.mocked(scanRepositoryFileTree).mockImplementation(async () => ({
     repositoryPath: mockState.repositories[0]?.path ?? "/workspace",
     scannedFiles: mockState.files.length,
@@ -1484,13 +1507,32 @@ describe("App smoke tests", () => {
       "/workspace",
       expect.objectContaining({ filePath: "src/App.tsx" }),
       expect.objectContaining({ operation: "modify" }),
+      expect.stringMatching(/^[a-f0-9]{64}$/),
+      ["src/App.tsx"],
     );
     expect(await screen.findByText("dry run passed")).toBeInTheDocument();
+    expect(
+      screen.getByText("Artifact digest matches validation"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Validation snapshot captured")).toBeInTheDocument();
+    expect(screen.getByText("Repository state unchanged")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Apply unavailable" }),
+    ).toBeDisabled();
     await waitFor(() => {
       expect(saveProposedChange).toHaveBeenLastCalledWith(
         expect.objectContaining({
           patchArtifacts: [
-            expect.objectContaining({ validationStatus: "dry_run_passed" }),
+            expect.objectContaining({
+              validationStatus: "dry_run_passed",
+              artifactDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+              validatedArtifactDigest: expect.stringMatching(
+                /^[a-f0-9]{64}$/,
+              ),
+              validationRepositorySnapshot: expect.objectContaining({
+                headSha: "abc1234",
+              }),
+            }),
           ],
         }),
       );

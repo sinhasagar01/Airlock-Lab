@@ -81,6 +81,7 @@ struct GitStatusSummary {
     repository_id: String,
     repository_path: String,
     branch: Option<String>,
+    head_sha: Option<String>,
     is_git_repository: bool,
     is_clean: bool,
     changed_file_count: usize,
@@ -126,6 +127,21 @@ struct PatchValidationInput {
     operation: String,
     is_binary: bool,
     raw_diff: Option<String>,
+    artifact_digest: Option<String>,
+    #[serde(default)]
+    relevant_file_paths: Vec<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RepositoryValidationSnapshot {
+    repository_id: String,
+    branch: Option<String>,
+    head_sha: Option<String>,
+    is_clean: bool,
+    changed_file_count: usize,
+    relevant_file_paths: Vec<String>,
+    captured_at: String,
 }
 
 #[derive(Serialize)]
@@ -135,7 +151,10 @@ struct PatchValidationResult {
     file_path: String,
     status: String,
     message: String,
+    artifact_digest: Option<String>,
+    repository_snapshot: Option<RepositoryValidationSnapshot>,
     validated_at: String,
+    dry_run_at: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -250,6 +269,7 @@ fn empty_git_status_summary(
         repository_id,
         repository_path,
         branch,
+        head_sha: None,
         is_git_repository,
         is_clean: true,
         changed_file_count: 0,
@@ -345,7 +365,59 @@ fn patch_validation_result(
         file_path: input.file_path.clone(),
         status: status.to_string(),
         message: message.to_string(),
+        artifact_digest: input.artifact_digest.clone(),
+        repository_snapshot: None,
         validated_at: now_unix_seconds(),
+        dry_run_at: None,
+    }
+}
+
+fn patch_validation_result_with_snapshot(
+    input: &PatchValidationInput,
+    status: &str,
+    message: &str,
+    repository_snapshot: RepositoryValidationSnapshot,
+    dry_run_completed: bool,
+) -> PatchValidationResult {
+    PatchValidationResult {
+        repository_id: input.repository_id.clone(),
+        file_path: input.file_path.clone(),
+        status: status.to_string(),
+        message: message.to_string(),
+        artifact_digest: input.artifact_digest.clone(),
+        repository_snapshot: Some(repository_snapshot),
+        validated_at: now_unix_seconds(),
+        dry_run_at: dry_run_completed.then(now_unix_seconds),
+    }
+}
+
+fn capture_repository_validation_snapshot(
+    input: &PatchValidationInput,
+    canonical_repository_path: &str,
+) -> RepositoryValidationSnapshot {
+    let head_sha = git_output(canonical_repository_path, &["rev-parse", "--short", "HEAD"]);
+    let branch = git_output(canonical_repository_path, &["branch", "--show-current"])
+        .filter(|value| !value.is_empty())
+        .or_else(|| head_sha.as_ref().map(|commit| format!("detached {commit}")));
+    let status_output =
+        git_output(canonical_repository_path, &["status", "--porcelain=v1"]).unwrap_or_default();
+    let changed_file_count = status_output.lines().count();
+    let mut relevant_file_paths = if input.relevant_file_paths.is_empty() {
+        vec![input.file_path.clone()]
+    } else {
+        input.relevant_file_paths.clone()
+    };
+    relevant_file_paths.sort();
+    relevant_file_paths.dedup();
+
+    RepositoryValidationSnapshot {
+        repository_id: input.repository_id.clone(),
+        branch,
+        head_sha,
+        is_clean: changed_file_count == 0,
+        changed_file_count,
+        relevant_file_paths,
+        captured_at: now_unix_seconds(),
     }
 }
 
@@ -356,6 +428,14 @@ fn validate_generated_patch_structure(input: &PatchValidationInput) -> Result<()
 
     if input.is_binary {
         return Err("binary_unavailable".to_string());
+    }
+
+    if input
+        .relevant_file_paths
+        .iter()
+        .any(|path| !is_safe_relative_git_path(path))
+    {
+        return Err("A proposed file path is unsafe or outside the repository.".to_string());
     }
 
     if input.operation == "rename" {
@@ -1163,15 +1243,13 @@ fn load_git_status_summary(repository_id: String, repository_path: String) -> Gi
         );
     }
 
+    let head_sha = git_output(
+        &canonical_repository_path,
+        &["rev-parse", "--short", "HEAD"],
+    );
     let branch = git_output(&canonical_repository_path, &["branch", "--show-current"])
         .filter(|value| !value.is_empty())
-        .or_else(|| {
-            git_output(
-                &canonical_repository_path,
-                &["rev-parse", "--short", "HEAD"],
-            )
-            .map(|commit| format!("detached {commit}"))
-        });
+        .or_else(|| head_sha.as_ref().map(|commit| format!("detached {commit}")));
     let status_output =
         git_output(&canonical_repository_path, &["status", "--porcelain=v1"]).unwrap_or_default();
     let files: Vec<GitChangedFile> = status_output
@@ -1199,6 +1277,7 @@ fn load_git_status_summary(repository_id: String, repository_path: String) -> Gi
         repository_id,
         repository_path: canonical_repository_path,
         branch,
+        head_sha,
         is_git_repository,
         is_clean: files.is_empty(),
         changed_file_count: files.len(),
@@ -1386,6 +1465,8 @@ fn validate_generated_patch(input: PatchValidationInput) -> PatchValidationResul
             );
         }
     };
+    let repository_snapshot =
+        capture_repository_validation_snapshot(&input, &canonical_repository_path);
 
     let mut child = match Command::new("git")
         .args(["apply", "--check", "--whitespace=nowarn", "-"])
@@ -1397,10 +1478,12 @@ fn validate_generated_patch(input: PatchValidationInput) -> PatchValidationResul
     {
         Ok(child) => child,
         Err(_) => {
-            return patch_validation_result(
+            return patch_validation_result_with_snapshot(
                 &input,
                 "valid_structure",
                 "Patch structure is valid, but the native Git dry-run is unavailable.",
+                repository_snapshot,
+                false,
             );
         }
     };
@@ -1420,28 +1503,36 @@ fn validate_generated_patch(input: PatchValidationInput) -> PatchValidationResul
     if write_result.is_err() {
         let _ = child.kill();
         let _ = child.wait();
-        return patch_validation_result(
+        return patch_validation_result_with_snapshot(
             &input,
             "valid_structure",
             "Patch structure is valid, but the native Git dry-run could not read the proposal.",
+            repository_snapshot,
+            false,
         );
     }
 
     match child.wait() {
-        Ok(status) if status.success() => patch_validation_result(
+        Ok(status) if status.success() => patch_validation_result_with_snapshot(
             &input,
             "dry_run_passed",
             "Git reports that the patch can apply to the current working tree without writing it.",
+            repository_snapshot,
+            true,
         ),
-        Ok(_) => patch_validation_result(
+        Ok(_) => patch_validation_result_with_snapshot(
             &input,
             "dry_run_failed",
             "Git reports that the patch does not apply cleanly to the current working tree.",
+            repository_snapshot,
+            true,
         ),
-        Err(_) => patch_validation_result(
+        Err(_) => patch_validation_result_with_snapshot(
             &input,
             "valid_structure",
             "Patch structure is valid, but the native Git dry-run did not complete.",
+            repository_snapshot,
+            false,
         ),
     }
 }
@@ -1699,6 +1790,8 @@ mod tests {
             operation: operation.to_string(),
             is_binary: false,
             raw_diff: Some(raw_diff.to_string()),
+            artifact_digest: Some("sha256:test-digest".to_string()),
+            relevant_file_paths: vec![file_path.to_string()],
         }
     }
 
@@ -1928,6 +2021,18 @@ mod tests {
         );
 
         assert_eq!(result.status, "dry_run_passed");
+        assert_eq!(
+            result.artifact_digest.as_deref(),
+            Some("sha256:test-digest")
+        );
+        assert!(result.dry_run_at.is_some());
+        let snapshot = result
+            .repository_snapshot
+            .expect("validation should capture a repository snapshot");
+        assert_eq!(snapshot.repository_id, "repo-test");
+        assert!(snapshot.is_clean);
+        assert_eq!(snapshot.changed_file_count, 0);
+        assert_eq!(snapshot.relevant_file_paths, vec!["new-file.txt"]);
         assert!(!repository_path.join("new-file.txt").exists());
         assert_eq!(status_before, status_after);
         remove_temp_dir(&repository_path);
