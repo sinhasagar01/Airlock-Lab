@@ -226,9 +226,15 @@ export function PatchArtifactDetail({
     ? evaluateApplyReadiness(artifact, applyReadinessContext)
     : null;
   const canApply = Boolean(applyReadiness?.canApply && onApply);
+  const applicationVerified =
+    artifact?.applyStatus === "applied" ||
+    artifact?.applyStatus === "applied_verified";
   const requiresManualInspection =
     applyAttempt?.status === "interrupted" ||
-    applyAttempt?.status === "needs_inspection";
+    applyAttempt?.status === "needs_inspection" ||
+    applyAttempt?.status === "quarantine_required";
+  const postApplyVerification =
+    applyAttempt?.postApplyVerification ?? artifact?.postApplyVerification;
 
   useEffect(() => {
     setIsConfirmingApply(false);
@@ -318,7 +324,11 @@ export function PatchArtifactDetail({
           <div className="patch-apply-recovery__header">
             <IconBadge icon="changes" tone="warning" size="md" />
             <div>
-              <p className="card-eyebrow">Interrupted Apply</p>
+              <p className="card-eyebrow">
+                {applyAttempt.status === "quarantine_required"
+                  ? "Post-Apply Quarantine"
+                  : "Interrupted Apply"}
+              </p>
               <h4>Manual inspection required</h4>
             </div>
             <StatusPill tone="warning" size="sm" showDot={false}>
@@ -345,6 +355,35 @@ export function PatchArtifactDetail({
                     : "Not enough evidence"}
               </dd>
             </div>
+            {postApplyVerification ? (
+              <>
+                <div>
+                  <dt>Expected paths</dt>
+                  <dd>{postApplyVerification.expectedPaths.join(", ")}</dd>
+                </div>
+                <div>
+                  <dt>Observed paths</dt>
+                  <dd>
+                    {postApplyVerification.observedChangedPaths.join(", ") ||
+                      "None detected"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Unexpected paths</dt>
+                  <dd>
+                    {postApplyVerification.unexpectedPaths.join(", ") ||
+                      "None detected"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Missing expected paths</dt>
+                  <dd>
+                    {postApplyVerification.missingExpectedPaths.join(", ") ||
+                      "None detected"}
+                  </dd>
+                </div>
+              </>
+            ) : null}
           </dl>
           <p className="patch-apply-recovery__boundary">
             No patch was retried or rolled back. Inspect the working tree and
@@ -394,9 +433,9 @@ export function PatchArtifactDetail({
             ))}
           </ul>
           <div className="apply-readiness__action">
-            {artifact?.applyStatus === "applied" ? (
+            {applicationVerified ? (
               <SecondaryButton disabled icon="approval">
-                Patch applied
+                Patch applied and verified
               </SecondaryButton>
             ) : canApply ? (
               <PrimaryButton
@@ -467,10 +506,11 @@ export function PatchArtifactDetail({
               </div>
             </div>
           ) : null}
-          {artifact?.applyStatus === "applied" ? (
+          {applicationVerified ? (
             <p className="apply-feedback apply-feedback--success" role="status">
-              The approved patch was applied to the working tree. No files were
-              staged or committed. Applied at{" "}
+              The approved patch was applied and authoritative verification
+              confirmed only the expected path changed. No files were staged
+              or committed. Applied at{" "}
               {artifact.appliedAt ?? "an unknown time"}.
               {artifact.backupId
                 ? ` Pre-apply backup: ${artifact.backupId}.`
@@ -479,7 +519,7 @@ export function PatchArtifactDetail({
           ) : null}
           {applyFeedback &&
           (applyFeedback.status === "error" ||
-            artifact?.applyStatus !== "applied") ? (
+            !applicationVerified) ? (
             <p
               className={`apply-feedback apply-feedback--${applyFeedback.status}`}
               role={applyFeedback.status === "error" ? "alert" : "status"}

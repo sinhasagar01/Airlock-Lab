@@ -283,6 +283,12 @@ inspection required** in Agent Runs and Approval Review. Point out the attempt
 and backup IDs, confirm **Apply unavailable** remains disabled, and explain that
 reconciliation classified evidence without retrying or rolling back the patch.
 
+If a quarantine fixture is present, show **Post-Apply Quarantine** and compare
+the expected, observed, unexpected, and missing path lists. Explain that Git
+may have exited successfully, but the native exact-path verifier refused to
+classify the outcome as safely applied. The backup remains available, Apply is
+disabled, and no automatic retry or rollback occurs.
+
 ## Recovery Notes
 
 - **Repository picker does not open:** use the packaged native app, not the web
@@ -306,6 +312,9 @@ reconciliation classified evidence without retrying or rolling back the patch.
   15 seconds. A dry-run timeout writes nothing; an in-flight apply timeout
   preserves its backup and requires manual inspection without retry or
   rollback.
+- **Post-apply quarantine:** inspect the expected and observed path evidence in
+  Agent Runs or Approval Review, then inspect read-only Git status and diffs.
+  Do not retry Apply; quarantine intentionally has no automatic repair action.
 - **Non-Git repository:** Repository Intelligence still shows indexed facts;
   Changes should report Git status as unavailable without attempting writes.
 

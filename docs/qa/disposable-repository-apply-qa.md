@@ -186,6 +186,12 @@ For a test database containing an unresolved attempt:
   `needs_inspection`.
 - Unexpected repository, branch, HEAD, fingerprint, or Git-status evidence is
   treated as ambiguous.
+- The successful fixture persists `applied_verified` only when the artifact,
+  proposal, parsed patch, backup, fingerprint, and Git changed paths all equal
+  the one approved path.
+- Native verifier fixtures with an additional changed path, a staged path, or
+  mismatched path evidence persist `quarantine_required`; Agent Runs and
+  Approval Review show manual-inspection guidance and keep Apply disabled.
 - No raw Git stderr, repository file contents, backup contents, or secrets are
   displayed in recovery diagnostics.
 - There is no rollback, retry, stage, commit, reset, checkout, or clean action.

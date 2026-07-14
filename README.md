@@ -38,7 +38,7 @@ Select repository
 - Read-only local Git status and per-file diff inspection
 - Approval decisions separated from explicit Safe Patch Application
 - Native single-artifact application with exact typed confirmation, pre-apply
-  backup, and post-apply Git status
+  backup, and authoritative exact-path post-apply verification
 - Confirmation-gated Settings maintenance actions
 - Frontend, provider-contract, and native safety tests
 - Packaged macOS `.app` and DMG output
@@ -60,6 +60,9 @@ dedicated native command.
   in-flight timeout becomes an interrupted attempt requiring inspection.
 - Interrupted native attempts are reconciled conservatively on startup and
   review entry; ambiguous state requires manual inspection and is never retried.
+- Native code finalizes application as `applied_verified` only when proposal,
+  artifact, parsed diff, backup, fingerprint, and post-apply Git paths match
+  exactly. Unexpected or missing paths are quarantined with Apply disabled.
 - No Git add, commit, reset, checkout, clean, or staging operation is exposed.
 - Approval means the review record was approved. It does not itself write.
 - Generated patch artifacts and local Git diffs are displayed as separate data.
@@ -160,8 +163,9 @@ docs/               Product, architecture, safety, engineering, and demo docs
 
 ## Known MVP Limitations
 
-- Application is limited to one eligible single-file text artifact; rollback
-  and multi-artifact transactions are not implemented.
+- Application is limited to one eligible single-file text artifact; quarantined
+  outcomes require manual inspection, and rollback and multi-artifact
+  transactions are not implemented.
 - Approval alone does not apply an artifact; native revalidation and exact
   typed confirmation remain mandatory.
 - OpenAI requires runtime environment configuration and network access.

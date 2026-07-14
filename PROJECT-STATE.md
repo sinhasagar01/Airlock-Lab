@@ -75,7 +75,7 @@ states.
 Before the write, native code persists a bounded backup and an `applying` audit
 record with pre-apply evidence. It then runs fixed
 `git apply --whitespace=nowarn -` with the persisted patch over stdin, reloads
-Git status, and persists applied or failed evidence. Startup and the Agent
+Git status, and persists verified, quarantined, or failed evidence. Startup and the Agent
 Runs/Approval Review surfaces reconcile attempts left in `pending` or
 `applying`: clearly applied state is repaired without reapplying, unchanged
 state becomes failed, incomplete evidence becomes interrupted, and ambiguity
@@ -87,8 +87,13 @@ closed; abandoned durable locks become stale only after the OS lock is safely
 reacquired. Fixed Git dry-run, reconciliation probes, and application children
 have a 15-second deadline and are killed and reaped on timeout. An in-flight
 apply timeout is persisted as interrupted with its backup and available Git
-evidence. Backup rollback, multi-artifact transactions, unexpected-path
-post-verification, and retained packaged QA evidence remain future work.
+evidence. After Git succeeds, native code compares the exact artifact,
+proposal, parsed diff, backup, fingerprint, and post-apply Git paths. Only an
+exact, unstaged match becomes `applied_verified`; any missing, unexpected,
+staged, or conflicting evidence becomes durable `quarantine_required`, keeps
+Apply disabled, and requires manual inspection. Backup rollback,
+multi-artifact transactions, and retained packaged QA evidence remain future
+work.
 
 Settings now reports whether OpenAI is configured through the native process
 and can run a read-only connection test for the configured model. The test sends
@@ -124,11 +129,12 @@ The release decision is deliberately split:
 - Production or autonomous repository modification: not ready.
 - Safe Patch Application v1: implemented for one locally reviewed artifact with
   authoritative native lookup, same-request revalidation, backup persistence,
-  typed confirmation, and post-apply Git status.
+  typed confirmation, and exact-path post-apply verification.
 - Recovery and broader distribution: interrupted-attempt reconciliation and a
   disposable-repository QA protocol are implemented, including cross-process
-  locking and bounded Git child-process timeouts. Release-specific QA evidence,
-  unexpected-path post-verification, and rollback remain incomplete.
+  locking, bounded Git child-process timeouts, and quarantine for unexpected
+  post-apply paths. Release-specific QA evidence and rollback remain
+  incomplete.
 
 ## Current UI Direction
 

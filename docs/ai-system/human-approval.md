@@ -142,6 +142,10 @@ Approval review should distinguish three related concepts:
 - Fixed Git dry-run and application children terminate after 15 seconds. A
   timeout after application starts is durable `interrupted` evidence, not an
   approval failure and not permission to retry automatically.
+- A successful Git process is not sufficient for a clean application result.
+  Native code must verify the exact expected path against proposal, patch,
+  backup, fingerprint, and Git-status evidence. Any mismatch becomes
+  `quarantine_required`, preserves the approval record, and blocks Apply.
 - Human approval remains valid review history after an interruption, but it
   does not authorize an automatic retry or rollback.
 - Matching local Git diffs are read-only repository diffs for affected files

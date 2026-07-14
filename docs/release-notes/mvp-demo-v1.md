@@ -137,7 +137,10 @@ apps/desktop/src-tauri/target/release/bundle/dmg/
 
 - Safe Patch Application is limited to one eligible approved single-file text
   artifact with a native backup, exact typed confirmation, cross-process lock,
-  and post-apply Git review.
+  bounded Git timeout, and authoritative exact-path post-apply verification.
+- An unexpected, missing, staged, or conflicting post-apply path is persisted
+  as `quarantine_required`; it is not presented as cleanly applied and requires
+  manual inspection with Apply disabled.
 - Approval alone is not application authorization; native revalidation and
   exact `APPLY PATCH` confirmation remain mandatory.
 - Signing, notarization, automatic updates, crash reporting, and public
@@ -160,7 +163,7 @@ and verification commands pass on the recording machine.
 ## Next Boundary
 
 The next product boundary is Safe Patch Recovery and Application Hardening:
-retained packaged disposable-repository QA evidence, unexpected-path
-post-verification, and an explicit rollback design using persisted backups.
-Repository-scoped cross-process locking and bounded Git child-process timeouts
-are implemented. Multi-artifact application remains out of scope.
+retained packaged disposable-repository QA evidence and an explicit rollback
+design using persisted backups. Repository-scoped cross-process locking,
+bounded Git child-process timeouts, and exact-path post-verification with
+quarantine are implemented. Multi-artifact application remains out of scope.

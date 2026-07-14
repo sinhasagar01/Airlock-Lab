@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     env, fs,
     fs::OpenOptions,
     io::{Seek, SeekFrom, Write},
@@ -246,6 +247,18 @@ struct PatchApplyEvidence {
     captured_at: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PostApplyPathVerification {
+    status: String,
+    expected_paths: Vec<String>,
+    observed_changed_paths: Vec<String>,
+    unexpected_paths: Vec<String>,
+    missing_expected_paths: Vec<String>,
+    verified_at: String,
+    message: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PatchApplyAttemptRecord {
@@ -261,6 +274,7 @@ struct PatchApplyAttemptRecord {
     sanitized_error: Option<String>,
     pre_apply_evidence: Option<PatchApplyEvidence>,
     post_apply_evidence: Option<PatchApplyEvidence>,
+    post_apply_verification: Option<PostApplyPathVerification>,
     current_git_status_changed: Option<bool>,
     message: String,
 }
@@ -275,6 +289,7 @@ struct ApplyApprovedPatchArtifactResult {
     backup_id: String,
     applied_at: String,
     post_apply_git_status: GitStatusSummary,
+    post_apply_verification: PostApplyPathVerification,
     message: String,
 }
 
@@ -1019,6 +1034,119 @@ fn git_status_evidence_changed(previous: &Value, current: &Value) -> bool {
     .any(|key| previous.get(key) != current.get(key))
 }
 
+fn parsed_unified_diff_paths(raw_diff: &str) -> BTreeSet<String> {
+    raw_diff
+        .lines()
+        .take_while(|line| !line.starts_with("@@ "))
+        .filter_map(|line| {
+            line.strip_prefix("--- ")
+                .or_else(|| line.strip_prefix("+++ "))
+        })
+        .filter(|path| *path != "/dev/null")
+        .filter_map(|path| path.strip_prefix("a/").or_else(|| path.strip_prefix("b/")))
+        .map(str::to_string)
+        .collect()
+}
+
+fn verify_post_apply_changed_paths(
+    artifact_path: &str,
+    proposed_path: &str,
+    parsed_patch_paths: &BTreeSet<String>,
+    backup_path: &str,
+    fingerprint_path: &str,
+    post_apply_git_status: &GitStatusSummary,
+) -> PostApplyPathVerification {
+    let expected_paths = BTreeSet::from([artifact_path.to_string()]);
+    let evidence_paths = BTreeSet::from([
+        proposed_path.to_string(),
+        backup_path.to_string(),
+        fingerprint_path.to_string(),
+    ]);
+    let evidence_matches =
+        evidence_paths == expected_paths && parsed_patch_paths == &expected_paths;
+    let mut observed_paths = BTreeSet::new();
+    let mut observed_unsafe_path = false;
+    for file in &post_apply_git_status.files {
+        for path in [Some(file.path.as_str()), file.old_path.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            if is_safe_relative_git_path(path) {
+                observed_paths.insert(path.to_string());
+            } else {
+                observed_unsafe_path = true;
+            }
+        }
+    }
+
+    let unexpected_paths = observed_paths
+        .difference(&expected_paths)
+        .cloned()
+        .collect::<Vec<_>>();
+    let missing_expected_paths = expected_paths
+        .difference(&observed_paths)
+        .cloned()
+        .collect::<Vec<_>>();
+    let status_is_consistent = post_apply_git_status.is_git_repository
+        && post_apply_git_status.changed_file_count == post_apply_git_status.files.len()
+        && post_apply_git_status.staged_count == 0;
+    let verified = evidence_matches
+        && status_is_consistent
+        && !observed_unsafe_path
+        && unexpected_paths.is_empty()
+        && missing_expected_paths.is_empty();
+    let message = if verified {
+        "Post-apply verification confirmed that only the approved artifact path changed. No files were staged or committed."
+    } else {
+        "Post-apply verification could not prove that only the approved artifact path changed. The outcome is quarantined for manual inspection."
+    };
+
+    PostApplyPathVerification {
+        status: if verified {
+            "applied_verified".to_string()
+        } else {
+            "quarantine_required".to_string()
+        },
+        expected_paths: expected_paths.into_iter().collect(),
+        observed_changed_paths: observed_paths.into_iter().collect(),
+        unexpected_paths,
+        missing_expected_paths,
+        verified_at: now_unix_seconds(),
+        message: message.to_string(),
+    }
+}
+
+fn set_artifact_post_apply_verification(
+    artifacts: &mut Value,
+    artifact_id: &str,
+    verification: &PostApplyPathVerification,
+) -> Result<(), ApplyPatchError> {
+    let artifact = artifacts
+        .as_array_mut()
+        .and_then(|items| {
+            items
+                .iter_mut()
+                .find(|item| item.get("id").and_then(Value::as_str) == Some(artifact_id))
+        })
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| {
+            apply_patch_error(
+                "artifact_not_found",
+                "The persisted patch artifact is unavailable.",
+            )
+        })?;
+    artifact.insert(
+        "postApplyVerification".to_string(),
+        serde_json::to_value(verification).map_err(|_| {
+            apply_patch_error(
+                "apply_state_persistence_failed",
+                "Post-apply path verification could not be serialized safely.",
+            )
+        })?,
+    );
+    Ok(())
+}
+
 fn set_artifact_apply_metadata(
     artifacts: &mut Value,
     artifact_id: &str,
@@ -1079,7 +1207,7 @@ async fn ensure_patch_apply_tables(pool: &SqlitePool) -> Result<(), ApplyPatchEr
         )
     })?;
     sqlx::query(
-        "CREATE TABLE IF NOT EXISTS patch_apply_attempts (id TEXT PRIMARY KEY, proposed_change_id TEXT NOT NULL, patch_artifact_id TEXT NOT NULL, approval_request_id TEXT NOT NULL, repository_id TEXT NOT NULL, status TEXT NOT NULL, error_code TEXT, sanitized_error TEXT, backup_id TEXT, started_at TEXT NOT NULL, completed_at TEXT, pre_apply_evidence_json TEXT, post_apply_evidence_json TEXT, post_apply_git_status_json TEXT)",
+        "CREATE TABLE IF NOT EXISTS patch_apply_attempts (id TEXT PRIMARY KEY, proposed_change_id TEXT NOT NULL, patch_artifact_id TEXT NOT NULL, approval_request_id TEXT NOT NULL, repository_id TEXT NOT NULL, status TEXT NOT NULL, error_code TEXT, sanitized_error TEXT, backup_id TEXT, started_at TEXT NOT NULL, completed_at TEXT, pre_apply_evidence_json TEXT, post_apply_evidence_json TEXT, post_apply_git_status_json TEXT, post_apply_verification_json TEXT)",
     )
     .execute(pool)
     .await
@@ -1136,6 +1264,10 @@ async fn ensure_patch_apply_tables(pool: &SqlitePool) -> Result<(), ApplyPatchEr
         (
             "post_apply_evidence_json",
             "ALTER TABLE patch_apply_attempts ADD COLUMN post_apply_evidence_json TEXT",
+        ),
+        (
+            "post_apply_verification_json",
+            "ALTER TABLE patch_apply_attempts ADD COLUMN post_apply_verification_json TEXT",
         ),
     ] {
         if !table_columns.iter().any(|existing| existing == column) {
@@ -1269,7 +1401,7 @@ async fn acquire_repository_apply_lock(
 
     mark_abandoned_apply_locks_stale(pool, repository_id).await?;
     let unresolved_attempt = sqlx::query(
-        "SELECT id FROM patch_apply_attempts WHERE repository_id = ? AND status IN ('pending', 'applying', 'interrupted', 'needs_inspection') LIMIT 1",
+        "SELECT id FROM patch_apply_attempts WHERE repository_id = ? AND status IN ('pending', 'applying', 'interrupted', 'needs_inspection', 'quarantine_required') LIMIT 1",
     )
     .bind(repository_id)
     .fetch_optional(pool)
@@ -2611,7 +2743,7 @@ async fn apply_approved_patch_artifact_under_lock(
     }
     if matches!(
         artifact.get("applyStatus").and_then(Value::as_str),
-        Some("applying" | "applied")
+        Some("applying" | "applied" | "applied_verified" | "quarantine_required")
     ) {
         return Err(apply_patch_error(
             "already_applied",
@@ -2685,6 +2817,11 @@ async fn apply_approved_patch_artifact_under_lock(
         .get("operation")
         .and_then(Value::as_str)
         .unwrap_or("unknown")
+        .to_string();
+    let proposed_file_path = proposed_file
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
         .to_string();
     let relevant_file_paths: Vec<String> = files
         .as_array()
@@ -2770,6 +2907,7 @@ async fn apply_approved_patch_artifact_under_lock(
             "The persisted patch no longer passes native structure validation.",
         )
     })?;
+    let parsed_patch_paths = parsed_unified_diff_paths(raw_diff);
 
     let current_snapshot = capture_repository_validation_snapshot(
         &input.repository_id,
@@ -2819,6 +2957,7 @@ async fn apply_approved_patch_artifact_under_lock(
                 "The target-file fingerprint is unavailable. The patch was not applied.",
             )
         })?;
+    let expected_target_fingerprint_path = expected_target_fingerprint.path.clone();
 
     match run_fixed_git_apply(&canonical_repository_path, &patch_for_git, true) {
         FixedGitApplyOutcome::Succeeded => {}
@@ -2848,6 +2987,7 @@ async fn apply_approved_patch_artifact_under_lock(
         &operation,
         expected_target_fingerprint,
     )?;
+    let backup_path = backup_file.path.clone();
     let final_snapshot = capture_repository_validation_snapshot(
         &input.repository_id,
         &repository_root,
@@ -3051,14 +3191,39 @@ async fn apply_approved_patch_artifact_under_lock(
         input.repository_id.clone(),
         canonical_repository_path.clone(),
     );
+    let post_apply_verification = verify_post_apply_changed_paths(
+        &file_path,
+        &proposed_file_path,
+        &parsed_patch_paths,
+        &backup_path,
+        &expected_target_fingerprint_path,
+        &post_apply_git_status,
+    );
+    let is_verified = post_apply_verification.status == "applied_verified";
+    let artifact_apply_status = if is_verified {
+        "applied_verified"
+    } else {
+        "quarantine_required"
+    };
+    let proposal_status = if is_verified {
+        "applied"
+    } else {
+        "quarantine_required"
+    };
+    let verification_error = (!is_verified).then_some(post_apply_verification.message.as_str());
     set_artifact_apply_metadata(
         &mut artifacts,
         &input.patch_artifact_id,
-        "applied",
+        artifact_apply_status,
         Some(&backup_id),
         Some(&applied_at),
-        None,
+        verification_error,
         Some(&post_apply_git_status),
+    )?;
+    set_artifact_post_apply_verification(
+        &mut artifacts,
+        &input.patch_artifact_id,
+        &post_apply_verification,
     )?;
     let applied_artifacts_json = serde_json::to_string(&artifacts).map_err(|_| {
         apply_patch_error(
@@ -3067,8 +3232,9 @@ async fn apply_approved_patch_artifact_under_lock(
         )
     })?;
     let persisted_result = sqlx::query(
-        "UPDATE proposed_changes SET status = 'applied', patch_artifacts_json = ?, updated_at = ? WHERE id = ?",
+        "UPDATE proposed_changes SET status = ?, patch_artifacts_json = ?, updated_at = ? WHERE id = ?",
     )
+    .bind(proposal_status)
     .bind(applied_artifacts_json)
     .bind(&applied_at)
     .bind(&input.proposed_change_id)
@@ -3102,33 +3268,40 @@ async fn apply_approved_patch_artifact_under_lock(
         Some(&post_apply_git_status),
     );
     let post_apply_evidence_json = serde_json::to_string(&post_apply_evidence).ok();
+    let post_apply_verification_json = serde_json::to_string(&post_apply_verification).ok();
+    let attempt_error_code = (!is_verified).then_some("unexpected_post_apply_paths");
     let _ = sqlx::query(
-        "UPDATE patch_apply_attempts SET status = 'applied', completed_at = ?, post_apply_evidence_json = ?, post_apply_git_status_json = ? WHERE id = ?",
+        "UPDATE patch_apply_attempts SET status = ?, error_code = ?, sanitized_error = ?, completed_at = ?, post_apply_evidence_json = ?, post_apply_git_status_json = ?, post_apply_verification_json = ? WHERE id = ?",
     )
+    .bind(artifact_apply_status)
+    .bind(attempt_error_code)
+    .bind(verification_error)
     .bind(&applied_at)
     .bind(post_apply_evidence_json)
     .bind(post_apply_status_json)
+    .bind(post_apply_verification_json)
     .bind(&attempt_id)
     .execute(pool)
     .await;
 
     Ok(ApplyApprovedPatchArtifactResult {
-        status: "applied".to_string(),
+        status: artifact_apply_status.to_string(),
         apply_attempt_id: attempt_id,
         proposed_change_id: input.proposed_change_id,
         patch_artifact_id: input.patch_artifact_id,
         backup_id,
         applied_at,
         post_apply_git_status,
-        message:
-            "The approved patch was applied to the working tree. No files were staged or committed."
-                .to_string(),
+        post_apply_verification: post_apply_verification.clone(),
+        message: post_apply_verification.message,
     })
 }
 
 fn apply_attempt_message(status: &str) -> String {
     match status {
         "applied" => "Reconciliation found clear evidence that the expected patch was applied. No patch was re-applied.".to_string(),
+        "applied_verified" => "Authoritative post-apply verification confirmed that only the approved artifact path changed.".to_string(),
+        "quarantine_required" => "Post-apply verification found unexpected, missing, or inconsistent changed-path evidence. Manual inspection is required.".to_string(),
         "failed" => "The interrupted attempt did not change the working tree and was not retried.".to_string(),
         "interrupted" => "The apply process stopped before complete recovery evidence was available. Manual inspection is required.".to_string(),
         "needs_inspection" => "Repository evidence is ambiguous after an interrupted apply. Manual inspection is required.".to_string(),
@@ -3214,7 +3387,11 @@ async fn persist_reconciled_artifact(
         artifact_id,
         status,
         backup_id,
-        (status == "applied").then_some(completed_at.as_str()),
+        matches!(
+            status,
+            "applied" | "applied_verified" | "quarantine_required"
+        )
+        .then_some(completed_at.as_str()),
         message,
         post_apply_git_status,
     )?;
@@ -3224,10 +3401,10 @@ async fn persist_reconciled_artifact(
             "The reconciled patch artifact state could not be serialized.",
         )
     })?;
-    let proposal_status = if status == "applied" {
-        Some("applied")
-    } else {
-        None
+    let proposal_status = match status {
+        "applied" | "applied_verified" => Some("applied"),
+        "quarantine_required" => Some("quarantine_required"),
+        _ => None,
     };
     if let Some(proposal_status) = proposal_status {
         sqlx::query(
@@ -3264,6 +3441,71 @@ async fn persist_reconciled_artifact(
     Ok(())
 }
 
+async fn persist_reconciled_post_apply_verification(
+    pool: &SqlitePool,
+    proposal_id: &str,
+    artifact_id: &str,
+    attempt_id: &str,
+    verification: &PostApplyPathVerification,
+) -> Result<(), ApplyPatchError> {
+    let row = sqlx::query("SELECT patch_artifacts_json FROM proposed_changes WHERE id = ? LIMIT 1")
+        .bind(proposal_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|_| {
+            apply_patch_error(
+                "storage_unavailable",
+                "The reconciled post-apply verification could not be loaded.",
+            )
+        })?;
+    let artifacts_json: String = row.try_get("patch_artifacts_json").unwrap_or_default();
+    let mut artifacts: Value = serde_json::from_str(&artifacts_json).map_err(|_| {
+        apply_patch_error(
+            "invalid_persisted_record",
+            "The reconciled patch artifact record is invalid.",
+        )
+    })?;
+    set_artifact_post_apply_verification(&mut artifacts, artifact_id, verification)?;
+    let next_artifacts_json = serde_json::to_string(&artifacts).map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "The reconciled post-apply verification could not be serialized.",
+        )
+    })?;
+    let verification_json = serde_json::to_string(verification).map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "The reconciled post-apply verification could not be serialized.",
+        )
+    })?;
+    sqlx::query(
+        "UPDATE proposed_changes SET patch_artifacts_json = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(next_artifacts_json)
+    .bind(&verification.verified_at)
+    .bind(proposal_id)
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "The reconciled post-apply verification could not be persisted.",
+        )
+    })?;
+    sqlx::query("UPDATE patch_apply_attempts SET post_apply_verification_json = ? WHERE id = ?")
+        .bind(verification_json)
+        .bind(attempt_id)
+        .execute(pool)
+        .await
+        .map_err(|_| {
+            apply_patch_error(
+                "storage_unavailable",
+                "The reconciled attempt verification could not be persisted.",
+            )
+        })?;
+    Ok(())
+}
+
 async fn classify_unfinished_apply_attempt(
     pool: &SqlitePool,
     row: &sqlx::sqlite::SqliteRow,
@@ -3276,7 +3518,7 @@ async fn classify_unfinished_apply_attempt(
     let pre_evidence_json: Option<String> = row.try_get("pre_apply_evidence_json").unwrap_or(None);
 
     let proposal_row = sqlx::query(
-        "SELECT status, files_json, patch_artifacts_json FROM proposed_changes WHERE id = ? LIMIT 1",
+        "SELECT files_json, patch_artifacts_json FROM proposed_changes WHERE id = ? LIMIT 1",
     )
     .bind(&proposal_id)
     .fetch_optional(pool)
@@ -3299,7 +3541,6 @@ async fn classify_unfinished_apply_attempt(
         )
         .await;
     };
-    let proposal_status: String = proposal_row.try_get("status").unwrap_or_default();
     let files_json: String = proposal_row.try_get("files_json").unwrap_or_default();
     let artifacts_json: String = proposal_row
         .try_get("patch_artifacts_json")
@@ -3383,9 +3624,9 @@ async fn classify_unfinished_apply_attempt(
     let pre_evidence = pre_evidence_json
         .as_deref()
         .and_then(|value| serde_json::from_str::<PatchApplyEvidence>(value).ok());
-    let backup_exists = if let Some(backup_id) = backup_id.as_deref() {
+    let backup_path = if let Some(backup_id) = backup_id.as_deref() {
         sqlx::query(
-            "SELECT id FROM patch_apply_backups WHERE id = ? AND proposed_change_id = ? AND patch_artifact_id = ? AND repository_id = ? LIMIT 1",
+            "SELECT files_json FROM patch_apply_backups WHERE id = ? AND proposed_change_id = ? AND patch_artifact_id = ? AND repository_id = ? LIMIT 1",
         )
         .bind(backup_id)
         .bind(&proposal_id)
@@ -3399,68 +3640,48 @@ async fn classify_unfinished_apply_attempt(
                 "Interrupted apply backup evidence could not be inspected.",
             )
         })?
-        .is_some()
+        .and_then(|row| row.try_get::<String, _>("files_json").ok())
+        .and_then(|files_json| serde_json::from_str::<Value>(&files_json).ok())
+        .and_then(|files| {
+            files
+                .as_array()
+                .and_then(|items| items.first())
+                .and_then(|file| file.get("path"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
     } else {
-        false
+        None
     };
 
-    if proposal_status == "applied"
-        || artifact.get("applyStatus").and_then(Value::as_str) == Some("applied")
-    {
-        let current_status = repository_row
-            .as_ref()
-            .and_then(|repository| repository.try_get::<String, _>("path").ok())
-            .and_then(|path| canonical_selected_git_root(&path).ok())
-            .map(|(_, path)| load_git_status_summary(repository_id.clone(), path));
-        let post_evidence = patch_apply_evidence(&artifact_digest, None, current_status.as_ref());
-        persist_reconciled_artifact(
-            pool,
-            &proposal_id,
-            &artifact_id,
-            "applied",
-            backup_id.as_deref(),
-            None,
-            current_status.as_ref(),
-        )
-        .await?;
-        return persist_reconciled_attempt(
-            pool,
-            &attempt_id,
-            "applied",
-            None,
-            Some(&post_evidence),
-            current_status.as_ref(),
-        )
-        .await;
-    }
-
-    let (pre_evidence, repository_row) = match (pre_evidence, repository_row) {
-        (Some(pre_evidence), Some(repository_row)) if backup_exists => {
-            (pre_evidence, repository_row)
-        }
-        _ => {
-            let message = apply_attempt_message("interrupted");
-            persist_reconciled_artifact(
-                pool,
-                &proposal_id,
-                &artifact_id,
-                "interrupted",
-                backup_id.as_deref(),
-                Some(&message),
-                None,
-            )
-            .await?;
-            return persist_reconciled_attempt(
-                pool,
-                &attempt_id,
-                "interrupted",
-                Some(&message),
-                None,
-                None,
-            )
-            .await;
-        }
-    };
+    let (pre_evidence, repository_row, backup_path) =
+        match (pre_evidence, repository_row, backup_path) {
+            (Some(pre_evidence), Some(repository_row), Some(backup_path)) => {
+                (pre_evidence, repository_row, backup_path)
+            }
+            _ => {
+                let message = apply_attempt_message("interrupted");
+                persist_reconciled_artifact(
+                    pool,
+                    &proposal_id,
+                    &artifact_id,
+                    "interrupted",
+                    backup_id.as_deref(),
+                    Some(&message),
+                    None,
+                )
+                .await?;
+                return persist_reconciled_attempt(
+                    pool,
+                    &attempt_id,
+                    "interrupted",
+                    Some(&message),
+                    None,
+                    None,
+                )
+                .await;
+            }
+        };
     if raw_diff.is_empty()
         || !is_safe_relative_git_path(file_path)
         || is_forbidden_fingerprint_path(file_path)
@@ -3610,16 +3831,53 @@ async fn classify_unfinished_apply_attempt(
         .files
         .iter()
         .any(|file| file.path == file_path || file.old_path.as_deref() == Some(file_path));
-
+    let target_fingerprint_path = pre_snapshot
+        .target_file_fingerprints
+        .iter()
+        .find(|fingerprint| fingerprint.path == file_path)
+        .map(|fingerprint| fingerprint.path.as_str());
+    let parsed_patch_paths = parsed_unified_diff_paths(raw_diff);
+    let post_apply_verification = if !fingerprints_match
+        && target_changed
+        && reverse_check == Some(true)
+        && forward_check == Some(false)
+    {
+        Some(match target_fingerprint_path {
+            Some(fingerprint_path) => verify_post_apply_changed_paths(
+                file_path,
+                file_path,
+                &parsed_patch_paths,
+                &backup_path,
+                fingerprint_path,
+                &current_status,
+            ),
+            None => PostApplyPathVerification {
+                status: "quarantine_required".to_string(),
+                expected_paths: vec![file_path.to_string()],
+                observed_changed_paths: current_status
+                    .files
+                    .iter()
+                    .map(|file| file.path.clone())
+                    .collect(),
+                unexpected_paths: Vec::new(),
+                missing_expected_paths: vec![file_path.to_string()],
+                verified_at: now_unix_seconds(),
+                message: "Post-apply verification could not match the approved path to its validation fingerprint. The outcome is quarantined for manual inspection."
+                    .to_string(),
+            },
+        })
+    } else {
+        None
+    };
     let (status, artifact_status, message) =
         if fingerprints_match && git_status_changed == Some(false) && forward_check == Some(true) {
             ("failed", "apply_failed", apply_attempt_message("failed"))
-        } else if !fingerprints_match
-            && target_changed
-            && reverse_check == Some(true)
-            && forward_check == Some(false)
-        {
-            ("applied", "applied", apply_attempt_message("applied"))
+        } else if let Some(verification) = post_apply_verification.as_ref() {
+            (
+                verification.status.as_str(),
+                verification.status.as_str(),
+                verification.message.clone(),
+            )
         } else {
             (
                 "needs_inspection",
@@ -3627,7 +3885,7 @@ async fn classify_unfinished_apply_attempt(
                 apply_attempt_message("needs_inspection"),
             )
         };
-    let artifact_message = (status != "applied").then_some(message.as_str());
+    let artifact_message = (status != "applied_verified").then_some(message.as_str());
     persist_reconciled_artifact(
         pool,
         &proposal_id,
@@ -3635,7 +3893,7 @@ async fn classify_unfinished_apply_attempt(
         artifact_status,
         backup_id.as_deref(),
         artifact_message,
-        (status == "applied").then_some(&current_status),
+        matches!(status, "applied_verified" | "quarantine_required").then_some(&current_status),
     )
     .await?;
     persist_reconciled_attempt(
@@ -3646,14 +3904,25 @@ async fn classify_unfinished_apply_attempt(
         Some(&post_evidence),
         Some(&current_status),
     )
-    .await
+    .await?;
+    if let Some(verification) = post_apply_verification.as_ref() {
+        persist_reconciled_post_apply_verification(
+            pool,
+            &proposal_id,
+            &artifact_id,
+            &attempt_id,
+            verification,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 async fn load_patch_apply_attempt_records(
     pool: &SqlitePool,
 ) -> Result<Vec<PatchApplyAttemptRecord>, ApplyPatchError> {
     let rows = sqlx::query(
-        "SELECT id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, sanitized_error, backup_id, started_at, completed_at, pre_apply_evidence_json, post_apply_evidence_json FROM patch_apply_attempts ORDER BY started_at DESC LIMIT 100",
+        "SELECT id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, sanitized_error, backup_id, started_at, completed_at, pre_apply_evidence_json, post_apply_evidence_json, post_apply_verification_json FROM patch_apply_attempts ORDER BY started_at DESC LIMIT 100",
     )
     .fetch_all(pool)
     .await
@@ -3674,6 +3943,10 @@ async fn load_patch_apply_attempt_records(
                 .and_then(|value| serde_json::from_str(&value).ok());
             let post_apply_evidence: Option<PatchApplyEvidence> = row
                 .try_get::<Option<String>, _>("post_apply_evidence_json")
+                .unwrap_or(None)
+                .and_then(|value| serde_json::from_str(&value).ok());
+            let post_apply_verification: Option<PostApplyPathVerification> = row
+                .try_get::<Option<String>, _>("post_apply_verification_json")
                 .unwrap_or(None)
                 .and_then(|value| serde_json::from_str(&value).ok());
             let current_git_status_changed = match (&pre_apply_evidence, &post_apply_evidence) {
@@ -3697,6 +3970,7 @@ async fn load_patch_apply_attempt_records(
                 sanitized_error: row.try_get("sanitized_error").unwrap_or(None),
                 pre_apply_evidence,
                 post_apply_evidence,
+                post_apply_verification,
                 current_git_status_changed,
                 message: apply_attempt_message(&status),
             }
@@ -4654,6 +4928,109 @@ mod tests {
             .is_some());
     }
 
+    fn post_apply_status(paths: &[(&str, &str)], staged_count: usize) -> GitStatusSummary {
+        GitStatusSummary {
+            repository_id: "repo-test".to_string(),
+            repository_path: "/safe/repository".to_string(),
+            branch: Some("main".to_string()),
+            head_sha: Some("abc1234".to_string()),
+            is_git_repository: true,
+            is_clean: paths.is_empty(),
+            changed_file_count: paths.len(),
+            staged_count,
+            unstaged_count: paths.len().saturating_sub(staged_count),
+            untracked_count: 0,
+            conflicted_count: 0,
+            files: paths
+                .iter()
+                .map(|(path, status_code)| GitChangedFile {
+                    path: (*path).to_string(),
+                    old_path: None,
+                    kind: "modified".to_string(),
+                    stage: if staged_count > 0 {
+                        "staged".to_string()
+                    } else {
+                        "unstaged".to_string()
+                    },
+                    status_code: (*status_code).to_string(),
+                })
+                .collect(),
+            refreshed_at: now_unix_seconds(),
+        }
+    }
+
+    #[test]
+    fn post_apply_verification_accepts_only_the_exact_approved_path() {
+        let expected_path = "src/App.tsx";
+        let parsed_paths = BTreeSet::from([expected_path.to_string()]);
+        let status = post_apply_status(&[(expected_path, " M")], 0);
+
+        let verification = verify_post_apply_changed_paths(
+            expected_path,
+            expected_path,
+            &parsed_paths,
+            expected_path,
+            expected_path,
+            &status,
+        );
+
+        assert_eq!(verification.status, "applied_verified");
+        assert_eq!(verification.expected_paths, vec![expected_path]);
+        assert_eq!(verification.observed_changed_paths, vec![expected_path]);
+        assert!(verification.unexpected_paths.is_empty());
+        assert!(verification.missing_expected_paths.is_empty());
+    }
+
+    #[test]
+    fn post_apply_verification_quarantines_unexpected_or_staged_paths() {
+        let expected_path = "src/App.tsx";
+        let parsed_paths = BTreeSet::from([expected_path.to_string()]);
+        let unexpected_status =
+            post_apply_status(&[(expected_path, " M"), ("src/other.ts", " M")], 0);
+        let staged_status = post_apply_status(&[(expected_path, "M ")], 1);
+
+        let unexpected = verify_post_apply_changed_paths(
+            expected_path,
+            expected_path,
+            &parsed_paths,
+            expected_path,
+            expected_path,
+            &unexpected_status,
+        );
+        let staged = verify_post_apply_changed_paths(
+            expected_path,
+            expected_path,
+            &parsed_paths,
+            expected_path,
+            expected_path,
+            &staged_status,
+        );
+
+        assert_eq!(unexpected.status, "quarantine_required");
+        assert_eq!(unexpected.unexpected_paths, vec!["src/other.ts"]);
+        assert_eq!(staged.status, "quarantine_required");
+    }
+
+    #[test]
+    fn post_apply_verification_quarantines_mismatched_evidence() {
+        let expected_path = "src/App.tsx";
+        let status = post_apply_status(&[(expected_path, " M")], 0);
+        let parsed_paths = BTreeSet::from([expected_path.to_string()]);
+
+        let verification = verify_post_apply_changed_paths(
+            expected_path,
+            "src/wrong.ts",
+            &parsed_paths,
+            expected_path,
+            expected_path,
+            &status,
+        );
+
+        assert_eq!(verification.status, "quarantine_required");
+        assert!(verification.unexpected_paths.is_empty());
+        assert!(verification.message.contains("quarantined"));
+    }
+
     #[test]
     fn apply_timeout_requires_manual_inspection_and_preserves_recovery_boundary() {
         let (attempt_status, artifact_status, error_code, message) =
@@ -4982,7 +5359,12 @@ mod tests {
                 git_output(repository_path.to_str().unwrap(), &["rev-parse", "HEAD"],),
                 head_before
             );
-            assert_eq!(result.status, "applied");
+            assert_eq!(result.status, "applied_verified");
+            assert_eq!(result.post_apply_verification.status, "applied_verified");
+            assert_eq!(
+                result.post_apply_verification.observed_changed_paths,
+                vec!["generated.txt"]
+            );
             assert_eq!(result.post_apply_git_status.changed_file_count, 1);
             assert_eq!(result.post_apply_git_status.untracked_count, 1);
 
@@ -5006,8 +5388,24 @@ mod tests {
                 "applied"
             );
             let artifacts_json: String = proposal_row.try_get("patch_artifacts_json").unwrap();
-            assert!(artifacts_json.contains("\"applyStatus\":\"applied\""));
+            assert!(artifacts_json.contains("\"applyStatus\":\"applied_verified\""));
+            assert!(artifacts_json.contains("\"postApplyVerification\""));
             assert!(artifacts_json.contains("\"backupId\""));
+            let attempt_row = sqlx::query(
+                "SELECT status, post_apply_verification_json FROM patch_apply_attempts WHERE id = ?",
+            )
+            .bind(&result.apply_attempt_id)
+            .fetch_one(&pool)
+            .await
+            .expect("persisted apply attempt verification");
+            assert_eq!(
+                attempt_row.try_get::<String, _>("status").unwrap(),
+                "applied_verified"
+            );
+            let verification_json: String =
+                attempt_row.try_get("post_apply_verification_json").unwrap();
+            assert!(verification_json.contains("\"status\":\"applied_verified\""));
+            assert!(verification_json.contains("\"expectedPaths\":[\"generated.txt\"]"));
             remove_temp_dir(&repository_path);
         });
     }
@@ -5042,8 +5440,15 @@ mod tests {
                 .find(|attempt| attempt.apply_attempt_id == result.apply_attempt_id)
                 .expect("reconciled attempt");
 
-            assert_eq!(attempt.status, "applied");
+            assert_eq!(attempt.status, "applied_verified");
             assert_eq!(attempt.current_git_status_changed, Some(true));
+            assert_eq!(
+                attempt
+                    .post_apply_verification
+                    .as_ref()
+                    .map(|verification| verification.status.as_str()),
+                Some("applied_verified")
+            );
             let stale_lock_status: String = sqlx::query_scalar(
                 "SELECT status FROM patch_apply_locks WHERE id = 'crashed-process-lock'",
             )

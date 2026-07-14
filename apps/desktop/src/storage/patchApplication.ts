@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { GitStatusSummary } from "@ai-dev/core";
-import type { PatchApplyAttempt } from "@ai-dev/ai";
+import type {
+  PatchApplyAttempt,
+  PostApplyPathVerification,
+} from "@ai-dev/ai";
 
 export const APPLY_PATCH_CONFIRMATION = "APPLY PATCH";
 
@@ -27,13 +30,14 @@ type NativeGitStatusSummary = {
 };
 
 type NativeApplyPatchResult = {
-  status: "applied";
+  status: "applied_verified" | "quarantine_required";
   applyAttemptId: string;
   proposedChangeId: string;
   patchArtifactId: string;
   backupId: string;
   appliedAt: string;
   postApplyGitStatus: NativeGitStatusSummary;
+  postApplyVerification: PostApplyPathVerification;
   message: string;
 };
 

@@ -1471,6 +1471,77 @@ describe("App smoke tests", () => {
     );
   });
 
+  it("quarantines an apply outcome when authoritative verification finds an unexpected path", async () => {
+    const quarantinedChanges = defaultProposedChanges.map((change) =>
+      change.id === "proposal-mvp-shell"
+        ? {
+            ...change,
+            status: "quarantine_required" as const,
+            patchArtifacts: change.patchArtifacts.map((artifact) =>
+              artifact.id === "proposal-file-ai-patch-artifact"
+                ? {
+                    ...artifact,
+                    applyStatus: "quarantine_required" as const,
+                  }
+                : artifact,
+            ),
+          }
+        : change,
+    );
+    vi.mocked(reconcileInterruptedPatchApplyAttempts).mockResolvedValue([
+      {
+        applyAttemptId: "apply-quarantine-1",
+        repositoryId: "repo-workspace",
+        proposedChangeId: "proposal-mvp-shell",
+        approvalRequestId: "approval-provider-rfc",
+        patchArtifactId: "proposal-file-ai-patch-artifact",
+        backupId: "backup-quarantine-1",
+        status: "quarantine_required",
+        startedAt: "1783532400",
+        completedAt: "1783532500",
+        sanitizedError:
+          "Post-apply verification found an unexpected changed path.",
+        currentGitStatusChanged: true,
+        postApplyVerification: {
+          status: "quarantine_required",
+          expectedPaths: ["packages/ai/src/index.ts"],
+          observedChangedPaths: [
+            "packages/ai/src/index.ts",
+            "packages/core/src/unexpected.ts",
+          ],
+          unexpectedPaths: ["packages/core/src/unexpected.ts"],
+          missingExpectedPaths: [],
+          verifiedAt: "1783532500",
+          message:
+            "Post-apply verification could not prove that only the approved artifact path changed. The outcome is quarantined for manual inspection.",
+        },
+        message:
+          "Post-apply verification could not prove that only the approved artifact path changed. The outcome is quarantined for manual inspection.",
+      },
+    ]);
+    const { user } = renderApp({ proposedChanges: quarantinedChanges });
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(
+      screen.getByRole("button", {
+        name: /generated packages\/ai\/src\/index\.ts/,
+      }),
+    );
+
+    expect(
+      await screen.findByText("Post-Apply Quarantine"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Manual inspection required" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("packages/core/src/unexpected.ts"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Apply unavailable" }),
+    ).toBeDisabled();
+  });
+
   it("requires typed confirmation and applies only through the ID-only native boundary", async () => {
     const cleanGitStatus: GitStatusSummary = {
       ...defaultGitStatus,
@@ -1515,7 +1586,7 @@ describe("App smoke tests", () => {
                     artifact.id === patchArtifactId
                       ? {
                           ...artifact,
-                          applyStatus: "applied",
+                          applyStatus: "applied_verified",
                           appliedAt: "1783532500",
                           appliedBy: "local_user",
                           backupId: "backup-1",
@@ -1529,7 +1600,7 @@ describe("App smoke tests", () => {
           );
 
           return {
-            status: "applied",
+            status: "applied_verified",
             applyAttemptId: "apply-artifact-1",
             proposedChangeId,
             patchArtifactId,
@@ -1539,8 +1610,18 @@ describe("App smoke tests", () => {
               ...postApplyGitStatus,
               repositoryId,
             },
+            postApplyVerification: {
+              status: "applied_verified",
+              expectedPaths: ["packages/ai/src/index.ts"],
+              observedChangedPaths: ["packages/ai/src/index.ts"],
+              unexpectedPaths: [],
+              missingExpectedPaths: [],
+              verifiedAt: "1783532500",
+              message:
+                "Post-apply verification confirmed that only the approved artifact path changed. No files were staged or committed.",
+            },
             message:
-              "The approved patch was applied to the working tree. No files were staged or committed.",
+              "Post-apply verification confirmed that only the approved artifact path changed. No files were staged or committed.",
           };
         },
       );
@@ -1608,11 +1689,11 @@ describe("App smoke tests", () => {
     );
     expect(
       await screen.findByText(
-        /The approved patch was applied to the working tree.*No files were staged or committed/,
+        /authoritative verification confirmed only the expected path changed.*No files were staged or committed/,
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Patch applied" }),
+      screen.getByRole("button", { name: "Patch applied and verified" }),
     ).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Changes" }));
     expect(

@@ -17,7 +17,7 @@ describe("applyApprovedPatchArtifact", () => {
 
   it("passes durable IDs and confirmation without accepting patch content", async () => {
     vi.mocked(invoke).mockResolvedValue({
-      status: "applied",
+      status: "applied_verified",
       applyAttemptId: "attempt-1",
       proposedChangeId: "proposal-1",
       patchArtifactId: "artifact-1",
@@ -45,7 +45,16 @@ describe("applyApprovedPatchArtifact", () => {
         ],
         refreshed_at: "1783532500",
       },
-      message: "Applied safely.",
+      postApplyVerification: {
+        status: "applied_verified",
+        expectedPaths: ["src/App.tsx"],
+        observedChangedPaths: ["src/App.tsx"],
+        unexpectedPaths: [],
+        missingExpectedPaths: [],
+        verifiedAt: "1783532500",
+        message: "Applied and verified safely.",
+      },
+      message: "Applied and verified safely.",
     });
 
     const result = await applyApprovedPatchArtifact(

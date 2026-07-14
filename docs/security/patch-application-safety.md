@@ -443,7 +443,8 @@ repository and approval. Use both:
   directory, never inside the selected repository.
 - A durable SQLite lock record containing lock ID, repository ID, process ID,
   operation, artifact ID, start time, and stale deadline.
-- Persisted `applying` and `applied` states that block replay.
+- Persisted `applying`, `applied_verified`, and `quarantine_required` states
+  that block replay.
 
 The OS lock is authoritative for live cross-process exclusion. If the app
 crashes, the operating system releases it; the next holder marks the abandoned
@@ -485,15 +486,17 @@ type PatchApplicationAttempt = {
   status:
     | "pending"
     | "applying"
-    | "applied"
+    | "applied_verified"
     | "failed"
     | "interrupted"
-    | "needs_inspection";
+    | "needs_inspection"
+    | "quarantine_required";
   startedAt: string;
   completedAt?: string;
   sanitizedError?: string;
   preApplyEvidence?: PatchApplyEvidence;
   postApplyEvidence?: PatchApplyEvidence;
+  postApplyVerification?: PostApplyPathVerification;
 };
 ```
 
@@ -502,8 +505,10 @@ duration, and sanitized error codes. They must not include raw patch bodies,
 file contents, provider credentials, raw Git stderr, or environment variables.
 
 `PersistedProposedChange.status` becomes `applied` only after Git exits
-successfully and refreshed Git status is available. The linked approval remains
-an immutable human decision in v1; artifact apply state prevents replay.
+successfully, refreshed Git status is available, and exact-path verification
+persists `applied_verified`. Conflicting path evidence instead makes the
+proposal and attempt `quarantine_required`. The linked approval remains an
+immutable human decision in v1; artifact apply state prevents replay.
 
 ## Interrupted Apply Reconciliation
 
@@ -538,16 +543,24 @@ or rollback control.
 
 ## Post-Apply Verification
 
-After Git exits successfully, native code must:
+After Git exits successfully, native code now:
 
 1. Reload Git status.
-2. Verify that changed paths are exactly within the approved artifact set.
-3. Verify each expected create or modify result is present.
-4. Verify the index remains unchanged and no file is staged.
-5. Persist the sanitized resulting status digest and applied result.
-6. Mark Repository Intelligence/index facts stale rather than pretending the
-   previous index describes the new working tree.
-7. Return the user to read-only Changes review.
+2. Builds the one-path expected set from the persisted artifact path.
+3. Requires the linked proposal path, parsed unified-diff path, backup path,
+   and validation fingerprint path to equal that expected set.
+4. Parses every post-apply Git status path, including rename `oldPath`
+   evidence, and requires the observed set to equal the expected set.
+5. Requires Git to report no staged files and internally consistent changed
+   file counts.
+6. Persists `applied_verified` only when all checks pass.
+7. Persists `quarantine_required` with expected, observed, unexpected, and
+   missing path evidence when any check fails.
+8. Returns the user to read-only Changes review or manual-inspection guidance.
+
+Quarantine is authoritative fail-closed state. It does not mark the proposal as
+cleanly applied, it blocks subsequent Apply attempts, and it preserves backup
+metadata and post-apply Git evidence. It does not retry or roll back.
 
 The app must not automatically stage, commit, reindex, or run project commands
 after application. Those are separate actions with separate approvals.
@@ -578,9 +591,11 @@ manual inspection. It is never retried automatically.
 
 ### Unexpected Change Or Process Interruption
 
-If post-state cannot be proven unchanged or fully applied, record
-`outcome_unknown` or `partial_write_detected` and block further application for
-that repository until the user reviews Git status and diffs.
+If the expected and observed changed-path sets differ, or supporting path
+evidence conflicts, record `quarantine_required`. If the process outcome itself
+cannot be reconstructed, record `needs_inspection` or `interrupted`. Every such
+state blocks further application for that repository until the user reviews Git
+status and diffs.
 
 The product must not automatically run `git reset`, `git checkout`, `git clean`,
 or an inverse patch. Automatic rollback can overwrite concurrent user work and
@@ -723,12 +738,11 @@ native tests. Before broader distribution, complete:
 
 - Execute and retain the packaged desktop QA evidence for each release build,
   including create, modify, and delete fixtures as support expands.
-- Cross-process repository locking beyond the current in-process mutex.
-- Post-apply verification that no unexpected path changed.
 - Automated rollback design using the persisted backup records.
 - A separately scoped, expiring application approval if the threat model grows
   beyond the current trusted local desktop UI.
-- Timeouts for native Git child processes.
+- Broader create, modify, delete, and rename policy coverage; v1 remains a
+  single supported text artifact with rename and binary application blocked.
 
 Until those items land, application remains a local MVP capability for one
 reviewed artifact at a time. Rollback, staging, committing, and multi-artifact

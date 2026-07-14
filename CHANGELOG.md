@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Added authoritative native post-apply path verification. A successful Git
+  process is finalized as `applied_verified` only when the artifact path,
+  proposal path, parsed unified-diff path, backup path, target fingerprint, and
+  complete post-apply Git changed-path set agree exactly.
+- Added durable `quarantine_required` outcomes for unexpected, missing,
+  malformed, staged, or conflicting post-apply path evidence. Quarantine keeps
+  the backup and Git evidence, blocks future Apply, and requires manual
+  inspection without retry or rollback.
+- Added Agent Run and Approval Review quarantine diagnostics for expected,
+  observed, unexpected, and missing paths, plus native and frontend coverage
+  for exact-path success and fail-closed outcomes.
 - Added repository-scoped cross-process apply locking through app-local OS
   advisory lock files plus durable SQLite lock records containing operation,
   process, artifact, timing, and stale-state metadata.

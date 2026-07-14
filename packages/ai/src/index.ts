@@ -185,7 +185,8 @@ export type ProposedChangeStatus =
   | "approved"
   | "rejected"
   | "superseded"
-  | "applied";
+  | "applied"
+  | "quarantine_required";
 
 export type ProposedPatchArtifactStatus =
   "not_generated" | "generated" | "failed" | "unavailable";
@@ -195,18 +196,22 @@ export type PatchApplyStatus =
   | "ready_to_apply"
   | "applying"
   | "applied"
+  | "applied_verified"
   | "apply_failed"
   | "interrupted"
   | "needs_inspection"
+  | "quarantine_required"
   | "blocked";
 
 export type PatchApplyAttemptStatus =
   | "pending"
   | "applying"
   | "applied"
+  | "applied_verified"
   | "failed"
   | "interrupted"
-  | "needs_inspection";
+  | "needs_inspection"
+  | "quarantine_required";
 
 export type PatchValidationStatus =
   | "not_validated"
@@ -250,6 +255,16 @@ export type PatchApplyEvidence = {
   capturedAt: string;
 };
 
+export type PostApplyPathVerification = {
+  status: "applied_verified" | "quarantine_required";
+  expectedPaths: string[];
+  observedChangedPaths: string[];
+  unexpectedPaths: string[];
+  missingExpectedPaths: string[];
+  verifiedAt: string;
+  message: string;
+};
+
 export type PatchApplyAttempt = {
   applyAttemptId: string;
   repositoryId: string;
@@ -263,6 +278,7 @@ export type PatchApplyAttempt = {
   sanitizedError?: string;
   preApplyEvidence?: PatchApplyEvidence;
   postApplyEvidence?: PatchApplyEvidence;
+  postApplyVerification?: PostApplyPathVerification;
   currentGitStatusChanged?: boolean;
   message: string;
 };
@@ -313,6 +329,7 @@ export type ProposedPatchArtifact = {
   applyError?: string;
   backupId?: string;
   postApplyGitStatus?: GitStatusSummary;
+  postApplyVerification?: PostApplyPathVerification;
 };
 
 export type ProviderPatchArtifact = {

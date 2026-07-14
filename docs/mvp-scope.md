@@ -138,9 +138,12 @@ The checkpoint is ready for a recorded demo when:
   visible and durable.
 - Approve/reject updates persist across restart.
 - One eligible artifact can be applied in a disposable repository only after
-  exact confirmation, and it remains unstaged and uncommitted.
+  exact confirmation and authoritative exact-path verification, and it remains
+  unstaged and uncommitted.
 - Unfinished attempts reconcile without automatic retry or rollback; ambiguous
   evidence requires manual inspection and keeps Apply disabled.
+- Unexpected, missing, staged, or conflicting post-apply path evidence is
+  quarantined durably and cannot be treated as a clean application.
 - Changes shows real read-only Git status and diff data.
 - Settings shows provider diagnostics and guarded maintenance actions.
 - Typecheck, lint, tests, native tests, build, and diff checks pass.
@@ -158,7 +161,8 @@ and broad platform support are not part of this release.
 
 The next major capability is Safe Patch Recovery and Application Hardening:
 execution and retention of packaged disposable-repository QA evidence,
-unexpected-path post-verification, and an explicit user-driven rollback design
-using persisted backups. Repository-scoped cross-process locking and bounded
-Git child-process timeouts are implemented. Multi-artifact application remains
-out of scope until it has its own atomicity design and integration coverage.
+and an explicit user-driven rollback design using persisted backups.
+Repository-scoped cross-process locking, bounded Git child-process timeouts,
+and exact-path post-apply quarantine are implemented. Multi-artifact
+application remains out of scope until it has its own atomicity design and
+integration coverage.

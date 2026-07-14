@@ -158,7 +158,9 @@ app-local data plus a durable SQLite lock audit record. Reconciliation skips a
 repository held by a live process and marks an abandoned lock record stale only
 after reacquiring the OS lock.
 
-- Clear reverse-check and target-change evidence repairs state to `applied`.
+- Clear reverse-check and target-change evidence is passed through the same
+  exact-path verifier used immediately after apply; only an exact match repairs
+  state to `applied_verified`.
 - A fully unchanged pre-apply state becomes `failed`.
 - Missing backup or pre-apply evidence becomes `interrupted`.
 - Conflicting or uncertain evidence becomes `needs_inspection`.
@@ -168,6 +170,11 @@ and keep Apply disabled. Fixed Git dry-run, reconciliation probes, and apply
 children have a 15-second deadline. An in-flight timeout preserves the backup,
 records `interrupted`, and requires manual inspection. There is no automatic
 retry or rollback action.
+
+If post-apply Git paths differ from the single persisted artifact path, the
+artifact, proposal, and attempt become `quarantine_required`. Agent Runs and
+Approval Review show expected, observed, unexpected, and missing paths. Apply
+remains disabled and the backup is preserved.
 
 ## Data Model
 
@@ -187,8 +194,11 @@ The shared model lives in `packages/ai`:
 - `PatchApplyAttemptStatus`
 - `PatchApplyAttempt`
 - `PatchApplyEvidence`
+- `PostApplyPathVerification`
 
 Applied artifacts persist `appliedAt`, the `local_user` marker, backup ID,
 sanitized failure text when applicable, and a post-apply Git status summary.
 The proposed change becomes `applied` only after the native Git command exits
-successfully and final state persistence succeeds.
+successfully, exact-path verification produces `applied_verified`, and final
+state persistence succeeds. A successful Git exit with conflicting path
+evidence instead persists `quarantine_required`.

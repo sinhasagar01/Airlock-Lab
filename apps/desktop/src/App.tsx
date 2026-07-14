@@ -847,19 +847,21 @@ export function App() {
         artifact.id,
         confirmationPhrase,
       );
+      const isVerifiedApply = result.status === "applied_verified";
       const appliedChange: PersistedProposedChange = {
         ...change,
-        status: "applied",
+        status: isVerifiedApply ? "applied" : "quarantine_required",
         patchArtifacts: change.patchArtifacts.map((candidate) =>
           candidate.id === artifact.id
             ? {
                 ...candidate,
-                applyStatus: "applied",
+                applyStatus: result.status,
                 appliedAt: result.appliedAt,
                 appliedBy: "local_user",
-                applyError: undefined,
+                applyError: isVerifiedApply ? undefined : result.message,
                 backupId: result.backupId,
                 postApplyGitStatus: result.postApplyGitStatus,
+                postApplyVerification: result.postApplyVerification,
               }
             : candidate,
         ),
@@ -887,7 +889,7 @@ export function App() {
       setCurrentFingerprintSnapshot(null);
       setPatchApplyFeedback({
         artifactId: artifact.id,
-        status: "success",
+        status: isVerifiedApply ? "success" : "error",
         message: result.message,
       });
 

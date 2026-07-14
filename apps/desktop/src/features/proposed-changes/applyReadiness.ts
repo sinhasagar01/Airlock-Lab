@@ -108,9 +108,13 @@ export function evaluateApplyReadiness(
   context: ApplyReadinessContext,
 ): ApplyReadinessResult {
   const validationStatus = initialPatchValidationStatus(artifact);
+  const applicationVerified =
+    artifact.applyStatus === "applied" ||
+    artifact.applyStatus === "applied_verified";
   const unresolvedApplyAttempt =
     artifact.applyStatus === "interrupted" ||
-    artifact.applyStatus === "needs_inspection";
+    artifact.applyStatus === "needs_inspection" ||
+    artifact.applyStatus === "quarantine_required";
   const pathAllowed = hasAllowedRelativePath(artifact.filePath);
   const forbiddenPath = isForbiddenPath(artifact.filePath);
   const structurePassed =
@@ -164,15 +168,16 @@ export function evaluateApplyReadiness(
     gate(
       "apply_state",
       "Artifact has not already been applied",
-      artifact.applyStatus === "applied" ||
-        artifact.applyStatus === "applying" ||
-        unresolvedApplyAttempt
+      applicationVerified ||
+        artifact.applyStatus === "applying" || unresolvedApplyAttempt
         ? "blocked"
         : "passed",
-      artifact.applyStatus === "applied"
-        ? "This artifact has already been applied to the working tree."
+      applicationVerified
+        ? "This artifact has already been applied and its changed paths were verified."
         : artifact.applyStatus === "applying"
           ? "A native application attempt is already in progress."
+          : artifact.applyStatus === "quarantine_required"
+            ? "Post-apply changed-path verification requires manual inspection before any future application."
           : unresolvedApplyAttempt
             ? "An interrupted application attempt requires manual inspection before any future retry."
             : "No completed or in-progress application attempt blocks this artifact.",
@@ -390,13 +395,13 @@ export function evaluateApplyReadiness(
     (item) => item.status === "not_checked" || item.status === "future",
   ).length;
 
-  if (artifact.applyStatus === "applied") {
+  if (applicationVerified) {
     return {
       canApply: false,
       gates,
       status: "applied",
       summary:
-        "This patch artifact was applied to the working tree. It was not staged or committed.",
+        "This patch artifact was applied and authoritative verification confirmed only the approved path changed. It was not staged or committed.",
     };
   }
 

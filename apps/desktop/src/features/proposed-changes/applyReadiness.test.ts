@@ -99,18 +99,24 @@ describe("evaluateApplyReadiness", () => {
   });
 
   it("prevents an applied artifact from being applied twice", () => {
-    const result = evaluateApplyReadiness(
-      generatedArtifact({ applyStatus: "applied" }),
-      readyContext,
-    );
+    for (const applyStatus of ["applied", "applied_verified"] as const) {
+      const result = evaluateApplyReadiness(
+        generatedArtifact({ applyStatus }),
+        readyContext,
+      );
 
-    expect(result.status).toBe("applied");
-    expect(result.canApply).toBe(false);
-    expect(gateStatus(result, "apply_state")).toBe("blocked");
+      expect(result.status).toBe("applied");
+      expect(result.canApply).toBe(false);
+      expect(gateStatus(result, "apply_state")).toBe("blocked");
+    }
   });
 
   it("blocks artifacts with unresolved interrupted apply evidence", () => {
-    for (const applyStatus of ["interrupted", "needs_inspection"] as const) {
+    for (const applyStatus of [
+      "interrupted",
+      "needs_inspection",
+      "quarantine_required",
+    ] as const) {
       const result = evaluateApplyReadiness(
         generatedArtifact({ applyStatus }),
         readyContext,
