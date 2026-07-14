@@ -21,6 +21,12 @@ local diffs, approval decisions, Changes, and guarded Settings maintenance.
 Entry-point copy explicitly labels the mock run and keeps generated artifacts
 separate from local Git diffs.
 
+The AI package now exposes a provider-independent `AgentProviderAdapter`
+contract for structured plan generation. The current Mock Provider implements
+the contract with explicit capability metadata, and the existing mock Agent Run
+flow consumes its normalized result without adding provider SDKs, credentials,
+patch generation, file writes, tools, or Git mutation.
+
 `App.tsx` remains the top-level state orchestrator, but stable seed data,
 desktop shell components, UI-state helpers, generated patch artifact panels,
 local Git diff preview, and indexed-file browser/preview now live in focused

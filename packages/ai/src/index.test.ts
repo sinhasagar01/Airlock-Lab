@@ -1,5 +1,53 @@
 import { describe, expect, it } from "vitest";
-import { executeMockAgentRun } from "./index";
+import {
+  createMockAgentProviderAdapter,
+  executeMockAgentRun,
+} from "./index";
+
+describe("AgentProviderAdapter", () => {
+  it("normalizes mock planning behind the provider contract", async () => {
+    const adapter = createMockAgentProviderAdapter();
+
+    expect(adapter).toMatchObject({
+      id: "mock",
+      name: "Mock Provider",
+      capabilities: {
+        supportsPlanGeneration: true,
+        supportsPatchGeneration: false,
+        supportsStreaming: false,
+        supportsToolUse: false,
+      },
+    });
+
+    const result = await adapter.createPlan({
+      runId: "run-contract",
+      repositoryId: "repo-test",
+      repositoryName: "workspace",
+      taskTitle: "Add a repository context summary",
+      taskPrompt: "Add a repository context summary",
+      context: {
+        branch: "main",
+        indexedFilePaths: ["src/App.tsx", "README.md", "src/App.tsx"],
+      },
+    });
+
+    expect(result).toMatchObject({
+      providerId: "mock",
+      model: "mock-planner-v1",
+      approvalRequired: true,
+    });
+    expect(result.steps).toHaveLength(3);
+    expect(result.affectedFiles.map((file) => file.path)).toEqual([
+      "src/App.tsx",
+      "README.md",
+    ]);
+    expect(
+      result.affectedFiles.every(
+        (file) => file.patchArtifactStatus === "not_generated",
+      ),
+    ).toBe(true);
+  });
+});
 
 describe("executeMockAgentRun", () => {
   it("creates a linked review-only run, plan, proposal, and approval", async () => {

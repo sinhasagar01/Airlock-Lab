@@ -48,6 +48,12 @@ Avoid:
 Expected exports:
 
 - `ProviderAdapter`
+- `AgentProviderAdapter`
+- `AgentProviderId`
+- `AgentProviderCapabilities`
+- `AgentRunContext`
+- `CreateAgentPlanInput`
+- `CreateAgentPlanResult`
 - `ProviderRequest`
 - `ProviderResponse`
 - `ModelCapability`
@@ -58,6 +64,18 @@ Expected exports:
 - `AgentRun`
 - `ProposedChangePlan`
 - Provider error categories
+
+## Current Provider Boundary
+
+`AgentProviderAdapter` is the execution contract for structured planning.
+Adapters receive a task plus pre-derived indexed repository context and return
+a normalized plan result. They do not own persistence, approvals, filesystem
+access, Git commands, patch application, or UI state.
+
+`createMockAgentProviderAdapter()` is the only implemented adapter. It supports
+plan generation and explicitly reports patch generation, streaming, and tool
+use as unsupported. `executeMockAgentRun()` consumes that adapter while
+preserving the current durable mock-run workflow.
 
 ## Acceptance Criteria
 

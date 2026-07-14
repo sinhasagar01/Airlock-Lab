@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Added the provider-independent `AgentProviderAdapter` contract with typed
+  provider identity, capabilities, indexed run context, plan input, and
+  normalized structured plan output.
+- Moved mock plan generation behind the new adapter contract while preserving
+  the existing persisted run, proposed-change, approval, and `not_generated`
+  artifact workflow.
+- Added contract tests proving the Mock Provider supports planning while patch
+  generation, streaming, and tool use remain explicitly unsupported.
 - Added a full native-app demo script with setup checks, presenter talk track,
   the complete repository-to-approval walkthrough, recovery states, a
   five-minute version, and explicit real/mock/not-implemented boundaries.

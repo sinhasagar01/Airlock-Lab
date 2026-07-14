@@ -14,6 +14,40 @@ Provider adapters call provider-specific APIs.
 
 No product workflow should directly depend on OMP, OpenAI, Anthropic, local model runtimes, or any future provider SDK.
 
+## Implemented MVP Contract
+
+`packages/ai` now exports the execution boundary used by planning workflows:
+
+- `AgentProviderId`
+- `AgentProviderCapabilities`
+- `AgentRunContext`
+- `CreateAgentPlanInput`
+- `CreateAgentPlanResult`
+- `AgentProviderAdapter`
+
+An `AgentProviderAdapter` exposes provider identity, capability metadata, and a
+single `createPlan(input)` operation. The input contains a run ID, repository
+identity, task title and prompt, and already-derived indexed context. It does
+not expose filesystem handles, arbitrary read commands, persistence engines,
+approval mutation, or Git mutation.
+
+The normalized result contains provider/model identity, summary, ordered
+steps, proposed affected files, risks, validation checks, and the approval
+requirement. It is planning data, not a generated patch and not permission to
+write files.
+
+The current Mock Provider implements this interface with these capabilities:
+
+- Plan generation: supported
+- Patch generation: not supported
+- Streaming: not supported
+- Tool use: not supported
+
+The existing mock Agent Run workflow now consumes the adapter result before it
+creates the same durable run, proposed change, approval request, and
+`not_generated` patch artifact placeholders. No demo behavior or safety
+boundary changes at this layer.
+
 ## Provider Responsibilities
 
 An AI provider adapter should support:
@@ -176,6 +210,10 @@ The MVP provider interface should include:
 - Error normalization
 - Model capability metadata
 - Initial adapter contract
+
+The initial implementation covers structured plan generation and capability
+metadata. Provider SDK invocation, streaming events, tool mediation,
+credentials, error normalization, and routing remain future work.
 
 The MVP can defer:
 
