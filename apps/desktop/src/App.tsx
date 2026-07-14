@@ -67,6 +67,7 @@ import {
 import {
   mergeSeedApprovalRequests,
   mergeSeedProposedChanges,
+  reconcileAgentRunApprovalStatuses,
 } from "./lib/seedMerging";
 import {
   agentRunTone,
@@ -993,28 +994,39 @@ export function App() {
         }
 
         setIndexingJobs(savedIndexingJobs);
-        if (savedAgentRunRecords.length > 0) {
-          const savedRunIds = new Set(
-            savedAgentRunRecords.map((record) => record.run.id),
-          );
-          const savedPlanIds = new Set(
-            savedAgentRunRecords.map((record) => record.plan.id),
-          );
-          setAgentRuns([
-            ...savedAgentRunRecords.map((record) => record.run),
-            ...mockAgentRuns.filter((run) => !savedRunIds.has(run.id)),
-          ]);
-          setProposedChangePlans([
-            ...savedAgentRunRecords.map((record) => record.plan),
-            ...mockProposedChangePlans.filter(
-              (plan) => !savedPlanIds.has(plan.id),
-            ),
-          ]);
-        }
+        const savedRunIds = new Set(
+          savedAgentRunRecords.map((record) => record.run.id),
+        );
+        const savedPlanIds = new Set(
+          savedAgentRunRecords.map((record) => record.plan.id),
+        );
+        const hydratedAgentRuns =
+          savedAgentRunRecords.length > 0
+            ? [
+                ...savedAgentRunRecords.map((record) => record.run),
+                ...mockAgentRuns.filter((run) => !savedRunIds.has(run.id)),
+              ]
+            : mockAgentRuns;
+        const hydratedPlans =
+          savedAgentRunRecords.length > 0
+            ? [
+                ...savedAgentRunRecords.map((record) => record.plan),
+                ...mockProposedChangePlans.filter(
+                  (plan) => !savedPlanIds.has(plan.id),
+                ),
+              ]
+            : mockProposedChangePlans;
         const hydratedApprovalRequests =
           savedApprovalRequests.length > 0
             ? mergeSeedApprovalRequests(savedApprovalRequests)
             : mockApprovalRequests;
+        setAgentRuns(
+          reconcileAgentRunApprovalStatuses(
+            hydratedAgentRuns,
+            hydratedApprovalRequests,
+          ),
+        );
+        setProposedChangePlans(hydratedPlans);
         setApprovalRequests(hydratedApprovalRequests);
         await saveApprovalRequests(hydratedApprovalRequests);
 
@@ -1277,6 +1289,16 @@ export function App() {
         request.id === approvalId ? { ...request, status } : request,
       ),
     );
+    const linkedApproval = approvalRequests.find(
+      (request) => request.id === approvalId,
+    );
+    if (linkedApproval) {
+      setAgentRuns((currentRuns) =>
+        reconcileAgentRunApprovalStatuses(currentRuns, [
+          { ...linkedApproval, status },
+        ]),
+      );
+    }
     if (updatedProposal) {
       setPersistedProposedChanges((currentChanges) =>
         currentChanges.map((change) =>
@@ -1378,13 +1400,23 @@ export function App() {
                 <p className="card-eyebrow card-eyebrow--dot">Active Work</p>
                 <h2>Draft app shell implementation plan</h2>
               </div>
-              <StatusPill tone="warning" size="sm">
-                Waiting for approval
+              <StatusPill
+                tone={proposedChangeStatusTone(
+                  demoWorkflowProposal?.status ?? "ready_for_review",
+                )}
+                size="sm"
+              >
+                {demoWorkflowProposal?.status.replaceAll("_", " ") ??
+                  "waiting for approval"}
               </StatusPill>
             </div>
 
             <p className="active-work-card__description">
-              Review the proposed plan and artifact states before any execution.
+              {demoWorkflowProposal?.status === "approved"
+                ? "Approval is complete. No generated artifact has been applied."
+                : demoWorkflowProposal?.status === "rejected"
+                  ? "The proposal was rejected. No generated artifact was applied."
+                  : "Review the proposed plan and artifact states before any execution."}
             </p>
 
             <div className="active-work-card__divider" />

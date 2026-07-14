@@ -311,7 +311,7 @@ const mockState = vi.hoisted(() => {
             additions: 2,
             deletions: 1,
             rawDiff:
-              "diff --git a/packages/ai/src/index.ts b/packages/ai/src/index.ts\n@@ -1,2 +1,3 @@\n-export type OldPlan = string;\n+export type NewPlan = string;\n+export type PatchArtifact = string;",
+              "diff --git a/packages/ai/src/index.ts b/packages/ai/src/index.ts\n--- a/packages/ai/src/index.ts\n+++ b/packages/ai/src/index.ts\n@@ -1,2 +1,3 @@\n-export type OldPlan = string;\n+export type NewPlan = string;\n+export type PatchArtifact = string;",
             createdAt: "Today, 10:44",
           },
           {
@@ -1688,6 +1688,9 @@ describe("App smoke tests", () => {
     ]);
     expect(
       await screen.findByRole("heading", { name: "1 pending approvals" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("0 runs are waiting for human approval"),
     ).toBeInTheDocument();
     expect(screen.getByText("Request approved")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();

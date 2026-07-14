@@ -39,6 +39,10 @@ read-only native applicability dry-run. The dedicated command repeats path,
 single-file diff, operation, binary, size, and line-count checks before running
 fixed `git apply --check --whitespace=nowarn -` arguments with patch content on
 stdin. Results are sanitized and shared across Agent Run and Approval Review.
+The seeded generated sample is a complete unified diff, and existing legacy
+seed data is migrated without changing user-created proposals. Agent Run
+completion is derived from durable approval decisions so run summaries remain
+consistent after approval and restart.
 
 Settings now reports whether OpenAI is configured through the native process
 and can run a read-only connection test for the configured model. The test sends

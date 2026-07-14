@@ -1576,7 +1576,7 @@ export function createMockPersistedProposedChanges(): PersistedProposedChange[] 
           additions: 2,
           deletions: 1,
           rawDiff:
-            "diff --git a/packages/ai/src/index.ts b/packages/ai/src/index.ts\n@@ -1,2 +1,3 @@\n-export type OldPlan = string;\n+export type NewPlan = string;\n+export type PatchArtifact = string;",
+            "diff --git a/packages/ai/src/index.ts b/packages/ai/src/index.ts\n--- a/packages/ai/src/index.ts\n+++ b/packages/ai/src/index.ts\n@@ -1,2 +1,3 @@\n-export type OldPlan = string;\n+export type NewPlan = string;\n+export type PatchArtifact = string;",
           createdAt: "Today, 10:44",
         },
         {

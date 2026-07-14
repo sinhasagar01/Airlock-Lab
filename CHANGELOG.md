@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Completed a native MVP demo rehearsal across repository indexing,
+  Repository Intelligence, mock run creation, approval decisions, artifact
+  validation, Changes, Settings, and restart hydration.
+- Repaired the legacy seeded generated artifact into a complete single-file
+  unified diff and added an exact-match migration for existing demo data.
+- Reconciled linked Agent Run completion from persisted approval decisions so
+  pending counts and run status remain consistent after approve/reject and
+  restart.
+- Made Overview Active Work status derive from the durable seeded proposal
+  instead of continuing to show a stale waiting-for-approval label.
 - Added persisted patch validation states covering unvalidated, structurally
   valid/invalid, dry-run passed/failed, and unavailable artifacts.
 - Added shared structure validation for repository-relative paths, traversal,
