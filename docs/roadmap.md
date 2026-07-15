@@ -404,6 +404,64 @@ is weakest at — generating AI plans — rather than by the safety machinery th
 file; it does not implement), and "Repository Intelligence" for what is a
 file-tree summary with extension counts.
 
+**Airlock cannot demonstrate its own core loop without a paid API key and an
+unproven provider path.** Found while preparing the packaged click-through, and
+recorded here rather than as a QA note because it is a product fact, not a
+testing inconvenience.
+
+The core loop is propose → approve → validate → apply → roll back. The apply half
+requires a generated patch artifact, and there are exactly two producers:
+
+- **Mock Provider** — declares `supportsPatchGeneration: false` and returns
+  `patchArtifacts: []`. Every mock run persists candidate files at
+  `not_generated`. The generation gate blocks; **Apply Patch** is unreachable.
+  The default provider, the one that needs no key and no network, and the one the
+  demo script leans on, **cannot reach the product's entire point**.
+- **OpenAI** — can return review-only artifacts, but needs `OPENAI_API_KEY` in
+  the packaged process environment, and the roadmap records that path as
+  unproven. It has never produced an artifact that a human then applied.
+
+The seeded demo artifact is not a third producer. Its proposal carries
+`repositoryId: "repo-workspace"`, which no saved repository has matched since
+slice 2 retired the fixture, so it fails the `repository` readiness gate; and its
+targets are this project's own source files.
+
+**This answers "why has apply never been clicked" — not scheduling, the path did
+not exist.** The safety machinery is the engineering, and the only door to it is
+the least-trusted, least-proven component, behind a paywall. Everything a
+keyless evaluator can reach is the half the product is weakest at.
+
+Three consequences for this item, none of them QA's to decide:
+
+1. The demo story is upside down. `docs/demo-script.md` presents mock-provider
+   planning as the walkthrough; the apply and rollback machinery — the part
+   competitors lack — cannot be shown on that path at all.
+2. Whatever "Mock Provider" is for, it is not for demonstrating Airlock. Either
+   it gains a deterministic generated artifact scoped to the selected repository
+   (a fixture, with #2's and slice 2's fabrication rules applying in full — it
+   must be unmistakably a fixture and must not present as provider output), or
+   the product states plainly that its core loop needs a real provider.
+3. Positioning above understates the problem. It is not only that the product is
+   *described* by its weakest part — without a key it *is* only its weakest part.
+
+Deliberately not resolved here. Option 1 is a fabrication question that #2 and
+slice 2 spent their whole argument on, and reaching for a fixture is how this
+project has previously talked itself into presenting invented state as real.
+That decision belongs to this item, not to a QA run that happened to surface it.
+
+**A latent validator gap found alongside it, recorded so it is not
+rediscovered.** Both the provider validator (`packages/ai/src/index.ts`) and
+native structure validation (`lib.rs:952`) require the diff header to equal
+`diff --git a/{path} b/{path}` literally. For a path containing a space, **git's
+own generator emits the quoted form** (`diff --git "a/my file.md" "b/my file.md"`),
+which those checks reject — while `git apply --check` was verified to accept both
+forms. So a canonically-generated spaced-path diff is refused by Airlock and
+would have applied cleanly. It fails closed, so it is a capability gap rather
+than a safety hole, and the existing native test `ROLLBACK_MODIFY_DIFF` pins the
+unquoted form as the supported convention. It matters now because it makes a
+spaced-path OpenAI artifact a coin flip on how the model chooses to quote. Same
+shape as #3 one layer up: a quoting convention observed at the wrong boundary.
+
 ## Later
 
 ### #12 Native hardening
@@ -553,6 +611,19 @@ type-strictness sweep in the same diff.
 The packaged UI click-through remains pending and unclaimed; see
 `docs/qa/evidence/mvp-demo-v1-disposable-apply-qa.md`, whose three evidence gaps
 still stand. Signing and notarization are needed to distribute, not to validate.
+
+**"Pending" was the wrong word for the apply half: it was blocked, and nobody
+knew.** `docs/qa/disposable-repository-apply-qa.md` step 4 instructed the
+operator to "Create a Mock Provider run that proposes one bounded text-file
+change" — a run the mock provider has never been able to produce, since it
+declares `supportsPatchGeneration: false` and returns no artifacts. The doc has
+been wrong since it was written, and every reader took the missing click-through
+for a scheduling gap. The step now names the OpenAI requirement; the product
+finding sits under #11.
+
+Corrected in the same pass: the doc's disposable repository contained only
+`README.md`, so following it exactly could never exercise the spaced-path
+coverage `rollback-v1-design.md` requires.
 
 ## Known Data Hazards
 

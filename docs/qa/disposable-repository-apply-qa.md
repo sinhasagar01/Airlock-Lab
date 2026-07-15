@@ -27,15 +27,27 @@ commit, reset, check out, clean, retry an interrupted patch, or roll back files.
 
 ## Create The Disposable Repository
 
+Use an explicit, memorable path rather than a `mktemp` path. The macOS picker
+remembers its last location, and a previous attempt was aborted because it
+resolved to a non-disposable repository; a path you can paste into the picker's
+**Cmd+Shift+G** field is the countermeasure.
+
+Include at least one file whose name contains a **space**. git quotes such paths
+in `--porcelain=v1` output, which is the case `unquote_porcelain_path` exists to
+decode (roadmap #3), and it is load-bearing for the end-to-end rollback coverage
+required by `docs/security/rollback-v1-design.md`.
+
 ```bash
-tmp_repo="$(mktemp -d)/adw-safe-apply-qa"
+tmp_repo="/private/tmp/airlock-qa-$(date +%Y%m%d)/airlock-disposable-qa"
 mkdir -p "$tmp_repo"
 cd "$tmp_repo"
 git init
-git config user.name "ADW QA"
-git config user.email "adw-qa@example.invalid"
+git config user.name "Airlock QA"
+git config user.email "airlock-qa@example.invalid"
 printf 'Disposable repository only.\n' > README.md
-git add README.md
+printf 'Alpha notes.\nLine two.\n' > notes.md
+printf '# Release Notes\n\nThis file name deliberately contains a space.\n' > "release notes.md"
+git add -A
 git commit -m "Disposable QA baseline"
 git rev-parse HEAD
 git status --short
@@ -50,12 +62,43 @@ Expected baseline:
 
 Keep the baseline HEAD value for every comparison below.
 
+## Which Provider Can Reach Apply
+
+**The Mock Provider cannot.** `createMockAgentProviderAdapter` declares
+`supportsPatchGeneration: false` and returns `patchArtifacts: []`, so a mock run
+persists candidate files at `not_generated` and never produces patch content.
+Without a generated artifact there is nothing to validate, dry-run, apply, or
+roll back: the generation gate blocks, and **Apply Patch** is unreachable. The
+app states this itself in the composer — "Mock runs do not generate patch
+content."
+
+The seeded demo artifact is not a substitute. Its proposal carries
+`repositoryId: "repo-workspace"`, which no saved repository has matched since the
+mock repository fixture was retired, so it fails the `repository` readiness gate
+("The selected repository does not match the proposal"), and its target paths are
+this project's own source files rather than a disposable repository's.
+
+**The only route to an applyable artifact is the OpenAI provider**, with
+`OPENAI_API_KEY` set in the packaged process environment. That path is itself
+unproven end-to-end; see roadmap #11 and #16.
+
+Constraint that shapes the task prompt: OpenAI receives file names, extensions,
+and folder facts, but **no file contents**. It therefore cannot author a reliable
+`modify` diff — it would be guessing at bytes it cannot read. A `create` patch is
+fully determined by its own content and is the only shape that reliably passes
+`git apply --check`.
+
 ## Packaged Happy-Path Check
 
-1. Launch the packaged app.
+Steps 4 onward require the OpenAI provider. With Mock Provider, the pass stops at
+step 3 plus the review-only surfaces, and that is a correct observation of the
+product rather than a QA failure — record it as such.
+
+1. Launch the packaged app with `OPENAI_API_KEY` in its process environment.
 2. Select only the disposable repository.
 3. Index it and confirm Repository Intelligence names the expected repository.
-4. Create a Mock Provider run that proposes one bounded text-file change.
+4. Create an OpenAI run whose task requests one new bounded text file inside the
+   disposable repository. Confirm the run reports a generated patch artifact.
 5. Review and approve the linked approval request.
 6. Run validation and dry-run.
 7. Confirm every Apply Readiness gate passes.
