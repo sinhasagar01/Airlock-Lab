@@ -364,6 +364,18 @@ fixtures should exist at all. #2 deliberately scoped that out: a card labelled
 "Demo workflow" and a row marked "Demo record" are not lying, so removing them is
 a product-scope decision rather than a data-honesty fix.
 
+**"Linked" now means two things on one screen, and they read as a
+contradiction.** Observed after #6 scoped the lists: a demo run sits under the
+heading **"Not linked to a saved repository"**, and its detail card says **"This
+run is linked to persisted proposal `proposal-mvp-shell`, approval
+`approval-provider-rfc`"**. Both statements are precise and both are true — the
+run *is* linked to a proposal, and that proposal names a repository nothing has
+saved — but "linked" is carrying two different objects a few inches apart, and
+the reader has to hold both to see there is no conflict. Copy, not a defect:
+nothing here is false, which is exactly why it belongs to #11 rather than to a
+bug fix. It is also the first thing #6's grouping made visible, so it is evidence
+for the broader point that this vocabulary is overloaded.
+
 Positioning belongs with this work. The product is currently described by what it
 is weakest at — generating AI plans — rather than by the safety machinery that is
 95% of the engineering and the only part competitors lack. Claims worth retiring:
@@ -466,6 +478,39 @@ pre-existing files including generated Tauri schemas. A permanently-red check is
 worse than no check. Either it joins the documented verification suite in
 `README.md` and gets fixed in one pass, or it comes out of `package.json`. Not a
 task until it is a decision.
+
+### #17 `noUncheckedIndexedAccess` — every `array[0]` in this codebase lies
+
+`strict` is on and it does not cover this. `array[0]` infers as `T`, never
+`T | undefined`, so an empty-list read is invisible to the compiler. #6 hit the
+consequence: `visibleAgentRuns[0]` on an empty list typed as `AgentRun`, and
+because TypeScript narrows a `const` to its **initializer's** type at every read,
+an explicit `: AgentRun | null` annotation was **silently discarded** — `strict`
+stayed green over a render that dereferenced `undefined` and threw. Only
+switching the initializer to `.at(0)`, which returns `T | undefined`, made the
+compiler name the fourteen sites. The annotation looked like the fix and was
+decorative; that is the part worth remembering.
+
+**The systemic version:** every indexed read in the codebase carries the same
+lie, and the two already found were both real bugs that shipped past a green
+`strict` build — `repositories[0]` and `indexingJobs[0]`, the two hardcoded
+indices #6 removed. Both were caught by reading the code, not by the compiler
+that was supposedly checking it.
+
+**Likely blast radius:** unknown until measured, but the shape is predictable —
+`App.tsx` alone is ~4,000 lines with roughly 35 `useState` hooks over arrays, and
+the `[0]` pattern is how this app has always picked a default. Expect most hits
+to be genuinely safe (literal arrays, post-`length` checks) and the flag to
+produce a long tail of noise around a few real findings. That ratio is the
+argument for doing it deliberately rather than in passing.
+
+**It is a compiler flag, not a refactor.** One line in `tsconfig.base.json`,
+then however many sites it names. That is what makes it schedulable and what
+makes it dangerous to enable casually: the flag is trivial, the fallout is not,
+and a half-fixed codebase with the flag off again is worse than never starting.
+It should land as its own task, with the count measured first, and it wants #13
+(splitting `App.tsx`) decided first — doing both at once means a refactor and a
+type-strictness sweep in the same diff.
 
 ### #16 Packaged QA and distribution
 
