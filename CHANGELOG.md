@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+- Fixed a fail-open working-tree check. A failed `git status` was defaulted to
+  empty output, so an unreadable index (for example while another process holds
+  `index.lock`) reported zero changed files and a clean working tree, letting
+  the clean-tree apply gate pass on evidence that was never read. An
+  undeterminable status now fails the snapshot closed.
+- Added an inspection acknowledgement for unresolved apply attempts.
+  `quarantine_required`, `needs_inspection`, and `interrupted` previously
+  blocked every future apply for a repository with no command to exit them, so
+  the only recovery was editing SQLite by hand. A dedicated native command now
+  records a human inspection behind the exact phrase `INSPECTED`, preserves the
+  original classification for audit, and clears only the repository-wide block.
+  It never applies, retries, restores, or reads the repository.
+- Blocked artifacts left in `interrupted` or `needs_inspection` from native
+  application. Acknowledgement clears the repository-wide block, so an
+  artifact-level guard now permanently holds any artifact whose outcome was
+  never proven.
+- Fixed a native patch-structure bypass that allowed a second file section to be
+  smuggled into an approved single-file artifact. Header counting stopped at the
+  first `@@ ` hunk, so a traditional patch section carrying no `diff --git` line
+  passed structure validation and `git apply --check`, then wrote a second file
+  outside the approved path with no backup and no pre-apply boundary check.
+  Unified diffs are now parsed hunk-aware: hunk bodies are consumed by their
+  declared line counts, every file section is counted wherever it appears, and
+  `parsed_unified_diff_paths` reports paths from all sections.
+- Fixed native Git status parsing that truncated the path of the first porcelain
+  line. `git_output` trimmed leading whitespace, but porcelain v1 encodes an
+  unstaged change as a leading space in `XY PATH`, so every successful `modify`
+  apply reported a garbled path, appeared staged, and was wrongly quarantined.
+  Only trailing whitespace is stripped now.
+- Added native coverage for the gap that hid both defects: an end-to-end
+  disposable-repository `modify` apply, unstaged-modification status parsing,
+  smuggled second-section rejection, multi-section path parsing, and a guard
+  proving hunk content such as `--- signature` is not read as a file header.
+- Marked the MVP Demo v1 screenshot set incomplete. The packaged click-through
+  was aborted against a remembered non-disposable repository before indexing,
+  approval, validation, or apply, and mutated no files or Git state. Packaged
+  UI click-through QA remains pending and unclaimed.
 - Executed and retained the MVP Demo v1 disposable-repository safety matrix at
   `docs/qa/evidence/mvp-demo-v1-disposable-apply-qa.md`, including production
   bundle identity, isolated packaged launch, apply, quarantine, reconciliation,
