@@ -321,6 +321,25 @@ packaged QA that #6 exists to unblock.
   for an OpenAI run, while the prose directly beneath it correctly branches on
   `providerId`. An OpenAI run whose provider is unreachable still shows
   "connected".
+- **A never-indexed repository is indexed by a button that says "Reindex".**
+  Found while investigating #11's IA restructure, recorded here because it is a
+  truthfulness defect rather than an IA judgment. `startIndexingJob`
+  (`App.tsx:1898`) has exactly three call sites — its own definition,
+  `runMaintenanceReindex` (`App.tsx:1979`), and the Repositories "Reindex
+  repository" button (`App.tsx:2665`) — and **none of them is on the selection
+  path**. Selecting a repository therefore never starts indexing, and the only
+  control that performs a *first* index is labelled with a verb that asserts a
+  previous one. The other two indexing controls are both in Settings
+  (`App.tsx:4490`, `App.tsx:4430`), which is not where a first run looks.
+
+  The cost is not a wrong word. A first-time operator with a freshly selected
+  repository sees a control whose label says it is for something they have not
+  done, on a tab they have no reason to believe is mid-workflow. This is
+  suspected to be part of what stalled the human packaged QA at its indexing
+  step; the operator's own account is in
+  `docs/qa/evidence/mvp-demo-v1-disposable-apply-qa.md`. #11 slice D (merge Index
+  into Select) is the fix; the finding is recorded separately so it survives if
+  that slice is deferred.
 - **Dead controls.** Two "Copy repository path" buttons and a "View all" button
   render with no handler. Settings draws a "Clear caches" action that cannot
   execute and a `RESET WORKSPACE` confirmation input whose button is
@@ -379,6 +398,40 @@ Slice 2 cost the browser preview (`npm run dev:web`) its usefulness, knowingly.
 It could only render a workspace by fabricating a repository, and it can never
 reach the native picker to choose a real one, so it was already fake past the
 first screen. Packaged QA replaces its purpose.
+
+**Do not revive it with a dev-only seeded repository. Verified, not argued:**
+
+```text
+$ vitest run   # import.meta.env inside the suite
+MODE=test DEV=true PROD=false
+```
+
+**`import.meta.env.DEV` is `true` under vitest.** A seed gated on it would be
+live in **every test in the suite** — the vacuous-fixture trap re-armed, in the
+one place this project has been caught six times, and pointed at the fixture
+slice 2 deleted. #6 records that against the old `repo-workspace` fixture a "demo
+records are unlinked" assertion was not merely vacuous but *wrong*. Any future
+proposal here must state which flag it uses and prove that flag is false under
+vitest, or it is this trap with a different name.
+
+**The deeper reason, which survives a perfect flag.** #2 and slice 2 protected
+*users* from invented state presented as real, and a build gate genuinely does
+that. But when the preview exists so that an **agent** can see the UI it is
+changing, the deceived party is the agent making the claims a human then relies
+on. Dev-only does not remove the fabrication; it relocates it from the user to
+the reviewer, which for that purpose is worse. And the case that makes it
+self-defeating: the empty first-run state is what defeated the operator in the
+packaged QA, so a build that can never be empty can never show the screen under
+investigation. It is not a workaround for the trap — it is the trap, wearing a
+build flag.
+
+The accepted alternative is that a human looks and reports (option (c) in that
+investigation). An agent may claim *structurally correct* and *copy-complete*,
+both assertable against the rendered tree; it may never claim **polished**, which
+is a judgment no screenshot confers. Granting macOS Screen Recording so an agent
+can capture the packaged window stays available for a slice that genuinely turns
+on something visual; it buys pixels, not judgment, and it was declined for the IA
+restructure on that basis.
 
 The demo-workflow story gets rethought here, including whether the shipped demo
 fixtures should exist at all. #2 deliberately scoped that out: a card labelled

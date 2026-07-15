@@ -259,6 +259,63 @@ the diff to the model, run enough times to characterise how often the result is
 applicable. That is provider evaluation, and it does not belong in a safety QA
 pass whose purpose is a deterministic result.
 
+## Human Packaged Click-Through — Attempt 2, 2026-07-15
+
+**Result: Not passed. Stopped partway by the operator. Nothing is claimed.**
+
+Operator: Sagar (project author). Build: `b8ff28e`, `Airlock.app`, app binary
+SHA-256 `e0585593d9cda5c30e00253285d96d61dba275395f392a1edf9b1ffc3c1f4be8`.
+Disposable repository: `/private/tmp/airlock-qa-20260715/airlock-disposable-qa`,
+baseline HEAD `a974fef5b0eb0e057eefc8b3beab762021fe64f7`.
+
+- Steps 1–12 attempted. The operator **stopped partway, because the flow was too
+  confusing to continue with confidence.** They stopped on Agent Runs /
+  Approvals. In their words, recorded rather than paraphrased: *"the flow is very
+  bad and the UI is also broken at several place.. this looks like a shit app"*.
+- **The mock-provider blocker was confirmed in the packaged build.** Apply and
+  rollback are unreachable without OpenAI. See
+  `docs/qa/disposable-repository-apply-qa.md`.
+- **OpenAI path: authentication failed.** Verified as a genuine 401 by `curl`
+  outside the app. Airlock reported it accurately and persisted nothing — the
+  error path worked correctly. **That is the only part of the OpenAI path this
+  attempt exercised.**
+- **Apply and rollback remain unclicked by any human.** Rollback has still never
+  been run by a person.
+- All prior evidence gaps stay open, plus gap 4.
+
+### The Finding Is Not The Incompleteness
+
+**The person who commissioned this product, who knows its architecture, could not
+walk its own flow unaided in a packaged build.** Recorded verbatim at the
+operator's instruction, because it is the result of this attempt rather than an
+excuse for its shape — and it is stronger evidence than any test in the suite.
+The automated matrix is green, 150 frontend / 104 native / 15 AI tests pass, and
+none of them can observe the thing that stopped this run.
+
+This is what redirected #11: the IA restructure, not the copy slices 3–6. The
+flow is the defect; renaming labels on tabs that should merge was the wrong order,
+and the operator has recorded the six-copy-slice split as their own planning
+error.
+
+### This Evidence Does Not Regenerate
+
+**The operator is no longer a first-time user, and cannot become one again.**
+They framed themselves as this product's only real first-time user — accurately —
+and that instrument was spent in the attempt above. Today's confusion data is now
+**historical**: it describes `b8ff28e` and can be re-read, but it cannot be
+re-collected, and no later pass by this operator produces first-run evidence
+again.
+
+Consequence, accepted rather than merely noted: **the next unspoiled human is a
+one-shot instrument.** They get the whole flow *after* the structure stops moving
+— not a half-finished restructure. Spending them on an intermediate slice would
+buy a little feedback and permanently destroy the only remaining measurement of
+whether the restructure worked.
+
+The corollary for whoever reads this next: a first-run problem found by an
+unspoiled user is not reproducible on demand. Treat these notes as a
+non-renewable record, not as a bug report that can be re-run for detail.
+
 ## Release Assessment
 
 - Automated native safety evidence: **Pass**
