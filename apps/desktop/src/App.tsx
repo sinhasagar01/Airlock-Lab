@@ -1877,18 +1877,25 @@ export function App() {
               </button>
             </div>
 
-            <dl className="active-work-stats">
+            <dl className="active-work-stats" aria-label="Active work">
               <div>
                 <dt>Open Changes</dt>
-                <dd>{activeRepository.openChanges}</dd>
+                <dd>{effectiveChangedFileCount}</dd>
               </div>
               <div>
                 <dt>Clean Working Directory</dt>
                 <dd>
-                  <span className="check-marker" aria-hidden="true">
-                    ✓
-                  </span>
-                  {activeRepository.openChanges === 0 ? "Yes" : "No"}
+                  {/*
+                    Read live Git state, the same source Changes reads. This
+                    previously read the persisted openChanges snapshot and drew
+                    the marker unconditionally, so a dirty tree rendered "✓ No".
+                  */}
+                  {isWorkingDirectoryClean ? (
+                    <span className="check-marker" aria-hidden="true">
+                      ✓
+                    </span>
+                  ) : null}
+                  {isWorkingDirectoryClean ? "Yes" : "No"}
                 </dd>
               </div>
             </dl>

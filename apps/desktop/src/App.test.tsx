@@ -1533,6 +1533,25 @@ describe("App smoke tests", () => {
     expect(row.textContent).toContain("No linked run");
   });
 
+  it("agrees with Changes about whether the working tree is clean", async () => {
+    const dirtyGitStatus: GitStatusSummary = {
+      ...defaultGitStatus,
+      isClean: false,
+      changedFileCount: 3,
+      unstagedCount: 3,
+    };
+    renderApp({ gitStatus: dirtyGitStatus });
+
+    // Overview read the persisted openChanges snapshot while Changes read live
+    // Git, so Overview could report a clean tree while Changes reported three
+    // changed files. Clean-tree state is an apply gate; the two must not
+    // disagree.
+    const overview = await screen.findByLabelText("Active work");
+    expect(overview.textContent).toContain("3");
+    expect(overview.textContent).not.toContain("✓");
+    expect(overview.textContent).toContain("No");
+  });
+
   it("does not offer an upgrade for a tier that does not exist", async () => {
     renderApp();
 
