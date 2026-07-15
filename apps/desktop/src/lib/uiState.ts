@@ -118,7 +118,14 @@ export function proposedChangeStatusTone(
     return "success";
   }
 
-  if (status === "rejected" || status === "superseded") {
+  // Quarantine means the working tree changed in a way the app could not
+  // account for. It is the loudest fail-closed state in the product and must
+  // never render as calm as a draft.
+  if (
+    status === "rejected" ||
+    status === "superseded" ||
+    status === "quarantine_required"
+  ) {
     return "danger";
   }
 
