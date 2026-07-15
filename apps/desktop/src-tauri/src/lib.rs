@@ -9716,6 +9716,244 @@ Binary files a/image.png and b/image.png differ";
         });
     }
 
+    /// Statuses that already carry a verdict are not re-classified.
+    ///
+    /// This is where A2 and A3 disagree, deliberately: these three block the
+    /// repository (a human must act) but reconciliation has nothing to add. Two
+    /// different notions of terminal — "resolved" and "classified" — which is
+    /// why one list cannot serve both gates.
+    #[test]
+    fn attempt_statuses_with_a_verdict_are_not_reconciled_again() {
+        tauri::async_runtime::block_on(async {
+            for status in ["interrupted", "needs_inspection", "quarantine_required"] {
+                let repository_path = create_temp_dir(&format!("a3-keep-{status}"));
+                init_git_repo(&repository_path);
+                commit_test_file(&repository_path, "README.md", "fixture\n");
+                let pool = create_apply_test_pool().await;
+                seed_apply_test_records(&pool, &repository_path, "approved").await;
+                ensure_patch_apply_tables(&pool)
+                    .await
+                    .expect("apply tables");
+                seed_attempt_with_status(&pool, "attempt-verdict", status).await;
+
+                let lock_directory = test_apply_lock_directory(&repository_path);
+                reconcile_interrupted_patch_apply_attempts_with_pool(&pool, &lock_directory)
+                    .await
+                    .expect("reconcile");
+
+                assert_eq!(
+                    attempt_status(&pool, "attempt-verdict").await,
+                    status,
+                    "{status} already has a verdict and must not be re-classified"
+                );
+                // The status alone cannot tell "skipped" from "re-classified to
+                // the same value" — a verdict-less `interrupted` row re-derives
+                // `interrupted`, so that assertion passes either way. Reconciling
+                // always stamps `completed_at`; an untouched row has none.
+                let completed_at: Option<String> = sqlx::query(
+                    "SELECT completed_at FROM patch_apply_attempts WHERE id = 'attempt-verdict'",
+                )
+                .fetch_one(&pool)
+                .await
+                .expect("load attempt row")
+                .try_get("completed_at")
+                .unwrap_or(None);
+                assert!(
+                    completed_at.is_none(),
+                    "{status} must not be touched by reconciliation at all"
+                );
+                remove_temp_dir(&repository_path);
+            }
+        });
+    }
+    /// Inserts a prior attempt row for the seeded artifact, in an exact status.
+    async fn seed_attempt_with_status(pool: &SqlitePool, attempt_id: &str, status: &str) {
+        sqlx::query(
+            "INSERT INTO patch_apply_attempts (id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, started_at) VALUES (?, 'proposal-apply', 'artifact-apply', 'approval-apply', 'repo-apply', ?, '1783532400')",
+        )
+        .bind(attempt_id)
+        .bind(status)
+        .execute(pool)
+        .await
+        .expect("seed attempt row");
+    }
+
+    async fn attempt_status(pool: &SqlitePool, attempt_id: &str) -> String {
+        sqlx::query("SELECT status FROM patch_apply_attempts WHERE id = ?")
+            .bind(attempt_id)
+            .fetch_one(pool)
+            .await
+            .expect("load attempt status")
+            .try_get::<String, _>("status")
+            .unwrap()
+    }
+
+    /// The statuses that leave a repository free must keep doing so.
+    ///
+    /// `applied` is on this list on a **documentary** argument, not a
+    /// constructed one: no current code writes it, but
+    /// `patch-application-safety.md` records it as a real reconciliation verdict
+    /// from an earlier version, `apply_attempt_message` still carries its arm,
+    /// and the artifact guard blocks it as part of a legacy triple. Blocking it
+    /// would strand a legacy row behind a gate that `INSPECTED` does not accept
+    /// — a state with no exit, created by the fix meant to prevent exactly that.
+    #[test]
+    fn attempt_statuses_that_resolve_a_repository_do_not_block_it() {
+        tauri::async_runtime::block_on(async {
+            for status in [
+                "applied",
+                "applied_verified",
+                "failed",
+                "rolled_back",
+                "inspected",
+            ] {
+                let repository_path = create_temp_dir(&format!("a2-free-{status}"));
+                init_git_repo(&repository_path);
+                commit_test_file(&repository_path, "README.md", "fixture\n");
+                let pool = create_apply_test_pool().await;
+                let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+                ensure_patch_apply_tables(&pool)
+                    .await
+                    .expect("apply tables");
+                seed_attempt_with_status(&pool, "attempt-prior", status).await;
+
+                let lock_directory = test_apply_lock_directory(&repository_path);
+                let result =
+                    apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input).await;
+
+                assert!(
+                    result.is_ok(),
+                    "{status} must not block the repository, but apply was refused: {result:?}"
+                );
+                remove_temp_dir(&repository_path);
+            }
+        });
+    }
+
+    /// The statuses that demand attention must keep blocking.
+    #[test]
+    fn attempt_statuses_that_need_attention_block_the_repository() {
+        tauri::async_runtime::block_on(async {
+            for status in [
+                "pending",
+                "applying",
+                "rolling_back",
+                "interrupted",
+                "needs_inspection",
+                "quarantine_required",
+            ] {
+                let repository_path = create_temp_dir(&format!("a2-block-{status}"));
+                init_git_repo(&repository_path);
+                commit_test_file(&repository_path, "README.md", "fixture\n");
+                let pool = create_apply_test_pool().await;
+                let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+                ensure_patch_apply_tables(&pool)
+                    .await
+                    .expect("apply tables");
+                seed_attempt_with_status(&pool, "attempt-prior", status).await;
+
+                let lock_directory = test_apply_lock_directory(&repository_path);
+                let error = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
+                    .await
+                    .unwrap_err();
+
+                assert_eq!(
+                    error.code, "unresolved_apply_attempt",
+                    "{status} must block the repository"
+                );
+                assert!(!repository_path.join("generated.txt").exists());
+                remove_temp_dir(&repository_path);
+            }
+        });
+    }
+
+    /// A legacy `applied` attempt leaves the repository free, and the artifact
+    /// guard is what refuses the replay.
+    ///
+    /// Verified rather than inferred, because if both bars were down for a
+    /// legacy row, putting `applied` on the non-blocking list would be a bypass.
+    #[test]
+    fn a_legacy_applied_attempt_is_still_refused_by_the_artifact_guard() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("a2-legacy-applied-artifact-bar");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+            ensure_patch_apply_tables(&pool)
+                .await
+                .expect("apply tables");
+            // The shape an older version actually wrote: attempt and artifact
+            // agree, because they were persisted together.
+            seed_attempt_with_status(&pool, "attempt-legacy", "applied").await;
+            mutate_apply_artifact(&pool, |artifacts| {
+                artifacts[0]["applyStatus"] = json!("applied");
+            })
+            .await;
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let error = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
+                .await
+                .expect_err("a legacy applied artifact must never be re-applied");
+
+            // Not `unresolved_apply_attempt`: the repository gate let it through,
+            // and the artifact guard is the bar that held.
+            assert_eq!(error.code, "already_applied");
+            assert!(
+                !repository_path.join("generated.txt").exists(),
+                "the second bar must stop the write"
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// If the attempt row and the artifact row disagree, a completed apply still
+    /// cannot replay: the proposal's own state refuses it.
+    #[test]
+    fn a_disagreeing_legacy_attempt_cannot_replay_a_completed_apply() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("a2-legacy-disagree");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let applied = apply_approved_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                ApplyApprovedPatchArtifactInput {
+                    repository_id: input.repository_id.clone(),
+                    proposed_change_id: input.proposed_change_id.clone(),
+                    approval_request_id: input.approval_request_id.clone(),
+                    patch_artifact_id: input.patch_artifact_id.clone(),
+                    confirmation_phrase: APPLY_CONFIRMATION_PHRASE.to_string(),
+                },
+            )
+            .await
+            .expect("the first apply");
+            // Both bars forced down: a legacy `applied` attempt, and an artifact
+            // that has forgotten it was ever applied (the `files`-rebuild hazard).
+            sqlx::query("UPDATE patch_apply_attempts SET status = 'applied' WHERE id = ?")
+                .bind(&applied.apply_attempt_id)
+                .execute(&pool)
+                .await
+                .expect("legacy-ize the attempt");
+            mutate_apply_artifact(&pool, |artifacts| {
+                artifacts[0].as_object_mut().unwrap().remove("applyStatus");
+            })
+            .await;
+
+            let error = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
+                .await
+                .expect_err("a completed apply must not replay even with both bars down");
+
+            // The proposal moved to `applied` when the first apply verified, and
+            // it is the third independent bar.
+            assert_eq!(error.code, "proposal_not_approved");
+            remove_temp_dir(&repository_path);
+        });
+    }
+
     /// A failed apply may be retried, and the guard must keep letting it.
     ///
     /// `apply_failed` is eligible today only by falling through every arm of a
