@@ -214,6 +214,30 @@ export type PatchApplyStatus =
   | "rolled_back"
   | "blocked";
 
+/**
+ * The apply states an artifact may proceed from. Everything else refuses.
+ *
+ * This mirrors the native allow-list in `apply_approved_patch_artifact_under_lock`,
+ * which is the authority — this list decides nothing and grants nothing. It
+ * exists so the readiness surface refuses the same states rather than inviting a
+ * click that native can only reject.
+ *
+ * **The two lists cannot be compile-enforced to agree.** They are in different
+ * languages, so nothing but a test and this comment keeps them in step. That is
+ * a real gap, stated rather than papered over: a validator that exists in two
+ * languages diverges, and saying so is worth more than the appearance of a
+ * guarantee. If you change this, change the native list in the same commit.
+ *
+ * `undefined` — never applied — is the other eligible state, and is not
+ * expressible here.
+ */
+export const APPLY_ELIGIBLE_ARTIFACT_STATUSES = [
+  // A previous attempt was rejected by git without changing the working tree.
+  // Retry is re-gated rather than replayed: native re-runs structure validation,
+  // a fresh dry-run, and the full snapshot comparison in the same request.
+  "apply_failed",
+] as const satisfies readonly PatchApplyStatus[];
+
 export type PatchApplyAttemptStatus =
   | "pending"
   | "applying"

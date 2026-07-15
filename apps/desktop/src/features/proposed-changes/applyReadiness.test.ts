@@ -111,10 +111,49 @@ describe("evaluateApplyReadiness", () => {
     }
   });
 
-  // Rollback creates a new terminal state, and this gate enumerates blocked
-  // statuses rather than allow-listing eligible ones — so a status it has not
-  // heard of reads as "ready to apply". The native guard is the real bar; this
-  // keeps the surface from inviting a click that can only ever fail.
+  // The shape, not an arm. An unrecognised status must read as blocked rather
+  // than "ready to apply", so the surface never invites a click native can only
+  // refuse. Nothing can be added to the gate to make this pass; only the
+  // allow-list can.
+  it("blocks an artifact whose apply state it does not recognise", () => {
+    const result = evaluateApplyReadiness(
+      generatedArtifact({
+        applyStatus: "some_future_status" as ProposedPatchArtifact["applyStatus"],
+      }),
+      readyContext,
+    );
+
+    expect(result.canApply).toBe(false);
+    expect(gateStatus(result, "apply_state")).toBe("blocked");
+  });
+
+  // Refused deliberately despite the name: nothing writes it, and allow-listing
+  // an unreachable status because it reads well grants permission speculatively.
+  it.each(["blocked", "not_applicable", "ready_to_apply"] as const)(
+    "blocks %s, which no code writes and which is not explicitly eligible",
+    (applyStatus) => {
+      const result = evaluateApplyReadiness(
+        generatedArtifact({ applyStatus }),
+        readyContext,
+      );
+
+      expect(result.canApply).toBe(false);
+      expect(gateStatus(result, "apply_state")).toBe("blocked");
+    },
+  );
+
+  // Mirrors the native retry pin: if this gate drops apply_failed, the surface
+  // silently stops offering a retry that native would allow.
+  it("allows a retry after an attempt failed without changing the tree", () => {
+    const result = evaluateApplyReadiness(
+      generatedArtifact({ applyStatus: "apply_failed" }),
+      readyContext,
+    );
+
+    expect(gateStatus(result, "apply_state")).toBe("passed");
+    expect(result.canApply).toBe(true);
+  });
+
   it("blocks a rolled-back artifact from being applied again", () => {
     const result = evaluateApplyReadiness(
       generatedArtifact({ applyStatus: "rolled_back" }),

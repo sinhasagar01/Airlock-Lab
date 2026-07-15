@@ -1,6 +1,8 @@
 import {
+  APPLY_ELIGIBLE_ARTIFACT_STATUSES,
   initialPatchValidationStatus,
   type ApprovalRequestStatus,
+  type PatchApplyStatus,
   type ProposedPatchArtifact,
   type RepositoryValidationSnapshot,
 } from "@ai-dev/ai";
@@ -115,11 +117,19 @@ export function evaluateApplyReadiness(
     artifact.applyStatus === "interrupted" ||
     artifact.applyStatus === "needs_inspection" ||
     artifact.applyStatus === "quarantine_required";
-  // A rolled-back artifact is terminal, not a return to `ready_to_apply`. The
-  // native guard is what actually refuses the second write; this keeps the
-  // surface from inviting a click that can only ever fail.
   const rolledBack = artifact.applyStatus === "rolled_back";
   const rollbackInFlight = artifact.applyStatus === "rolling_back";
+  // Eligibility is an allow-list mirroring native's, so the default is blocked.
+  //
+  // This gate used to enumerate the statuses that block, which meant an
+  // unrecognised status read as "ready to apply" and the surface invited a click
+  // native could only refuse. The native guard is the authority and the only
+  // thing that stops a write; this exists so the two do not disagree.
+  const applyStateEligible =
+    artifact.applyStatus === undefined ||
+    (APPLY_ELIGIBLE_ARTIFACT_STATUSES as readonly PatchApplyStatus[]).includes(
+      artifact.applyStatus,
+    );
   const pathAllowed = hasAllowedRelativePath(artifact.filePath);
   const forbiddenPath = isForbiddenPath(artifact.filePath);
   const structurePassed =
@@ -172,27 +182,25 @@ export function evaluateApplyReadiness(
     ),
     gate(
       "apply_state",
-      "Artifact has not already been applied",
-      applicationVerified ||
-        artifact.applyStatus === "applying" ||
-        rolledBack ||
-        rollbackInFlight ||
-        unresolvedApplyAttempt
-        ? "blocked"
-        : "passed",
-      applicationVerified
-        ? "This artifact has already been applied and its changed paths were verified."
-        : artifact.applyStatus === "applying"
-          ? "A native application attempt is already in progress."
-          : rolledBack
-            ? "This patch was rolled back and is permanently ineligible. Generate and validate a fresh proposal instead."
-            : rollbackInFlight
-              ? "A rollback of this patch is in progress."
-              : artifact.applyStatus === "quarantine_required"
-                ? "Post-apply changed-path verification requires manual inspection before any future application."
-                : unresolvedApplyAttempt
-                  ? "An interrupted application attempt requires manual inspection before any future retry."
-                  : "No completed or in-progress application attempt blocks this artifact.",
+      "Artifact is in an appliable state",
+      applyStateEligible ? "passed" : "blocked",
+      applyStateEligible
+        ? artifact.applyStatus === "apply_failed"
+          ? "A previous attempt failed without changing the working tree. It can be retried; every check re-runs."
+          : "No completed or in-progress application attempt blocks this artifact."
+        : applicationVerified
+          ? "This artifact has already been applied and its changed paths were verified."
+          : artifact.applyStatus === "applying"
+            ? "A native application attempt is already in progress."
+            : rolledBack
+              ? "This patch was rolled back and is permanently ineligible. Generate and validate a fresh proposal instead."
+              : rollbackInFlight
+                ? "A rollback of this patch is in progress."
+                : artifact.applyStatus === "quarantine_required"
+                  ? "Post-apply changed-path verification requires manual inspection before any future application."
+                  : unresolvedApplyAttempt
+                    ? "An interrupted application attempt requires manual inspection before any future retry."
+                    : `Apply state ${artifact.applyStatus?.replaceAll("_", " ")} is not one a patch can be applied from.`,
     ),
     gate(
       "approval",
