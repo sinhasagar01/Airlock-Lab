@@ -1,8 +1,12 @@
 # Roadmap
 
 Working backlog for AI Developer Workspace. This file is the single home for
-work that is agreed but not yet scheduled. It is reconciled against the code as
-items land rather than kept as an aspirational list.
+work that is agreed but not yet scheduled, and for findings that are understood
+but deliberately not being worked. A finding with no home is a finding that gets
+lost.
+
+Every entry has been verified against the code rather than carried over from the
+review that produced it. Entries are reconciled as work lands.
 
 Last reconciled: 2026-07-15.
 
@@ -18,20 +22,67 @@ it did. Items are ordered by how much they protect or clarify that claim.
   `needs_inspection`, and `interrupted` blocked every future apply for a
   repository with no exit but hand-editing SQLite. A native command now records
   a human inspection behind the exact phrase `INSPECTED`, and the review
-  surfaces call it. Quarantine also stopped rendering as a calm neutral pill.
+  surfaces call it. Quarantine stopped rendering as a calm neutral pill.
+- **#2 Purge covert fabrication.** Hydration wrote demo fixtures into
+  `approval_requests` and `proposed_changes` on every launch with no user
+  action, where nothing distinguished them from real records. Both writes are
+  gone, untouched fixture rows are purged from existing databases, retained ones
+  are marked "Demo record" where they are displayed, and Overview no longer
+  ships a fake activity feed, a fake tier, or a fabricated index time. Overview
+  and Changes now agree about the working tree.
 
 ## Next
 
-### #2 Purge covert fabrication from trust surfaces
+### #3 Fix `parse_porcelain_line` for quoted paths
 
-Fake activity, a fake tier, fake metrics, and seeds silently persisted into
-SQLite where they become indistinguishable from real records. In progress.
+**This is the highest-value correctness bug open, and it is ahead of rollback
+deliberately.**
 
-The boundary is **covert** fabrication. A card labelled "Demo workflow" and a
-row marked "Demo record" are not lying. Removing the demo workflow itself is a
-product-scope decision and belongs with #8.
+`git status --porcelain=v1` quotes and C-escapes any path containing a space,
+non-ASCII byte, `"`, or `\`. The parser takes the quoted form literally:
 
-### #3 Rollback v1
+```text
+?? plain.txt               ->  plain.txt              matches
+?? "with space.txt"        ->  "with space.txt"       does not match
+?? "caf\303\251.txt"       ->  "caf\303\251.txt"      does not match
+```
+
+`is_safe_relative_path` accepts the quoted string — it only rejects empty, null,
+absolute, and traversal paths — so it is not even caught as unsafe. It lands in
+`observed_paths` looking legitimate and simply fails to equal `expected_paths`,
+producing unexpected **and** missing paths, which quarantines the attempt.
+
+**What actually happens: the patch applies correctly. The file on disk is
+right. Then the app falsely accuses itself of an unaccountable write.** Post-#1
+the user acknowledges an incident that never occurred, and the artifact is
+permanently ineligible afterwards. This inverts the one signal the whole
+architecture exists to make trustworthy — it is worse than a crash, because the
+product's own account of what it did is wrong in the direction of alarm.
+
+**Blast radius:** any target filename containing a space, a non-ASCII character,
+`"`, or `\`. `My Notes.md` is enough; no attacker and no unusual repository are
+involved. Bounded by the clean-tree gate to the target path only: the tree must
+be fully clean before apply (untracked files count), so the target is the only
+post-apply changed path. It does not trigger merely because some unrelated file
+in the repository has an accented name.
+
+**`core.quotepath` is not the fix.** It defaults to `true` and we never set it.
+Setting it `false` stops the octal escaping, but git still quotes the space
+case — verified. It is a partial mitigation that leaves the more common failure
+intact. The fix is C-style unquoting in the parser.
+
+**Related, for the same task to consider:** `is_safe_relative_path` accepts a
+path containing literal quote characters. Unquoting fixes the symptom, but a
+path that arrives quoted should never pass a safety check in the first place.
+
+**Renames are not affected.** `R  old -> new` parses correctly via
+`split_once(" -> ")` when `index_status` is `R` or `C`. Verified; no defect
+recorded.
+
+Secondary, same root cause: Changes renders the quoted form as the filename, and
+per-file diff loading for such a path fails its own path check.
+
+### #4 Rollback v1
 
 Pre-apply backups are persisted and complete, and nothing can restore them. A
 backup nobody can restore is a receipt, not a safety net. Rollback is also the
@@ -39,47 +90,109 @@ natural exit from quarantine.
 
 Highest-risk item in the product: it is a _second_ destructive operation, and
 `docs/security/patch-application-safety.md` warns that automatic rollback can
-overwrite concurrent user work. It should land after #2, not before — a restore
-whose outcome the UI cannot describe honestly is worse than no restore.
+overwrite concurrent user work.
 
-### #4 `GitStatusSummary` needs an `unknown` state
+**It sits behind #3 because it depends on it.** A restore must verify what it
+restored, and it will read `git status` through the same parser. Building the
+second destructive operation on a parser that misreports paths makes the
+restore's own verification unreliable exactly when it matters most. This is a
+dependency, not a sequencing preference.
+
+### #5 `GitStatusSummary` needs an `unknown` state
 
 `load_git_status_summary` defaults a failed `git status` to empty output, so an
 unreadable index renders as a clean working tree. The apply gate no longer
-trusts this path (the validation snapshot fails closed as of the F3 fix), and
-post-apply verification fails closed, so this is display-only today. Reporting
-it honestly needs an explicit `unknown` state on the contract in
-`packages/core`.
+trusts this path (the validation snapshot fails closed), and post-apply
+verification fails closed, so this is display-only today. Reporting it honestly
+needs an explicit `unknown` state on the contract in `packages/core`.
 
-### #5 Repository switching
+### #6 Repository switching
 
-`activeRepository = repositories[0]` is hardcoded (`App.tsx`). Repositories can
-be added and never switched to; the saved list is display-only. A broken promise
-in the UI rather than a safety issue.
+`activeRepository = repositories[0]` is hardcoded. Repositories can be added and
+never switched to; the saved list is display-only. A broken promise in the UI
+rather than a safety issue.
 
-### #6 Frontend UI-truthfulness
+### #7 Frontend UI-truthfulness
 
 - **Approval durability.** `updateApprovalStatus` writes UI state before
   persisting, with no `storageStatus` guard and no `try`/`catch` — the only
   mutation path lacking both. A rejected write leaves the UI claiming
   "approved". Fails closed at the native boundary (apply re-reads SQLite), so it
   misleads the user rather than endangering the repository.
+- **Provider pill reports the wrong provider.** The Agent Run "Provider Context"
+  pill renders the mock provider's `status` with a hard-coded success tone, even
+  for an OpenAI run, while the prose directly beneath it correctly branches on
+  `providerId`. An OpenAI run whose provider is unreachable still shows
+  "connected".
+- **Dead controls.** Two "Copy repository path" buttons and a "View all" button
+  render with no handler. Settings draws a "Clear caches" action that cannot
+  execute and a `RESET WORKSPACE` confirmation input whose button is
+  permanently `disabled`, so `resetConfirmationText` is write-only state. Ship a
+  control or do not draw it.
 - ~~Quarantine renders as a calm neutral pill~~ — landed with #1.
-- ~~Overview "✓ No" clean marker disagrees with Changes~~ — lands with #2 as a
-  two-reference swap; `effectiveChangedFileCount` and `isWorkingDirectoryClean`
-  already exist and Overview simply did not reference them.
+- ~~Overview "✓ No" clean marker disagrees with Changes~~ — landed with #2.
 
-Only approval durability remains.
+## Design Changes
+
+These are product and UX judgments from the review, not defects. Nothing here is
+misbehaving; the argument is that the current shape communicates badly. They are
+tasks, not bugs, and each needs a decision before implementation.
+
+### #8 One apply entry point
+
+`PatchArtifactDetail` — including the full readiness gates, typed confirmation,
+and apply action — renders in both Agent Runs and Approval Review. Two entry
+points double the surface on which "approval" and "apply" can blur together, and
+approval is the decision the product is built around. The argument is that apply
+belongs only behind Approval Review. Requires deciding what Agent Runs shows
+instead.
+
+### #9 Make post-apply verification loud
+
+Exact-path post-apply verification is the product's entire value proposition and
+it renders as a status pill. The argument is that the proof — "only the approved
+path changed; nothing was staged or committed" — deserves to be the loudest
+thing on the screen after an apply, not a badge.
+
+### #10 Land in Changes after an apply
+
+After a successful apply the user stays put. The argument is that they should
+land in Changes, on real read-only Git state, with the verification result — the
+product's honest surface — and that Changes should drop the full indexed-file
+browser it also hosts, which is a second file explorer nobody asked for.
+
+### #11 Rename and information architecture
+
+"Changes" currently means three things (proposed change, patch artifact, Git
+change). "Agent Runs" implies autonomy that does not exist — nothing runs; there
+is one request and one response, no loop and no tools. Review should be the front
+door. Validation and dry-run are two words for one idea and should collapse into
+"Checks", with the eighteen readiness gates behind an advanced view rather than
+presented as workflow steps.
+
+The demo-workflow story gets rethought here, including whether the shipped demo
+fixtures should exist at all. #2 deliberately scoped that out: a card labelled
+"Demo workflow" and a row marked "Demo record" are not lying, so removing them is
+a product-scope decision rather than a data-honesty fix.
+
+Positioning belongs with this work. The product is currently described by what it
+is weakest at — generating AI plans — rather than by the safety machinery that is
+95% of the engineering and the only part competitors lack. Claims worth retiring:
+"AI-native workspace", "AI-assisted implementation" (it reviews and applies one
+file; it does not implement), and "Repository Intelligence" for what is a
+file-tree summary with extension counts.
 
 ## Later
 
-### #7 Native hardening
+### #12 Native hardening
 
 - **F4 — vacuous post-apply consistency check.** `verify_post_apply_changed_paths`
   asserts `changed_file_count == files.len()`, but `changed_file_count` is
   _defined_ as `files.len()`, so the check is always true. Its evident intent is
   to detect porcelain lines that `filter_map(parse_porcelain_line)` silently
-  dropped. To be real it must compare against the raw status line count.
+  dropped. To be real it must compare against the raw status line count. Related
+  to #3: both are consequences of the status parser never being exercised on
+  real-world path shapes.
 - **F5 — dead `stale_after`.** `APPLY_LOCK_STALE_AFTER_SECONDS` is computed and
   persisted but never read. `mark_abandoned_apply_locks_stale` marks every
   active row stale regardless of age. Safe today only because callers hold the
@@ -91,21 +204,36 @@ Only approval durability remains.
   returns `apply_locked` with a message claiming a lock on "this repository".
   The `#[cfg(test)]` variant serializes instead of rejecting, so no test can
   observe it.
+- **Fingerprint TOCTOU and timestamp granularity.** `fingerprint_target_file`
+  does `symlink_metadata` → `canonicalize` → read as three steps. A swap to a
+  symlink mid-window is caught by the canonical-root check, and a swap to a
+  different in-repo file is caught downstream by `create_apply_backup`'s hash
+  re-check, so it is not known to be exploitable — but the window is real.
+  Separately, `modified_at` uses whole seconds, so for fingerprints with no
+  content hash (`too_large`, `binary`, `forbidden`, `unavailable`) equality
+  reduces to size plus whole-second mtime, and a same-size edit inside one second
+  compares equal. Not reachable for the apply target (backup requires a
+  `captured` or `missing` fingerprint), but non-target `relevant_file_paths` gate
+  staleness on this weaker evidence.
 
-### #8 Rename and information architecture
+### #13 Split `App.tsx`
 
-"Changes" currently means three things (proposed change, patch artifact, Git
-change). "Agent Runs" implies autonomy that does not exist — nothing runs.
-Review should be the front door. The demo-workflow story gets rethought here.
+~4,000 lines, roughly 35 `useState` hooks, one component, six tabs inline.
+Every confirmed frontend defect in the review lived here, and the Overview /
+Changes disagreement fixed in #2 was a direct symptom: two surfaces derived the
+same fact independently. This should land before more feature work, and
+specifically before #4 — rollback adds a second destructive action to a component
+that could not previously keep two tabs agreeing on whether the tree was clean.
+The existing frontend suite is the safety net for the split.
 
-### #9 Dev loop: DMG bundling
+### #14 Dev loop: DMG bundling
 
 `npm run build` mounts a DMG per run via Tauri's `bundle_dmg.sh` and leaks the
 mount. Repeated verification accumulates volumes until bundling fails from
 contention (observed: ten stale `dmg.*` volumes and one spurious build failure).
 Either split bundling out of the default `build` or make it opt-in for release.
 
-### #10 Prettier: decide, then act once
+### #15 Prettier: decide, then act once
 
 `npm run format:check` fails on `main` and did before this work — roughly ten
 pre-existing files including generated Tauri schemas. A permanently-red check is
@@ -113,26 +241,59 @@ worse than no check. Either it joins the documented verification suite in
 `README.md` and gets fixed in one pass, or it comes out of `package.json`. Not a
 task until it is a decision.
 
+### #16 Packaged QA and distribution
+
+The packaged UI click-through remains pending and unclaimed; see
+`docs/qa/evidence/mvp-demo-v1-disposable-apply-qa.md`, whose three evidence gaps
+still stand. Signing and notarization are needed to distribute, not to validate.
+
 ## Known Data Hazards
 
 Surfaced during investigation; recorded so they are not rediscovered.
 
 - **Dangling `agent_run_id`.** Seeded approvals were persisted but seeded agent
-  runs never were — `saveAgentRunRecord` is only called from `startAgentRun`. So
-  persisted seeded approvals reference runs that exist only in memory. The UI
-  guards this (`?? "Not linked"`), and #2 adds a test to keep it that way.
+  runs never were — `saveAgentRunRecord` is only called from `startAgentRun`. The
+  UI guards this (`?? "No linked run"`) and #2 pinned that guard with a test.
+  Demo fixtures keep their runs in memory, so the link resolves today; the hazard
+  is that nothing enforces the reference.
 - **Hardcoded home path.** `createMockRepositories` embeds a real absolute home
   directory as fixture data. Harmless locally, wrong to ship.
 - **`ensureProposedPatchArtifacts` rebuilds artifacts from `files`.** Any stored
-  artifact whose `filePath` is absent from `files` is silently dropped. Not
-  reachable today — every creation path enforces `artifact.filePath ∈ files` —
-  but it is a latent way to lose an applied artifact's backup linkage.
+  artifact whose `filePath` is absent from `files` is silently dropped, and it
+  runs over every saved change on hydrate. Not reachable today — every creation
+  path enforces `artifact.filePath ∈ files` — but it is a latent way to lose an
+  applied artifact's backup linkage. It is a hazard rather than a task because no
+  code path can currently reach it; it becomes a task the moment anything edits
+  `files` after artifacts exist.
 - **No foreign keys.** `patch_apply_attempts` and `patch_apply_backups` store
   `proposed_change_id` as plain `TEXT`. Nothing at the schema level prevents
   orphaned audit rows.
+- **Test coverage measures the wrong thing.** The suite was fully green while a
+  critical structure-validation bypass and a broken modify path sat in the code:
+  every apply test used a `create` patch, so the `modify` path had no end-to-end
+  coverage at all. #3 is the same shape — a parser never exercised on real
+  inputs. New safety claims should arrive with a failing test first.
 
-## Not Planned
+## Won't Do
 
-Multi-artifact transactional apply, rename/binary/delete patch support,
-streaming, provider tool use, team or cloud features, and PR creation are out of
-scope until the single-artifact boundary is production-ready.
+Recorded with reasons so they are not re-proposed.
+
+- **Multi-artifact transactional apply.** Needs its own atomicity design and
+  integration coverage. The single-artifact boundary is not production-ready yet;
+  widening it first would multiply an unfinished guarantee.
+- **Rename, binary, and delete patch support.** v1 deliberately applies one
+  single-file UTF-8 text diff. Each additional operation is a distinct path
+  policy and a distinct class of failure.
+- **Streaming and provider tool use.** A provider that can invoke tools can
+  invoke apply. The architecture's core claim is that the provider is the
+  least-trusted component; tool use inverts that.
+- **Team, cloud, accounts, and PR creation.** Out of scope for a local-first
+  desktop product that has not finished proving its local guarantee.
+- **Automatic rollback after an uncertain failure.** Explicitly rejected in
+  `docs/security/patch-application-safety.md`: automatic recovery can overwrite
+  concurrent user work and would introduce a second destructive operation with no
+  human in the loop. #4 is user-initiated restore, not this.
+- **Merging indexing into repository selection, and demoting Repository
+  Intelligence.** Both were raised as workflow simplifications. They are
+  reasonable but they are IA decisions; they belong to #11 rather than being done
+  piecemeal.
