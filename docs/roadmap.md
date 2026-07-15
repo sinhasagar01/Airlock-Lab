@@ -54,30 +54,39 @@ it did. Items are ordered by how much they protect or clarify that claim.
   ambiguity is only resolvable at the parse boundary, which is where the fix now
   lives. Quotes are deliberately not rejected; control characters are.
 
+- **#4b Bound `git_output`.** Only `run_fixed_git_apply_command` had a deadline;
+  `git_output` and `git_output_raw` spawned git with no timeout, so any status or
+  diff read could hang indefinitely. Every git child process is now bounded.
+  Landed ahead of #4, which must read `git status` to verify what it restored —
+  an unbounded read is a liveness hole in a destructive path.
+
+- **#4 Rollback v1.** Pre-apply backups were persisted and nothing could restore
+  them — a backup nobody can restore is a receipt, not a safety net. A native
+  command now restores one `applied_verified` artifact from its app-local
+  pre-apply backup behind the typed phrase `ROLL BACK`, refusing on drift, a
+  deleted or staged target, a moved HEAD or branch, a missing baseline, or a
+  corrupt backup, and verifying what it restored. Never Git: no `reset`,
+  `checkout`, `clean`, `add`, or `commit`. `rolling_back` is persisted before the
+  write, seen by reconciliation, blocks the repository, and classifies
+  unconditionally to `quarantine_required` with no probe.
+
+  Three corrections to the design landed with it, recorded in
+  [`docs/security/rollback-v1-design.md`](./security/rollback-v1-design.md) with
+  their reasoning: post-restore verification compares **staged paths as a delta**
+  rather than requiring `staged_count == 0` (the original rule falsely
+  quarantined a correct rollback whenever the user had staged an unrelated file
+  — a false account, the failure class #3 removed); the **proposal** moves to
+  `rolled_back` too, since leaving it `applied` rendered a lie on the product's
+  most honest surface; and the repository lock records **which** destructive
+  operation held it.
+
+  It also exposed an F7-shaped hole the design did not anticipate: the native
+  apply guard enumerates blocked statuses rather than allow-listing eligible
+  ones, so `rolled_back` **fell through every arm and re-applied successfully**.
+  Proven by test, then fixed. The enumerate-don't-allow-list shape survives and
+  should probably invert the next time a status is added.
+
 ## Next
-
-### #4 Rollback v1
-
-Pre-apply backups are persisted and complete, and nothing can restore them. A
-backup nobody can restore is a receipt, not a safety net. Rollback is also the
-natural exit from quarantine.
-
-Highest-risk item in the product: it is a _second_ destructive operation, and
-`docs/security/patch-application-safety.md` warns that automatic rollback can
-overwrite concurrent user work.
-
-**It sat behind #3 because it depended on it.** A restore must verify what it
-restored, and it reads `git status` through the same parser. #3 has landed, so
-this is unblocked.
-
-**The design is settled and written down:**
-[`docs/security/rollback-v1-design.md`](./security/rollback-v1-design.md). It is
-an implementation brief carrying the reasoning, not only the conclusions --- the
-reasoning is what stops a later reader from "simplifying" a decision that looks
-arbitrary in the code. Notably it records why rollback's write ordering inverts
-apply's, which reads as an inconsistency until you know why.
-
-Remaining prerequisite: bound `git_output` (#4b).
 
 ### #4a Apply must not report success without persisting a baseline
 
@@ -92,13 +101,6 @@ reason before the user clicks. But "safe" currently depends on evidence apply
 does not guarantee. Deliberately not fixed inside v1: it would change the apply
 path while adding the first consumer that depends on it --- two risks at once, on
 the highest-risk task.
-
-### #4b Bound `git_output`
-
-Only `run_fixed_git_apply_command` has a deadline. `git_output` and
-`git_output_raw` spawn git with no timeout at all, so any status or diff read can
-hang indefinitely. Rollback must read `git status` to verify what it restored,
-which makes this a prerequisite rather than a nice-to-have.
 
 ### #5 `GitStatusSummary` needs an `unknown` state
 
@@ -211,6 +213,35 @@ file-tree summary with extension counts.
   and **detects** a concurrent edit afterwards, quarantining it — but does not
   **prevent** it, and the edit can still be lost. Same class as the fingerprint
   window below. Recorded as a known bound rather than an assumption.
+- **Short-SHA abbreviation scaling (stated, not closed).** Both the post-apply
+  baseline and rollback's `head_changed` check read HEAD via
+  `git rev-parse --short HEAD`, whose abbreviation length auto-scales with the
+  repository's object count. A repository that gains many objects between an
+  apply and a rollback can render a *longer* short SHA for the **same** commit,
+  producing a spurious `head_changed` refusal. It fails closed — the refusal is
+  wrong but harmless, and the alternative is not refusing — so it is out of
+  rollback v1. Fixing it means storing the full OID in the snapshot, which
+  changes the snapshot digest and therefore the apply path.
+- **The apply artifact guard enumerates blocked statuses instead of
+  allow-listing eligible ones.** The `applyStatus` arms in
+  `apply_approved_patch_artifact_under_lock` name the statuses that refuse. A
+  status none of them names falls through every arm and reaches the write, and
+  the default for an unrecognized state is therefore **apply**.
+
+  **The bug is the shape, not any missing arm.** This has now produced two
+  findings: `interrupted` / `needs_inspection` were absent before #1, and
+  `rolled_back` was absent during #4 — where it did not merely render oddly but
+  **re-applied the patch, wrote the file, and returned `applied_verified`**
+  (caught by test before landing). Both were fixed by adding an arm, which
+  resolves the instance and leaves the shape. The next status anyone adds will
+  fall through in exactly the same way, and it will keep being an
+  eligible-by-default write until the guard inverts.
+
+  The fix is to invert it: derive eligibility from an explicit allow-list of
+  states an apply may proceed from, so an unrecognized status fails closed. Not
+  done in #4 deliberately — inverting a gate on the highest-risk task, while
+  adding the first operation that depends on it, is two risks at once. It should
+  be its own change with its own proof.
 - **Fingerprint TOCTOU and timestamp granularity.** `fingerprint_target_file`
   does `symlink_metadata` → `canonicalize` → read as three steps. A swap to a
   symlink mid-window is caught by the canonical-root check, and a swap to a

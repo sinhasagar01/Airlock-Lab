@@ -111,6 +111,7 @@ import {
   PatchApplicationError,
   acknowledgePatchApplyAttempt,
   reconcileInterruptedPatchApplyAttempts,
+  rollbackAppliedPatchArtifact,
 } from "./storage/patchApplication";
 import { dryRunGeneratedPatch } from "./storage/patchValidation";
 import { loadRepositoryValidationSnapshot } from "./storage/repositoryValidationSnapshot";
@@ -243,6 +244,14 @@ export function App() {
     string | null
   >(null);
   const [patchApplyFeedback, setPatchApplyFeedback] = useState<{
+    artifactId: string;
+    status: "success" | "error";
+    message: string;
+  } | null>(null);
+  const [rollingBackPatchArtifactId, setRollingBackPatchArtifactId] = useState<
+    string | null
+  >(null);
+  const [patchRollbackFeedback, setPatchRollbackFeedback] = useState<{
     artifactId: string;
     status: "success" | "error";
     message: string;
@@ -941,6 +950,150 @@ export function App() {
       });
     } finally {
       setApplyingPatchArtifactId(null);
+    }
+  }
+
+  /**
+   * Builds the display-only rollback context for an artifact.
+   *
+   * Derived in one place so Agent Runs and Approval Review cannot disagree about
+   * whether a patch is rollbackable — the same class of split-brain that made
+   * Overview and Changes disagree about clean.
+   */
+  function rollbackEligibilityContextFor(
+    change: PersistedProposedChange | null | undefined,
+    artifact: ProposedPatchArtifact | null | undefined,
+    attempt: PatchApplyAttempt | null | undefined,
+  ) {
+    if (!change || !artifact) {
+      return null;
+    }
+
+    const repositoryMatches = Boolean(
+      hasActiveRepository && change.repositoryId === activeRepository.id,
+    );
+
+    return {
+      attempt: attempt ?? null,
+      // Only the live status for the matching repository may speak about this
+      // target; another repository's status would be evidence about the wrong
+      // tree.
+      currentGitStatus:
+        repositoryMatches &&
+        gitStatusSummary?.repositoryId === change.repositoryId
+          ? gitStatusSummary
+          : null,
+      currentRepositorySnapshot:
+        currentFingerprintSnapshot?.artifactId === artifact.id
+          ? currentFingerprintSnapshot.snapshot
+          : null,
+      hasDurableStorage: storageStatus === "ready",
+      isNativeRuntime: hasNativeRuntime,
+      operation:
+        change.files.find((file) => file.path === artifact.filePath)
+          ?.operation ?? "unknown",
+      repositoryMatches,
+    };
+  }
+
+  /**
+   * Restores one verified apply from its app-local pre-apply backup.
+   *
+   * React sends durable IDs and the exact phrase only — never the path, the
+   * bytes, or a Git argument. Native reloads every record, re-derives every
+   * precondition, and decides. A `quarantine_required` result is a real outcome
+   * rather than an error: the write happened and could not be proven, so it is
+   * surfaced as loudly as a failure and the artifact stays ineligible.
+   */
+  async function rollbackPatchArtifact(
+    change: PersistedProposedChange,
+    artifact: ProposedPatchArtifact,
+    confirmationPhrase: string,
+  ) {
+    if (rollingBackPatchArtifactId) {
+      return;
+    }
+
+    setRollingBackPatchArtifactId(artifact.id);
+    setPatchRollbackFeedback(null);
+
+    try {
+      const result = await rollbackAppliedPatchArtifact(
+        change.repositoryId,
+        change.id,
+        artifact.id,
+        confirmationPhrase,
+      );
+      const isVerifiedRollback = result.status === "rolled_back";
+      const rolledBackChange: PersistedProposedChange = {
+        ...change,
+        status: isVerifiedRollback ? "rolled_back" : "quarantine_required",
+        patchArtifacts: change.patchArtifacts.map((candidate) =>
+          candidate.id === artifact.id
+            ? {
+                ...candidate,
+                applyStatus: result.status,
+                rolledBackAt: result.rolledBackAt,
+                rolledBackBy: "local_user",
+                applyError: isVerifiedRollback ? undefined : result.message,
+                rollbackBackupId: result.rollbackBackupId,
+                postApplyGitStatus: result.postRollbackGitStatus,
+                postRollbackVerification: result.postRollbackVerification,
+              }
+            : candidate,
+        ),
+        updatedAt: result.rolledBackAt,
+      };
+
+      setPersistedProposedChanges((currentChanges) =>
+        currentChanges.map((candidate) =>
+          candidate.id === rolledBackChange.id ? rolledBackChange : candidate,
+        ),
+      );
+      setGitStatusSummary(result.postRollbackGitStatus);
+      setGitStatusState("ready");
+      setRepositories((currentRepositories) =>
+        currentRepositories.map((repository) =>
+          repository.id === result.postRollbackGitStatus.repositoryId
+            ? {
+                ...repository,
+                branch:
+                  result.postRollbackGitStatus.branch ?? repository.branch,
+                openChanges: result.postRollbackGitStatus.changedFileCount,
+              }
+            : repository,
+        ),
+      );
+      setCurrentFingerprintSnapshot(null);
+      setPatchRollbackFeedback({
+        artifactId: artifact.id,
+        status: isVerifiedRollback ? "success" : "error",
+        message: result.message,
+      });
+    } catch (error) {
+      setPatchRollbackFeedback({
+        artifactId: artifact.id,
+        status: "error",
+        message:
+          error instanceof PatchApplicationError
+            ? error.message
+            : "The native rollback failed safely. Nothing was restored. Review repository state before retrying.",
+      });
+    } finally {
+      // Durable state is reloaded on every path, including refusals: a refusal
+      // may have been caused by state this app has not seen yet.
+      try {
+        const attempts = await reconcileInterruptedPatchApplyAttempts();
+        const savedChanges = await loadProposedChanges();
+        const hydratedChanges = await Promise.all(
+          savedChanges.map(ensureProposedPatchArtifactDigests),
+        );
+        setPatchApplyAttempts(attempts);
+        setPersistedProposedChanges(hydratedChanges);
+      } catch {
+        // The native result stays visible even if the follow-up reload fails.
+      }
+      setRollingBackPatchArtifactId(null);
     }
   }
 
@@ -2797,6 +2950,33 @@ export function App() {
                     isApplying={
                       selectedAgentPatchArtifact?.id === applyingPatchArtifactId
                     }
+                    isRollingBack={
+                      selectedAgentPatchArtifact?.id ===
+                      rollingBackPatchArtifactId
+                    }
+                    rollbackEligibilityContext={rollbackEligibilityContextFor(
+                      activePersistedProposedChange,
+                      selectedAgentPatchArtifact,
+                      selectedAgentPatchApplyAttempt,
+                    )}
+                    rollbackFeedback={
+                      patchRollbackFeedback?.artifactId ===
+                      selectedAgentPatchArtifact?.id
+                        ? patchRollbackFeedback
+                        : null
+                    }
+                    onRollback={(confirmationPhrase) => {
+                      if (
+                        activePersistedProposedChange &&
+                        selectedAgentPatchArtifact
+                      ) {
+                        void rollbackPatchArtifact(
+                          activePersistedProposedChange,
+                          selectedAgentPatchArtifact,
+                          confirmationPhrase,
+                        );
+                      }
+                    }}
                     onAcknowledge={
                       selectedAgentPatchApplyAttempt
                         ? (confirmationPhrase) => {
@@ -3434,6 +3614,33 @@ export function App() {
                     selectedApprovalPatchArtifact?.id ===
                     applyingPatchArtifactId
                   }
+                  isRollingBack={
+                    selectedApprovalPatchArtifact?.id ===
+                    rollingBackPatchArtifactId
+                  }
+                  rollbackEligibilityContext={rollbackEligibilityContextFor(
+                    selectedApprovalProposedChange,
+                    selectedApprovalPatchArtifact,
+                    selectedApprovalPatchApplyAttempt,
+                  )}
+                  rollbackFeedback={
+                    patchRollbackFeedback?.artifactId ===
+                    selectedApprovalPatchArtifact?.id
+                      ? patchRollbackFeedback
+                      : null
+                  }
+                  onRollback={(confirmationPhrase) => {
+                    if (
+                      selectedApprovalProposedChange &&
+                      selectedApprovalPatchArtifact
+                    ) {
+                      void rollbackPatchArtifact(
+                        selectedApprovalProposedChange,
+                        selectedApprovalPatchArtifact,
+                        confirmationPhrase,
+                      );
+                    }
+                  }}
                   onAcknowledge={
                     selectedApprovalPatchApplyAttempt
                       ? (confirmationPhrase) => {

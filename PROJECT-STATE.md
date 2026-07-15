@@ -91,9 +91,43 @@ evidence. After Git succeeds, native code compares the exact artifact,
 proposal, parsed diff, backup, fingerprint, and post-apply Git paths. Only an
 exact, unstaged match becomes `applied_verified`; any missing, unexpected,
 staged, or conflicting evidence becomes durable `quarantine_required`, keeps
-Apply disabled, and requires manual inspection. Backup rollback,
-multi-artifact transactions, and retained packaged QA evidence remain future
-work.
+Apply disabled, and requires manual inspection. Multi-artifact transactions and
+retained packaged QA evidence remain future work.
+
+## Rollback v1
+
+An `applied_verified` patch can now be restored from its app-local pre-apply
+backup through a dedicated native command behind the exact phrase `ROLL BACK`.
+React passes repository, proposal, and artifact IDs plus the phrase; it never
+sends a path, file contents, or a Git argument. Restores read **only** app-local
+backups — no `reset`, `checkout`, `clean`, `add`, or `commit` appears in the
+path, and Git history is never touched.
+
+Native reloads every durable record and re-derives every precondition: the
+artifact must be `applied_verified`, the apply must have persisted a post-apply
+baseline with a content hash for the target, the current file must still match
+that baseline, HEAD and the branch must be unchanged, the target must be
+unstaged, and the pre-apply backup must pass a SHA-256 integrity check before a
+byte is written. Anything absent or undeterminable refuses. Ineligibility and its
+reason are shown where the artifact is displayed, before any action, so an
+artifact with no baseline is never offered a button that could only refuse.
+
+Write ordering deliberately inverts apply's: the `rolling_back` attempt row lands
+*before* the pre-rollback backup, because that backup records bytes about to be
+destroyed and the "we started" marker must exist first. The overwritten bytes are
+retained in a separate `patch_rollback_backups` table, never mixed with the
+pre-apply backups a rollback restores from.
+
+After the write, native verifies the target holds exactly its pre-apply bytes (or
+is gone, for a create), that no other path changed, that the index is untouched,
+and that HEAD did not move. Verification compares changed and staged paths as a
+delta against the pre-restore tree rather than demanding a clean tree, so the
+user's own unrelated work does not falsely quarantine a correct rollback. Only a
+provable result becomes `rolled_back`; anything else becomes durable
+`quarantine_required`. A rolled-back artifact and its proposal are permanently
+ineligible for re-application, enforced by the native apply guard rather than by
+the UI. An interrupted rollback is seen by reconciliation, blocks the repository,
+and classifies unconditionally to `quarantine_required` with no probe.
 
 Settings now reports whether OpenAI is configured through the native process
 and can run a read-only connection test for the configured model. The test sends

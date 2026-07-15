@@ -8,6 +8,13 @@ describe("proposedChangeStatusTone", () => {
     expect(proposedChangeStatusTone("quarantine_required")).toBe("danger");
   });
 
+  // Nothing went wrong and nothing is pending: the change was applied and then
+  // deliberately undone. Rendering it `success` would repeat the `applied` lie
+  // in a different colour; rendering it `danger` would invent a problem.
+  it("renders a rolled-back proposal as a calm completed outcome", () => {
+    expect(proposedChangeStatusTone("rolled_back")).toBe("neutral");
+  });
+
   it("keeps existing tones intact", () => {
     expect(proposedChangeStatusTone("applied")).toBe("success");
     expect(proposedChangeStatusTone("approved")).toBe("success");

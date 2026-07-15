@@ -2617,6 +2617,150 @@ dt {
   padding-top: 12px;
 }
 
+/* Rollback is a destructive working-tree write, so it reads as a deliberate,
+   calm action rather than a primary call to action. It never outranks Apply. */
+.patch-rollback {
+  background: var(--color-surface);
+  border: 1px solid #dfe6ee;
+  border-radius: var(--radius-lg);
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.patch-rollback__header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.patch-rollback__header > div:nth-child(2) {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.patch-rollback h4 {
+  color: var(--color-text-primary);
+  font-size: 16px;
+  font-weight: 760;
+  line-height: 1.3;
+  margin-top: 4px;
+}
+
+.patch-rollback > p {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 540;
+  line-height: 1.5;
+}
+
+.patch-rollback__boundary {
+  border-top: 1px solid #dfe6ee;
+  padding-top: 12px;
+}
+
+.patch-rollback__blocked {
+  background: var(--color-warning-soft);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+  padding: 12px;
+}
+
+.patch-rollback__facts {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.patch-rollback__facts > div {
+  background: var(--color-surface-muted);
+  border: 1px solid #dfe6ee;
+  border-radius: var(--radius-md);
+  min-width: 0;
+  padding: 12px;
+}
+
+.patch-rollback__facts dt {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.patch-rollback__facts dd {
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.4;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+
+.patch-rollback-confirm {
+  background: var(--color-warning-soft);
+  border: 1px solid rgba(236, 125, 84, 0.3);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+}
+
+.patch-rollback-confirm h5 {
+  color: var(--color-text-primary);
+  font-size: 14px;
+  font-weight: 760;
+}
+
+.patch-rollback-confirm p {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 540;
+  line-height: 1.5;
+}
+
+.patch-rollback-confirm label {
+  color: var(--color-text-primary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.patch-rollback-confirm input {
+  background: var(--color-surface);
+  border: 1px solid #dfe6ee;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  padding: 9px 12px;
+  width: 100%;
+}
+
+.patch-rollback-confirm__actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.patch-rollback-feedback {
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+  padding: 12px;
+}
+
+.patch-rollback-feedback--success {
+  background: var(--color-success-soft);
+  color: var(--color-text-primary);
+}
+
+.patch-rollback-feedback--error {
+  background: var(--color-danger-soft);
+  color: var(--color-text-primary);
+}
+
 .apply-readiness {
   background: var(--color-surface);
   border: 1px solid #dfe6ee;

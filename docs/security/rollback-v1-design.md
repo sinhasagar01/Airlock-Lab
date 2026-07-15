@@ -2,12 +2,31 @@
 
 ## Status
 
-- Status: Designed, not implemented
+- Status: **Implemented**
 - Scope: User-initiated restore of one `applied_verified` patch artifact from its
   app-local pre-apply backup
 - Roadmap item: #4
-- Depends on: #3 (status-path parser) — landed; `git_output` timeout — prerequisite
+- Depends on: #3 (status-path parser) — landed; `git_output` timeout — landed
 - Last updated: 2026-07-15
+
+### Corrections Made During Implementation
+
+Three decisions in this brief changed while it was being built. They are recorded
+here with their reasoning, in place, rather than as an appendix — a later reader
+must not have to reconstruct the argument.
+
+1. **Post-restore verification does not require `staged_count == 0`.** It
+   compares staged paths as a delta, like changed paths. See
+   [Post-Restore Verification](#post-restore-verification). The original rule
+   would have falsely quarantined a correct rollback.
+2. **The proposal moves to `rolled_back` too**, not only the artifact. See
+   [Terminal States](#terminal-states).
+3. **`acquire_repository_apply_lock` takes an `operation`** rather than
+   hardcoding `apply_patch`. See [Gate Ordering](#gate-ordering).
+
+One further guard was added that this brief did not anticipate: the **native
+apply guard had to learn `rolled_back`**. See
+[The Apply Guard Must Refuse A Rolled-Back Artifact](#the-apply-guard-must-refuse-a-rolled-back-artifact).
 
 This is an implementation brief. It records the reasoning, not only the
 conclusions, because the reasoning is what stops a later reader from
@@ -214,6 +233,12 @@ repository-wide block while the artifact stays permanently ineligible.
 - **No self-block.** `acquire_repository_apply_lock` runs the unresolved-attempt
   gate, and rollback calls it **before** inserting its own `rolling_back` row.
   The gate cannot see a row that does not exist yet.
+- **The lock records which operation held it.**
+  `acquire_repository_apply_lock` hardcoded `operation = 'apply_patch'` in its
+  durable audit row. Now that two destructive operations share the lock, it takes
+  an `operation` parameter (`apply_patch` / `rollback_patch`). Misreporting a
+  rollback as an apply in the audit trail is a small dishonesty, and the audit
+  trail is the product.
 - **A dead `rolling_back` does block.** Once in the gate's status list, an
   abandoned rollback blocks any subsequent apply _or_ rollback with
   `unresolved_apply_attempt` until reconciliation classifies it and a human
@@ -254,11 +279,42 @@ checkable form mirrors `verify_post_apply_changed_paths`:
 
 ```text
 observed_changed_paths == pre_restore_changed_paths - {target}
-staged_count == 0
+observed_staged_paths  == pre_restore_staged_paths
 HEAD unchanged across the restore
 ```
 
 Any mismatch ⇒ **`quarantine_required`**, artifact permanently ineligible.
+
+### Why The Staged Check Is A Delta And Not `staged_count == 0`
+
+**This brief originally specified `staged_count == 0`. That was wrong, and it is
+worth knowing why, because the wrong version looks stricter and therefore safer.**
+
+Precondition 5 requires only that *the target* is unstaged. `staged_count` is
+repository-wide. So: the user applies a patch, stages an unrelated file of their
+own, then rolls back. Every precondition passes, the restore succeeds, and the
+result is fully provable — and `staged_count == 0` fails it, producing permanent
+`quarantine_required` plus a repository-wide block on a repository where nothing
+went wrong.
+
+That is a **false account** — the app telling the user something untrue — which
+is the exact failure class #3 was landed to remove. Over-refusing is not
+automatically the safe direction: a refusal that misdescribes reality costs the
+same trust as a permission that misdescribes it.
+
+The argument against it is already in the paragraph above, written for changed
+paths: "the user may have dirtied unrelated files since apply, and over-refusing
+on those would be wrong." Staging is the same act with the same reasoning. The
+delta form completes the thought rather than weakening it.
+
+**This still proves the target did not become staged**, which is the thing the
+check exists for: precondition 5 guarantees the target is absent from
+`pre_restore_staged_paths`, so requiring the staged set to be *unchanged* means
+the target cannot appear in it afterwards.
+
+Covered by `rollback_tolerates_unrelated_dirty_and_staged_files`, which was
+verified to fail — returning `quarantine_required` instead of `rolled_back` —
+when the check is reverted to `staged_count == 0`.
 
 ## TOCTOU Bound
 
@@ -294,6 +350,26 @@ re-derives every check.
 `outside_repository`, `apply_locked`, `unresolved_apply_attempt`,
 `confirmation_required`, `storage_unavailable`.
 
+Added during implementation, because a code that is not on this list is a
+deviation and must be recorded rather than smuggled in:
+
+- `repository_state_unverifiable` — the current `git status` could not be read as
+  a complete, representable set of paths (a dropped status line, or a path that
+  cannot be safely compared). An observed set we cannot trust before the write is
+  one we cannot verify against after it, so this refuses rather than proceeding.
+- `repository_unavailable`, `proposal_not_found`, `artifact_not_found`,
+  `file_link_missing`, `link_mismatch`, `invalid_identifier`,
+  `invalid_persisted_record`, `forbidden_path`, `parent_unavailable` — shared
+  with the apply path, reached through the same record-loading and
+  path-boundary code.
+- `rollback_state_persistence_failed` — the restore ran and its final durable
+  state could not be saved. Distinct from every code above: those all mean
+  nothing was written.
+
+The apply path additionally gained `already_rolled_back` and
+`rollback_in_progress`; see
+[The Apply Guard Must Refuse A Rolled-Back Artifact](#the-apply-guard-must-refuse-a-rolled-back-artifact).
+
 ### Sequence
 
 ```text
@@ -307,10 +383,52 @@ acquire lock -> preflight -> drift check
 
 ## Terminal States
 
-`rolled_back` is new, on both the artifact and the attempt. The artifact becomes
-**permanently ineligible**; re-applying requires a fresh proposal and validation
-cycle. Reopening it would reintroduce replay, which every existing gate exists to
-prevent.
+`rolled_back` is new, on the artifact, the attempt, **and the proposal**. The
+artifact becomes **permanently ineligible**; re-applying requires a fresh
+proposal and validation cycle. Reopening it would reintroduce replay, which every
+existing gate exists to prevent.
+
+### Why The Proposal Moves Too
+
+This brief originally defined `rolled_back` on the artifact and the attempt only,
+and was silent on `PersistedProposedChange.status`. Apply sets that to `applied`.
+Leaving it there after the change was undone would render a rolled-back proposal
+as **applied** in Changes and both review surfaces — a lie on the product's most
+honest surface, and the same defect class as the Overview/Changes disagreement
+#2 fixed.
+
+So the proposal moves to `rolled_back` in the same write as the artifact.
+
+Its tone is **neutral**, deliberately: nothing went wrong and nothing is pending.
+The change was applied and then intentionally undone, which is a completed
+outcome rather than a success or a failure. `success` would repeat the `applied`
+claim the rollback disproved; `danger` would invent a problem that does not
+exist. In `proposedChangeStatusTone` this falls out of the default rather than
+needing a branch — an explicit `if` there was verified to be dead code and was
+removed. The behaviour is pinned by a test instead.
+
+### The Apply Guard Must Refuse A Rolled-Back Artifact
+
+**Not anticipated by this brief, and the most dangerous thing found while
+implementing it.**
+
+The native apply guard *enumerates blocked statuses* rather than allow-listing
+eligible ones: it refused `applying`/`applied`/`applied_verified` and the
+unresolved trio. A status it had never heard of fell through every arm and
+reached the write.
+
+So on arrival, an artifact with `applyStatus: "rolled_back"` **applied
+successfully** and returned `applied_verified`. Verified by test before the fix.
+
+This is F7's shape exactly — adding an exit without a native guard made an
+ineligible artifact re-appliable — and it is why the native and UI commits land
+together. The UI is not what stops the second write. Two arms were added:
+
+- `already_rolled_back` — terminal; needs a fresh proposal and validation cycle.
+- `rollback_in_progress` — an in-flight rollback refuses a concurrent apply.
+
+The enumerate-don't-allow-list shape remains. It is worth revisiting the next
+time a status is added; the guard should probably invert.
 
 **A second rollback is blocked twice over:** the artifact status refuses it, and
 the drift check independently refuses — after a rollback the file matches the

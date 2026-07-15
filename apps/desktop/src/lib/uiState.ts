@@ -133,6 +133,9 @@ export function proposedChangeStatusTone(
     return "warning";
   }
 
+  // `rolled_back` lands here deliberately, not by omission: nothing went wrong
+  // and nothing is pending, so it is neither a success nor a failure. Promoting
+  // it to `success` would repeat the "applied" claim the rollback disproved.
   return "neutral";
 }
 

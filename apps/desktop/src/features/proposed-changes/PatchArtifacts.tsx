@@ -15,6 +15,7 @@ import { patchArtifactTone } from "../../lib/uiState";
 import {
   ACKNOWLEDGE_INSPECTION_CONFIRMATION,
   APPLY_PATCH_CONFIRMATION,
+  ROLLBACK_PATCH_CONFIRMATION,
 } from "../../storage/patchApplication";
 import {
   applyReadinessGateStatusLabel,
@@ -22,6 +23,10 @@ import {
   type ApplyReadinessContext,
   type ApplyReadinessGateStatus,
 } from "./applyReadiness";
+import {
+  evaluateRollbackEligibility,
+  type RollbackEligibilityContext,
+} from "./rollbackEligibility";
 
 type PatchArtifactListProps = {
   artifacts: ProposedPatchArtifact[];
@@ -174,10 +179,17 @@ type PatchArtifactDetailProps = {
   artifact: ProposedPatchArtifact | null;
   isAcknowledging?: boolean;
   isApplying?: boolean;
+  isRollingBack?: boolean;
   isValidating?: boolean;
   onAcknowledge?: (confirmationPhrase: string) => void;
   onApply?: (confirmationPhrase: string) => void;
+  onRollback?: (confirmationPhrase: string) => void;
   onValidate?: () => void;
+  rollbackEligibilityContext?: RollbackEligibilityContext | null;
+  rollbackFeedback?: {
+    status: "success" | "error";
+    message: string;
+  } | null;
 };
 
 function readinessTone(
@@ -218,15 +230,21 @@ export function PatchArtifactDetail({
   artifact,
   isAcknowledging = false,
   isApplying = false,
+  isRollingBack = false,
   isValidating = false,
   onAcknowledge,
   onApply,
+  onRollback,
   onValidate,
+  rollbackEligibilityContext = null,
+  rollbackFeedback = null,
 }: PatchArtifactDetailProps) {
   const [isConfirmingApply, setIsConfirmingApply] = useState(false);
   const [confirmationPhrase, setConfirmationPhrase] = useState("");
   const [isConfirmingAcknowledge, setIsConfirmingAcknowledge] = useState(false);
   const [acknowledgePhrase, setAcknowledgePhrase] = useState("");
+  const [isConfirmingRollback, setIsConfirmingRollback] = useState(false);
+  const [rollbackPhrase, setRollbackPhrase] = useState("");
   const validationStatus = artifact
     ? initialPatchValidationStatus(artifact)
     : "unavailable";
@@ -256,12 +274,29 @@ export function PatchArtifactDetail({
     applyAttempt?.postApplyVerification ?? artifact?.postApplyVerification;
   const acknowledgePhraseMatches =
     acknowledgePhrase === ACKNOWLEDGE_INSPECTION_CONFIRMATION;
+  const rollbackEligibility =
+    artifact && rollbackEligibilityContext
+      ? evaluateRollbackEligibility(artifact, rollbackEligibilityContext)
+      : null;
+  const wasRolledBack = artifact?.applyStatus === "rolled_back";
+  const postRollbackVerification =
+    applyAttempt?.postRollbackVerification ?? artifact?.postRollbackVerification;
+  // Shown whenever the artifact reached a verified apply, so ineligibility and
+  // its reason are visible before any action rather than discovered by clicking.
+  const showsRollbackPanel = Boolean(
+    rollbackEligibility &&
+    (artifact?.applyStatus === "applied_verified" ||
+      artifact?.applyStatus === "rolling_back" ||
+      wasRolledBack),
+  );
 
   useEffect(() => {
     setIsConfirmingApply(false);
     setConfirmationPhrase("");
     setIsConfirmingAcknowledge(false);
     setAcknowledgePhrase("");
+    setIsConfirmingRollback(false);
+    setRollbackPhrase("");
   }, [artifact?.id]);
 
   return (
@@ -621,6 +656,170 @@ export function PatchArtifactDetail({
               role={applyFeedback.status === "error" ? "alert" : "status"}
             >
               {applyFeedback.message}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
+
+      {showsRollbackPanel && artifact && rollbackEligibility ? (
+        <section className="patch-rollback" aria-label="Rollback">
+          <div className="patch-rollback__header">
+            <IconBadge
+              icon="changes"
+              tone={wasRolledBack ? "neutral" : "warning"}
+              size="md"
+            />
+            <div>
+              <p className="card-eyebrow">App-Local Backup Restore</p>
+              <h4>{wasRolledBack ? "Rolled back" : "Roll back this patch"}</h4>
+            </div>
+            <StatusPill
+              tone={wasRolledBack ? "neutral" : "warning"}
+              size="sm"
+              showDot={false}
+            >
+              {wasRolledBack ? "rolled back" : "available"}
+            </StatusPill>
+          </div>
+
+          {wasRolledBack ? (
+            <>
+              <p>
+                This patch was restored to its pre-apply state from the
+                app-local backup taken before it was applied. Git history was
+                not touched, and nothing was staged or committed.
+                {artifact.rolledBackAt
+                  ? ` Rolled back at ${artifact.rolledBackAt}.`
+                  : ""}
+              </p>
+              <p className="patch-rollback__boundary">
+                It cannot be applied again. Re-applying would replay an approval
+                that has been undone; generate and validate a fresh proposal
+                instead.
+              </p>
+            </>
+          ) : (
+            <p>{rollbackEligibility.detail}</p>
+          )}
+
+          {postRollbackVerification ? (
+            <dl className="patch-rollback__facts">
+              <div>
+                <dt>Restored path</dt>
+                <dd>{postRollbackVerification.targetPath}</dd>
+              </div>
+              <div>
+                <dt>Other paths still changed</dt>
+                <dd>
+                  {postRollbackVerification.observedChangedPaths.join(", ") ||
+                    "None"}
+                </dd>
+              </div>
+              <div>
+                <dt>Unexpected paths</dt>
+                <dd>
+                  {postRollbackVerification.unexpectedPaths.join(", ") ||
+                    "None detected"}
+                </dd>
+              </div>
+              <div>
+                <dt>Backup of overwritten contents</dt>
+                <dd>{artifact.rollbackBackupId ?? "Not available"}</dd>
+              </div>
+            </dl>
+          ) : null}
+
+          {/* An artifact that can never be rolled back gets no button. A
+              control that exists only to refuse is dishonesty in a smaller box. */}
+          {!wasRolledBack && !rollbackEligibility.canRollback ? (
+            <p
+              className="patch-rollback__blocked"
+              role="status"
+              data-reason={rollbackEligibility.reason ?? undefined}
+            >
+              {rollbackEligibility.isPermanentlyIneligible
+                ? "Rollback unavailable: "
+                : "Rollback not available right now: "}
+              {rollbackEligibility.detail}
+            </p>
+          ) : null}
+
+          {!wasRolledBack && rollbackEligibility.canRollback && onRollback ? (
+            isConfirmingRollback ? (
+              <div
+                className="patch-rollback-confirm"
+                role="group"
+                aria-labelledby={`rollback-confirmation-${artifact.id}`}
+              >
+                <h5 id={`rollback-confirmation-${artifact.id}`}>
+                  Roll back this patch?
+                </h5>
+                {/* The two acts are different and must not share one sentence. */}
+                {rollbackEligibility.operation === "create" ? (
+                  <p>
+                    This deletes <strong>{artifact.filePath}</strong>. The file
+                    did not exist before the apply, so there are no previous
+                    contents to restore.
+                  </p>
+                ) : (
+                  <p>
+                    This restores <strong>{artifact.filePath}</strong> to its
+                    pre-apply contents, overwriting what is on disk now.
+                  </p>
+                )}
+                <p>
+                  It changes working-tree files only. It does not stage, commit,
+                  or touch Git history, and it cannot be undone from here.
+                </p>
+                <label htmlFor={`rollback-phrase-${artifact.id}`}>
+                  Type ROLL BACK to confirm
+                </label>
+                <input
+                  id={`rollback-phrase-${artifact.id}`}
+                  autoComplete="off"
+                  disabled={isRollingBack}
+                  onChange={(event) => setRollbackPhrase(event.target.value)}
+                  spellCheck={false}
+                  value={rollbackPhrase}
+                />
+                <div className="patch-rollback-confirm__actions">
+                  <SecondaryButton
+                    disabled={isRollingBack}
+                    onClick={() => {
+                      setIsConfirmingRollback(false);
+                      setRollbackPhrase("");
+                    }}
+                  >
+                    Cancel
+                  </SecondaryButton>
+                  <PrimaryButton
+                    disabled={
+                      isRollingBack ||
+                      rollbackPhrase !== ROLLBACK_PATCH_CONFIRMATION
+                    }
+                    icon="changes"
+                    onClick={() => onRollback(rollbackPhrase)}
+                  >
+                    {isRollingBack ? "Rolling back..." : "Confirm Roll Back"}
+                  </PrimaryButton>
+                </div>
+              </div>
+            ) : (
+              <SecondaryButton
+                icon="changes"
+                onClick={() => setIsConfirmingRollback(true)}
+              >
+                Roll Back Patch
+              </SecondaryButton>
+            )
+          ) : null}
+
+          {rollbackFeedback ? (
+            <p
+              className={`patch-rollback-feedback patch-rollback-feedback--${rollbackFeedback.status}`}
+              role={rollbackFeedback.status === "error" ? "alert" : "status"}
+            >
+              {rollbackFeedback.message}
             </p>
           ) : null}
         </section>

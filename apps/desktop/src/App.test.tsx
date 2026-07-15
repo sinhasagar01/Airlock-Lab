@@ -19,6 +19,7 @@ import {
   acknowledgePatchApplyAttempt,
   applyApprovedPatchArtifact,
   reconcileInterruptedPatchApplyAttempts,
+  rollbackAppliedPatchArtifact,
 } from "./storage/patchApplication";
 import { loadRepositoryValidationSnapshot } from "./storage/repositoryValidationSnapshot";
 import {
@@ -469,6 +470,7 @@ vi.mock("./storage/patchApplication", async (importOriginal) => {
     applyApprovedPatchArtifact: vi.fn(),
     acknowledgePatchApplyAttempt: vi.fn(),
     reconcileInterruptedPatchApplyAttempts: vi.fn(async () => []),
+    rollbackAppliedPatchArtifact: vi.fn(),
   };
 });
 
@@ -2644,5 +2646,264 @@ describe("App smoke tests", () => {
       "/workspace",
       "docs/guide.md",
     );
+  });
+});
+
+describe("rollback surface", () => {
+  const AI_ARTIFACT_ID = "proposal-file-ai-patch-artifact";
+  const AI_PATH = "packages/ai/src/index.ts";
+
+  const dirtyGitStatus: GitStatusSummary = {
+    repositoryId: "repo-workspace",
+    repositoryPath: "/workspace",
+    branch: "main",
+    headSha: "abc1234",
+    isGitRepository: true,
+    isClean: false,
+    changedFileCount: 1,
+    stagedCount: 0,
+    unstagedCount: 1,
+    untrackedCount: 0,
+    conflictedCount: 0,
+    files: [
+      { path: AI_PATH, kind: "modified", stage: "unstaged", statusCode: " M" },
+    ],
+    refreshedAt: "1783532500",
+  };
+
+  /** A proposal whose artifact reached a verified apply. */
+  function appliedProposedChange(): PersistedProposedChange[] {
+    return defaultProposedChanges.map((change) =>
+      change.id === "proposal-mvp-shell"
+        ? {
+            ...change,
+            status: "applied",
+            patchArtifacts: change.patchArtifacts.map((artifact) =>
+              artifact.id === AI_ARTIFACT_ID
+                ? {
+                    ...artifact,
+                    applyStatus: "applied_verified" as const,
+                    appliedAt: "1783532500",
+                    appliedBy: "local_user" as const,
+                    backupId: "backup-1",
+                  }
+                : artifact,
+            ),
+          }
+        : change,
+    );
+  }
+
+  /** The attempt carrying the post-apply baseline rollback depends on. */
+  function verifiedAttempt(withBaseline: boolean) {
+    return [
+      {
+        applyAttemptId: "apply-1",
+        repositoryId: "repo-workspace",
+        proposedChangeId: "proposal-mvp-shell",
+        approvalRequestId: "approval-provider-rfc",
+        patchArtifactId: AI_ARTIFACT_ID,
+        backupId: "backup-1",
+        status: "applied_verified" as const,
+        startedAt: "1783532400",
+        postApplyEvidence: withBaseline
+          ? {
+              artifactDigest: "a".repeat(64),
+              repositorySnapshot: {
+                repositoryId: "repo-workspace",
+                branch: "main",
+                headSha: "abc1234",
+                isClean: false,
+                changedFileCount: 1,
+                relevantFilePaths: [AI_PATH],
+                targetFileFingerprints: [
+                  {
+                    path: AI_PATH,
+                    exists: true,
+                    status: "captured" as const,
+                    contentSha256: "f".repeat(64),
+                  },
+                ],
+                capturedAt: "1783532400",
+              },
+              capturedAt: "1783532400",
+            }
+          : undefined,
+        message: "applied",
+      },
+    ];
+  }
+
+  async function openAppliedArtifact(withBaseline: boolean) {
+    vi.mocked(reconcileInterruptedPatchApplyAttempts).mockResolvedValue(
+      verifiedAttempt(withBaseline),
+    );
+    const { user } = renderApp({
+      gitStatus: dirtyGitStatus,
+      proposedChanges: appliedProposedChange(),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(
+      await screen.findByRole("button", {
+        name: new RegExp(`generated ${AI_PATH.replace(/[/.]/g, "\\$&")}`),
+      }),
+    );
+
+    return user;
+  }
+
+  // The UX contract: ineligibility and its reason are shown where the artifact
+  // is displayed, before any action. An artifact whose apply recorded no
+  // baseline can never be rolled back, and a button that exists only to refuse
+  // is dishonesty in a smaller box.
+  it("explains permanent ineligibility instead of offering a button that can only refuse", async () => {
+    await openAppliedArtifact(false);
+
+    expect(
+      await screen.findByText(/Rollback unavailable:.*can never be rolled back/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Roll Back Patch" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("requires the exact phrase and sends durable IDs only", async () => {
+    vi.mocked(rollbackAppliedPatchArtifact).mockResolvedValue({
+      status: "rolled_back",
+      rollbackAttemptId: "rollback-1",
+      proposedChangeId: "proposal-mvp-shell",
+      patchArtifactId: AI_ARTIFACT_ID,
+      rollbackBackupId: "rollback-backup-1",
+      rolledBackAt: "1783532600",
+      postRollbackGitStatus: {
+        ...dirtyGitStatus,
+        isClean: true,
+        changedFileCount: 0,
+        unstagedCount: 0,
+        files: [],
+      },
+      postRollbackVerification: {
+        status: "rolled_back",
+        targetPath: AI_PATH,
+        expectedChangedPaths: [],
+        observedChangedPaths: [],
+        unexpectedPaths: [],
+        missingExpectedPaths: [],
+        expectedStagedPaths: [],
+        observedStagedPaths: [],
+        verifiedAt: "1783532600",
+        message: "Restored and verified.",
+      },
+      message: "Restored and verified.",
+    });
+    const user = await openAppliedArtifact(true);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Roll Back Patch" }),
+    );
+
+    // The artifact's operation is `modify`, so the copy must say it restores
+    // previous contents rather than that it deletes the file.
+    expect(
+      screen.getByText(/restores.*to its pre-apply contents/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /does not stage, commit, or touch Git history, and it cannot be undone from here/i,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^This deletes/)).not.toBeInTheDocument();
+
+    const phrase = screen.getByLabelText("Type ROLL BACK to confirm");
+    const confirm = screen.getByRole("button", { name: "Confirm Roll Back" });
+
+    await user.type(phrase, "roll back");
+    expect(confirm).toBeDisabled();
+    expect(rollbackAppliedPatchArtifact).not.toHaveBeenCalled();
+
+    await user.clear(phrase);
+    await user.type(phrase, "ROLL BACK");
+    expect(confirm).toBeEnabled();
+    await user.click(confirm);
+
+    await waitFor(() =>
+      expect(rollbackAppliedPatchArtifact).toHaveBeenCalledWith(
+        "repo-workspace",
+        "proposal-mvp-shell",
+        AI_ARTIFACT_ID,
+        "ROLL BACK",
+      ),
+    );
+    expect(await screen.findByText("Restored and verified.")).toBeInTheDocument();
+  });
+
+  // A quarantined rollback is not an error to swallow: the write happened and
+  // could not be proven.
+  it("surfaces a quarantined rollback with its unexpected-path evidence", async () => {
+    vi.mocked(rollbackAppliedPatchArtifact).mockResolvedValue({
+      status: "quarantine_required",
+      rollbackAttemptId: "rollback-1",
+      proposedChangeId: "proposal-mvp-shell",
+      patchArtifactId: AI_ARTIFACT_ID,
+      rollbackBackupId: "rollback-backup-1",
+      rolledBackAt: "1783532600",
+      postRollbackGitStatus: dirtyGitStatus,
+      postRollbackVerification: {
+        status: "quarantine_required",
+        targetPath: AI_PATH,
+        expectedChangedPaths: [],
+        observedChangedPaths: ["surprise.txt"],
+        unexpectedPaths: ["surprise.txt"],
+        missingExpectedPaths: [],
+        expectedStagedPaths: [],
+        observedStagedPaths: [],
+        verifiedAt: "1783532600",
+        message:
+          "Post-restore verification could not prove that the rollback restored only the target path.",
+      },
+      message:
+        "Post-restore verification could not prove that the rollback restored only the target path.",
+    });
+    const user = await openAppliedArtifact(true);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Roll Back Patch" }),
+    );
+    await user.type(
+      screen.getByLabelText("Type ROLL BACK to confirm"),
+      "ROLL BACK",
+    );
+    await user.click(screen.getByRole("button", { name: "Confirm Roll Back" }));
+
+    expect(
+      await screen.findByText(/could not prove that the rollback restored/i),
+    ).toBeInTheDocument();
+  });
+
+  it("refuses a drifted target without claiming anything was restored", async () => {
+    const { PatchApplicationError: RealError } = await vi.importActual<
+      typeof import("./storage/patchApplication")
+    >("./storage/patchApplication");
+    vi.mocked(rollbackAppliedPatchArtifact).mockRejectedValue(
+      new RealError(
+        "target_drifted",
+        "The target file changed after this patch was applied. Rollback will not overwrite work done since the apply.",
+      ),
+    );
+    const user = await openAppliedArtifact(true);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Roll Back Patch" }),
+    );
+    await user.type(
+      screen.getByLabelText("Type ROLL BACK to confirm"),
+      "ROLL BACK",
+    );
+    await user.click(screen.getByRole("button", { name: "Confirm Roll Back" }));
+
+    expect(
+      await screen.findByText(/will not overwrite work done since the apply/i),
+    ).toBeInTheDocument();
   });
 });

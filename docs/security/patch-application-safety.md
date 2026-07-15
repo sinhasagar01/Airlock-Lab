@@ -9,7 +9,10 @@
   typed confirmation pass
 - Recovery status: Pre-apply backups, conservative interrupted-attempt
   reconciliation, repository-scoped cross-process locking, and bounded Git
-  child-process timeouts implemented; automated rollback remains future work
+  child-process timeouts implemented. User-initiated rollback of a verified
+  apply is implemented; see
+  [`rollback-v1-design.md`](./rollback-v1-design.md). Automatic rollback after an
+  uncertain failure remains explicitly rejected.
 - Release classification: Local MVP capability with a documented disposable
   packaged-app QA protocol; execution evidence is still required per build
 - Last updated: 2026-07-15
@@ -85,7 +88,9 @@ The current product cannot:
 - Stage or commit changes.
 - Apply from browser preview or accept raw patch text from React.
 - Apply more than one artifact in one action.
-- Automatically roll back a backup.
+- Automatically roll back after an uncertain failure. Rollback is
+  user-initiated, requires a verified apply and its own typed confirmation, and
+  refuses on any drift.
 
 Approval and `dry_run_passed` remain review evidence, not independent write
 permission. Exact confirmation and the native command are always required.
@@ -466,8 +471,9 @@ the artifact's target file:
   otherwise incomplete targets block application.
 - Backup bytes never cross into React. The UI receives only the backup ID.
 
-These records are recovery evidence, not an implemented rollback action.
-Automatic or user-triggered restore remains future work.
+These records are the pre-image a user-initiated rollback restores from; see
+[`rollback-v1-design.md`](./rollback-v1-design.md). Automatic restore after an
+uncertain failure remains rejected.
 
 ## Application Attempt And Audit State
 
@@ -539,7 +545,8 @@ Classification is intentionally conservative:
 
 Agent Runs and Approval Review show attempt and backup IDs plus a Git-state
 comparison for unresolved outcomes. Apply remains disabled. There is no retry
-or rollback control.
+control, and no rollback control: rollback requires a verified apply, so an
+unresolved outcome can never reach it.
 
 ## Post-Apply Verification
 
@@ -599,7 +606,14 @@ status and diffs.
 
 The product must not automatically run `git reset`, `git checkout`, `git clean`,
 or an inverse patch. Automatic rollback can overwrite concurrent user work and
-would introduce a second destructive operation.
+would put a second destructive operation outside human control.
+
+The user-initiated rollback that now exists is not this, and the distinction is
+the whole point: it requires a *verified* apply, a human, a typed phrase, and a
+drift check that refuses rather than overwrites. It is never reachable from an
+uncertain outcome — a quarantined apply wrote paths we cannot account for and
+have no backup for, so restoring the declared target would undo the accountable
+half and report it as a rollback.
 
 Recovery UI should:
 
@@ -738,12 +752,12 @@ native tests. Before broader distribution, complete:
 
 - Execute and retain the packaged desktop QA evidence for each release build,
   including create, modify, and delete fixtures as support expands.
-- Automated rollback design using the persisted backup records.
 - A separately scoped, expiring application approval if the threat model grows
   beyond the current trusted local desktop UI.
 - Broader create, modify, delete, and rename policy coverage; v1 remains a
   single supported text artifact with rename and binary application blocked.
 
 Until those items land, application remains a local MVP capability for one
-reviewed artifact at a time. Rollback, staging, committing, and multi-artifact
-transactions are not available.
+reviewed artifact at a time. Staging, committing, and multi-artifact
+transactions are not available. Rollback is available for a verified apply only,
+and only from its app-local pre-apply backup.

@@ -3,10 +3,12 @@ import type { GitStatusSummary } from "@ai-dev/core";
 import type {
   PatchApplyAttempt,
   PostApplyPathVerification,
+  PostRollbackVerification,
 } from "@ai-dev/ai";
 
 export const APPLY_PATCH_CONFIRMATION = "APPLY PATCH";
 export const ACKNOWLEDGE_INSPECTION_CONFIRMATION = "INSPECTED";
+export const ROLLBACK_PATCH_CONFIRMATION = "ROLL BACK";
 
 type NativeGitStatusSummary = {
   repository_id: string;
@@ -124,6 +126,61 @@ export async function applyApprovedPatchArtifact(
     return {
       ...result,
       postApplyGitStatus: normalizeGitStatus(result.postApplyGitStatus),
+    };
+  } catch (error) {
+    throw normalizeNativeError(error);
+  }
+}
+
+type NativeRollbackPatchResult = {
+  status: "rolled_back" | "quarantine_required";
+  rollbackAttemptId: string;
+  proposedChangeId: string;
+  patchArtifactId: string;
+  rollbackBackupId: string;
+  rolledBackAt: string;
+  postRollbackGitStatus: NativeGitStatusSummary;
+  postRollbackVerification: PostRollbackVerification;
+  message: string;
+};
+
+export type RollbackPatchResult = Omit<
+  NativeRollbackPatchResult,
+  "postRollbackGitStatus"
+> & {
+  postRollbackGitStatus: GitStatusSummary;
+};
+
+/**
+ * Restores one verified apply from its app-local pre-apply backup.
+ *
+ * Durable IDs and the exact phrase only: no path, no file contents, no Git
+ * arguments. Native reloads every record and re-derives every check, including
+ * the ones this app already evaluated for display. Nothing here grants
+ * authority.
+ */
+export async function rollbackAppliedPatchArtifact(
+  repositoryId: string,
+  proposedChangeId: string,
+  patchArtifactId: string,
+  confirmationPhrase: string,
+): Promise<RollbackPatchResult> {
+  try {
+    const result = await invoke<NativeRollbackPatchResult>(
+      "rollback_applied_patch_artifact",
+      {
+        input: {
+          repositoryId,
+          proposedChangeId,
+          patchArtifactId,
+          confirmationPhrase,
+        },
+      },
+    );
+
+    return {
+      ...result,
+      postRollbackGitStatus: normalizeGitStatus(result.postRollbackGitStatus),
     };
   } catch (error) {
     throw normalizeNativeError(error);

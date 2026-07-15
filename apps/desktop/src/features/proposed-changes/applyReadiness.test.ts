@@ -111,6 +111,34 @@ describe("evaluateApplyReadiness", () => {
     }
   });
 
+  // Rollback creates a new terminal state, and this gate enumerates blocked
+  // statuses rather than allow-listing eligible ones — so a status it has not
+  // heard of reads as "ready to apply". The native guard is the real bar; this
+  // keeps the surface from inviting a click that can only ever fail.
+  it("blocks a rolled-back artifact from being applied again", () => {
+    const result = evaluateApplyReadiness(
+      generatedArtifact({ applyStatus: "rolled_back" }),
+      readyContext,
+    );
+
+    expect(result.canApply).toBe(false);
+    expect(result.status).toBe("blocked");
+    expect(gateStatus(result, "apply_state")).toBe("blocked");
+    expect(
+      result.gates.find((item) => item.id === "apply_state")?.detail,
+    ).toMatch(/permanently ineligible/i);
+  });
+
+  it("blocks an artifact whose rollback is in flight", () => {
+    const result = evaluateApplyReadiness(
+      generatedArtifact({ applyStatus: "rolling_back" }),
+      readyContext,
+    );
+
+    expect(result.canApply).toBe(false);
+    expect(gateStatus(result, "apply_state")).toBe("blocked");
+  });
+
   it("blocks artifacts with unresolved interrupted apply evidence", () => {
     for (const applyStatus of [
       "interrupted",

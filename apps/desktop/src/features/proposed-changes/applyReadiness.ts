@@ -115,6 +115,11 @@ export function evaluateApplyReadiness(
     artifact.applyStatus === "interrupted" ||
     artifact.applyStatus === "needs_inspection" ||
     artifact.applyStatus === "quarantine_required";
+  // A rolled-back artifact is terminal, not a return to `ready_to_apply`. The
+  // native guard is what actually refuses the second write; this keeps the
+  // surface from inviting a click that can only ever fail.
+  const rolledBack = artifact.applyStatus === "rolled_back";
+  const rollbackInFlight = artifact.applyStatus === "rolling_back";
   const pathAllowed = hasAllowedRelativePath(artifact.filePath);
   const forbiddenPath = isForbiddenPath(artifact.filePath);
   const structurePassed =
@@ -169,18 +174,25 @@ export function evaluateApplyReadiness(
       "apply_state",
       "Artifact has not already been applied",
       applicationVerified ||
-        artifact.applyStatus === "applying" || unresolvedApplyAttempt
+        artifact.applyStatus === "applying" ||
+        rolledBack ||
+        rollbackInFlight ||
+        unresolvedApplyAttempt
         ? "blocked"
         : "passed",
       applicationVerified
         ? "This artifact has already been applied and its changed paths were verified."
         : artifact.applyStatus === "applying"
           ? "A native application attempt is already in progress."
-          : artifact.applyStatus === "quarantine_required"
-            ? "Post-apply changed-path verification requires manual inspection before any future application."
-          : unresolvedApplyAttempt
-            ? "An interrupted application attempt requires manual inspection before any future retry."
-            : "No completed or in-progress application attempt blocks this artifact.",
+          : rolledBack
+            ? "This patch was rolled back and is permanently ineligible. Generate and validate a fresh proposal instead."
+            : rollbackInFlight
+              ? "A rollback of this patch is in progress."
+              : artifact.applyStatus === "quarantine_required"
+                ? "Post-apply changed-path verification requires manual inspection before any future application."
+                : unresolvedApplyAttempt
+                  ? "An interrupted application attempt requires manual inspection before any future retry."
+                  : "No completed or in-progress application attempt blocks this artifact.",
     ),
     gate(
       "approval",

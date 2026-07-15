@@ -4,6 +4,7 @@ import {
   applyApprovedPatchArtifact,
   PatchApplicationError,
   reconcileInterruptedPatchApplyAttempts,
+  rollbackAppliedPatchArtifact,
 } from "./patchApplication";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -173,5 +174,141 @@ describe("applyApprovedPatchArtifact", () => {
       expect(error).toBeInstanceOf(PatchApplicationError);
       expect((error as Error).message).not.toContain("private native path");
     }
+  });
+});
+
+describe("rollbackAppliedPatchArtifact", () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset();
+  });
+
+  const nativeRollbackResult = {
+    status: "rolled_back",
+    rollbackAttemptId: "rollback-1",
+    proposedChangeId: "proposal-1",
+    patchArtifactId: "artifact-1",
+    rollbackBackupId: "rollback-backup-1",
+    rolledBackAt: "1783532600",
+    postRollbackGitStatus: {
+      repository_id: "repo-1",
+      repository_path: "/workspace",
+      branch: "main",
+      head_sha: "abc1234",
+      is_git_repository: true,
+      is_clean: true,
+      changed_file_count: 0,
+      staged_count: 0,
+      unstaged_count: 0,
+      untracked_count: 0,
+      conflicted_count: 0,
+      files: [],
+      refreshed_at: "1783532600",
+    },
+    postRollbackVerification: {
+      status: "rolled_back",
+      targetPath: "src/App.tsx",
+      expectedChangedPaths: [],
+      observedChangedPaths: [],
+      unexpectedPaths: [],
+      missingExpectedPaths: [],
+      expectedStagedPaths: [],
+      observedStagedPaths: [],
+      verifiedAt: "1783532600",
+      message: "Restored and verified safely.",
+    },
+    message: "Restored and verified safely.",
+  };
+
+  // The request carries durable IDs and the typed phrase only. A path, the file
+  // bytes, or a Git argument crossing this boundary would make React the
+  // authority for a destructive write.
+  it("sends only durable IDs and the confirmation phrase", async () => {
+    vi.mocked(invoke).mockResolvedValue(nativeRollbackResult);
+
+    await rollbackAppliedPatchArtifact(
+      "repo-1",
+      "proposal-1",
+      "artifact-1",
+      "ROLL BACK",
+    );
+
+    expect(invoke).toHaveBeenCalledWith("rollback_applied_patch_artifact", {
+      input: {
+        repositoryId: "repo-1",
+        proposedChangeId: "proposal-1",
+        patchArtifactId: "artifact-1",
+        confirmationPhrase: "ROLL BACK",
+      },
+    });
+
+    const [, payload] = vi.mocked(invoke).mock.calls[0] as [
+      string,
+      { input: Record<string, unknown> },
+    ];
+    expect(Object.keys(payload.input).sort()).toEqual([
+      "confirmationPhrase",
+      "patchArtifactId",
+      "proposedChangeId",
+      "repositoryId",
+    ]);
+  });
+
+  it("normalizes the native git status into the shared contract", async () => {
+    vi.mocked(invoke).mockResolvedValue(nativeRollbackResult);
+
+    const result = await rollbackAppliedPatchArtifact(
+      "repo-1",
+      "proposal-1",
+      "artifact-1",
+      "ROLL BACK",
+    );
+
+    expect(result.status).toBe("rolled_back");
+    expect(result.postRollbackGitStatus.repositoryId).toBe("repo-1");
+    expect(result.postRollbackGitStatus.isClean).toBe(true);
+    expect(result.postRollbackGitStatus.headSha).toBe("abc1234");
+  });
+
+  // Quarantine is an outcome, not an exception: the write happened and could
+  // not be proven. It must reach the caller intact rather than as a failure.
+  it("returns a quarantined rollback as a result rather than throwing", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      ...nativeRollbackResult,
+      status: "quarantine_required",
+      postRollbackVerification: {
+        ...nativeRollbackResult.postRollbackVerification,
+        status: "quarantine_required",
+        unexpectedPaths: ["other.txt"],
+      },
+      message: "Post-restore verification could not prove the rollback.",
+    });
+
+    const result = await rollbackAppliedPatchArtifact(
+      "repo-1",
+      "proposal-1",
+      "artifact-1",
+      "ROLL BACK",
+    );
+
+    expect(result.status).toBe("quarantine_required");
+    expect(result.postRollbackVerification.unexpectedPaths).toEqual([
+      "other.txt",
+    ]);
+  });
+
+  it("surfaces a sanitized native refusal without leaking native detail", async () => {
+    vi.mocked(invoke).mockRejectedValue({
+      code: "target_drifted",
+      message: "The target file changed after this patch was applied.",
+    });
+
+    await expect(
+      rollbackAppliedPatchArtifact(
+        "repo-1",
+        "proposal-1",
+        "artifact-1",
+        "ROLL BACK",
+      ),
+    ).rejects.toMatchObject({ code: "target_drifted" });
   });
 });

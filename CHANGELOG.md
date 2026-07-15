@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+- Added rollback for an applied patch. A pre-apply backup nobody can restore is
+  a receipt, not a safety net. A dedicated native command now restores one
+  `applied_verified` artifact from its app-local pre-apply backup behind the
+  typed phrase `ROLL BACK`. React passes durable IDs and the phrase only — never
+  a path, file contents, or a Git argument. Restores happen **only** from
+  app-local backups: no `reset`, `checkout`, `clean`, `add`, or `commit` exists
+  anywhere in the path, and Git history is never touched.
+
+  It refuses, before writing anything, when the target changed since the apply,
+  was deleted, or is staged; when HEAD or the branch moved; when the apply left
+  no post-apply baseline to compare against; when the backup fails its integrity
+  check; or when the current file cannot itself be backed up. After the write it
+  verifies what it restored — the target holds exactly its pre-apply bytes (or is
+  gone, for a create), no other path changed, and the index is untouched — and
+  quarantines anything it cannot prove.
+- Fixed a rolled-back patch being re-appliable. The native apply guard
+  enumerates blocked statuses rather than allow-listing eligible ones, so a
+  status it had not heard of fell through every arm and reached the write: an
+  artifact marked `rolled_back` applied successfully and reported
+  `applied_verified`. It is now refused natively, along with an apply attempted
+  while a rollback is in flight.
+- Fixed a rolled-back proposal still rendering as `applied`. The proposal now
+  moves to `rolled_back` alongside its artifact, shown as a calm completed
+  outcome rather than a success or a failure.
+- An interrupted rollback no longer disappears. `rolling_back` is persisted
+  before the write, is seen by reconciliation, blocks every later apply or
+  rollback for the repository, and classifies unconditionally to
+  `quarantine_required` — no probe, no retry, no re-restore. The existing
+  `INSPECTED` acknowledgement remains the exit.
+- The repository apply lock now records which destructive operation held it
+  rather than always claiming `apply_patch`.
+
 - Fixed a fail-open working-tree check. A failed `git status` was defaulted to
   empty output, so an unreadable index (for example while another process holds
   `index.lock`) reported zero changed files and a clean working tree, letting
