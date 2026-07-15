@@ -2091,6 +2091,71 @@ fn is_conflicted_status(index_status: char, worktree_status: char) -> bool {
     )
 }
 
+/// Decodes git's C-style quoting from a porcelain path.
+///
+/// git quotes any path containing a space, a non-ASCII byte, a quote, or a
+/// backslash, escaping bytes as `\NNN` octal plus the usual C escapes. An
+/// unquoted path is returned unchanged, which is also what `core.quotepath=false`
+/// produces -- that setting is not a fix, because git still quotes the space
+/// case.
+///
+/// Escapes are byte-level and a repository path need not be valid UTF-8, so the
+/// decoded bytes are converted strictly. A lossy conversion would substitute
+/// U+FFFD and yield a path that silently fails to match the approved one, which
+/// is precisely the defect this function exists to remove. Returning `None`
+/// rejects the line; the caller's raw line count is what keeps that rejection
+/// fail-closed rather than fail-open.
+fn unquote_porcelain_path(raw: &str) -> Option<String> {
+    let bytes = raw.as_bytes();
+
+    if bytes.len() < 2 || bytes[0] != b'"' || bytes[bytes.len() - 1] != b'"' {
+        return Some(raw.to_string());
+    }
+
+    let inner = &bytes[1..bytes.len() - 1];
+    let mut decoded: Vec<u8> = Vec::with_capacity(inner.len());
+    let mut index = 0;
+
+    while index < inner.len() {
+        if inner[index] != b'\\' {
+            decoded.push(inner[index]);
+            index += 1;
+            continue;
+        }
+
+        index += 1;
+        let escape = *inner.get(index)?;
+
+        match escape {
+            b'a' => decoded.push(0x07),
+            b'b' => decoded.push(0x08),
+            b't' => decoded.push(b'\t'),
+            b'n' => decoded.push(b'\n'),
+            b'v' => decoded.push(0x0b),
+            b'f' => decoded.push(0x0c),
+            b'r' => decoded.push(b'\r'),
+            b'"' => decoded.push(b'"'),
+            b'\\' => decoded.push(b'\\'),
+            b'0'..=b'7' => {
+                let digits = inner.get(index..index + 3)?;
+                if !digits.iter().all(|digit| (b'0'..=b'7').contains(digit)) {
+                    return None;
+                }
+                let value = digits
+                    .iter()
+                    .fold(0u32, |total, digit| total * 8 + u32::from(digit - b'0'));
+                decoded.push(u8::try_from(value).ok()?);
+                index += 2;
+            }
+            _ => return None,
+        }
+
+        index += 1;
+    }
+
+    String::from_utf8(decoded).ok()
+}
+
 /// Parses porcelain v1 output into changed files, and reports how many status
 /// lines git actually emitted.
 ///
@@ -2127,14 +2192,23 @@ fn parse_porcelain_line(line: &str) -> Option<GitChangedFile> {
         return None;
     }
 
-    let (old_path, path) = if index_status == 'R' || index_status == 'C' {
-        raw_path
-            .split_once(" -> ")
-            .map(|(old_path, new_path)| (Some(old_path.to_string()), new_path.to_string()))
-            .unwrap_or((None, raw_path.to_string()))
+    let (raw_old_path, raw_new_path) = if index_status == 'R' || index_status == 'C' {
+        match raw_path.split_once(" -> ") {
+            Some((old_path, new_path)) => (Some(old_path), new_path),
+            None => (None, raw_path),
+        }
     } else {
-        (None, raw_path.to_string())
+        (None, raw_path)
     };
+    let path = unquote_porcelain_path(raw_new_path)?;
+    let old_path = match raw_old_path {
+        Some(old_path) => Some(unquote_porcelain_path(old_path)?),
+        None => None,
+    };
+
+    if !is_safe_relative_path(&path) {
+        return None;
+    }
 
     Some(GitChangedFile {
         path,
@@ -5837,6 +5911,68 @@ mod tests {
         remove_temp_dir(&outside_path);
     }
 
+    fn assert_modify_apply_verifies_for_target(label: &str, file_path: &str) {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir(label);
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, file_path, "old\n");
+            let head_before = git_output(repository_path.to_str().unwrap(), &["rev-parse", "HEAD"]);
+            let pool = create_apply_test_pool().await;
+            let raw_diff = format!(
+                "diff --git a/{file_path} b/{file_path}\n--- a/{file_path}\n+++ b/{file_path}\n@@ -1 +1 @@\n-old\n+new\n"
+            );
+            let input = seed_apply_test_records_for(
+                &pool,
+                &repository_path,
+                "approved",
+                file_path,
+                "modify",
+                &raw_diff,
+            )
+            .await;
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let result = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
+                .await
+                .unwrap_or_else(|error| panic!("apply {file_path} failed: {}", error.code));
+
+            assert_eq!(
+                fs::read_to_string(repository_path.join(file_path)).unwrap(),
+                "new\n"
+            );
+            // git quotes this path in porcelain output. Before the parser
+            // unquoted it, the patch applied correctly and was then reported as
+            // an unaccountable write.
+            assert_eq!(result.status, "applied_verified");
+            assert_eq!(result.post_apply_verification.status, "applied_verified");
+            assert_eq!(
+                result.post_apply_verification.observed_changed_paths,
+                vec![file_path.to_string()]
+            );
+            assert!(result.post_apply_verification.unexpected_paths.is_empty());
+            assert!(result
+                .post_apply_verification
+                .missing_expected_paths
+                .is_empty());
+            assert_eq!(result.post_apply_git_status.staged_count, 0);
+            assert_eq!(
+                git_output(repository_path.to_str().unwrap(), &["rev-parse", "HEAD"]),
+                head_before
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    #[test]
+    fn safe_apply_verifies_a_modify_patch_with_a_spaced_target_filename() {
+        assert_modify_apply_verifies_for_target("safe-apply-spaced", "My Notes.md");
+    }
+
+    #[test]
+    fn safe_apply_verifies_a_modify_patch_with_a_non_ascii_target_filename() {
+        assert_modify_apply_verifies_for_target("safe-apply-non-ascii", "café.txt");
+    }
+
     #[test]
     fn safe_apply_verifies_a_modify_patch_against_a_tracked_file() {
         tauri::async_runtime::block_on(async {
@@ -6073,6 +6209,51 @@ mod tests {
             assert_eq!(blocked.code, "unresolved_apply_attempt");
             assert!(repository_path.join("generated.txt").exists());
             assert!(!repository_path.join("unexpected.txt").exists());
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    #[test]
+    fn reconciliation_repairs_a_clearly_applied_attempt_with_a_spaced_target() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("reconcile-spaced-target");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "My Notes.md", "old\n");
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records_for(
+                &pool,
+                &repository_path,
+                "approved",
+                "My Notes.md",
+                "modify",
+                "diff --git a/My Notes.md b/My Notes.md\n--- a/My Notes.md\n+++ b/My Notes.md\n@@ -1 +1 @@\n-old\n+new\n",
+            )
+            .await;
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let result = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
+                .await
+                .expect("apply spaced-target patch");
+            reset_successful_apply_to_unfinished(&pool, &result, false, false).await;
+
+            let attempts =
+                reconcile_interrupted_patch_apply_attempts_with_pool(&pool, &lock_directory)
+                    .await
+                    .expect("reconcile applied attempt");
+            let attempt = attempts
+                .iter()
+                .find(|attempt| attempt.apply_attempt_id == result.apply_attempt_id)
+                .expect("reconciled attempt");
+
+            // target_changed compares the observed status path with the artifact
+            // path. While the observed path arrived quoted it never matched, so a
+            // genuinely applied patch could not reach `applied` and stuck at
+            // needs_inspection -- wrong in fact and permanently blocking.
+            assert_eq!(attempt.status, "applied_verified");
+            // The audit-evidence consumers (pre-apply and failure snapshots) feed
+            // git_status_evidence_changed, which compares whole status JSON. Both
+            // sides are produced by the same parser, so unquoting keeps them
+            // comparing like with like: a spaced target still reads as changed.
+            assert_eq!(attempt.current_git_status_changed, Some(true));
             remove_temp_dir(&repository_path);
         });
     }
@@ -6455,6 +6636,49 @@ mod tests {
     }
 
     #[test]
+    fn git_diff_resolves_for_quoted_paths_as_the_status_parser_reports_them() {
+        let repository = create_temp_dir("git-diff-quoted-paths");
+        init_git_repo(&repository);
+        commit_test_file(&repository, "My Notes.md", "old\n");
+        commit_test_file(&repository, "café.txt", "old\n");
+        fs::write(repository.join("My Notes.md"), "new\n").unwrap();
+        fs::write(repository.join("café.txt"), "new\n").unwrap();
+
+        // Changes feeds these paths straight from the status summary into the
+        // diff loader. While the parser reported the quoted form, the loader was
+        // handed `"My Notes.md"` and git matched no such path, so the diff came
+        // back empty. Unquoting has to make the whole chain resolve, not just the
+        // verification comparison.
+        let summary = load_git_status_summary(
+            "repo-diff".to_string(),
+            repository.to_string_lossy().to_string(),
+        );
+        assert_eq!(summary.files.len(), 2);
+
+        for file in &summary.files {
+            let diff = load_git_file_diff(
+                "repo-diff".to_string(),
+                repository.to_string_lossy().to_string(),
+                file.path.clone(),
+                file.stage.clone(),
+                file.kind.clone(),
+                file.old_path.clone(),
+            );
+
+            assert_eq!(diff.kind, "unstaged", "diff kind for {}", file.path);
+            assert_eq!(diff.additions, 1, "additions for {}", file.path);
+            assert_eq!(diff.deletions, 1, "deletions for {}", file.path);
+            assert!(
+                diff.raw_diff.is_some(),
+                "raw diff missing for {}",
+                file.path
+            );
+        }
+
+        remove_temp_dir(&repository);
+    }
+
+    #[test]
     fn git_diff_rejects_traversal_and_absolute_paths() {
         let repository = create_temp_dir("git-diff-safety");
         init_git_repo(&repository);
@@ -6492,6 +6716,67 @@ mod tests {
         assert!(unsafe_old_path_diff.raw_diff.is_none());
 
         remove_temp_dir(&repository);
+    }
+
+    #[test]
+    fn porcelain_paths_are_unquoted_and_unescaped() {
+        // git quotes and C-escapes any path containing a space, a non-ASCII
+        // byte, a quote, or a backslash. Taking the quoted form literally is
+        // what makes a correctly applied patch fail exact-path verification.
+        let spaced = parse_porcelain_line(" M \"with space.txt\"").unwrap();
+        assert_eq!(spaced.path, "with space.txt");
+
+        let accented = parse_porcelain_line("?? \"caf\\303\\251.txt\"").unwrap();
+        assert_eq!(accented.path, "café.txt");
+
+        let quoted_name = parse_porcelain_line(" M \"say \\\"hi\\\".txt\"").unwrap();
+        assert_eq!(quoted_name.path, "say \"hi\".txt");
+
+        let backslash = parse_porcelain_line(" M \"back\\\\slash.txt\"").unwrap();
+        assert_eq!(backslash.path, "back\\slash.txt");
+    }
+
+    #[test]
+    fn porcelain_unquoted_paths_are_unchanged() {
+        let plain = parse_porcelain_line(" M plain.txt").unwrap();
+        assert_eq!(plain.path, "plain.txt");
+        // core.quotepath=false emits raw UTF-8 without quotes.
+        let raw_utf8 = parse_porcelain_line("?? café.txt").unwrap();
+        assert_eq!(raw_utf8.path, "café.txt");
+    }
+
+    #[test]
+    fn porcelain_unquotes_both_sides_of_a_rename() {
+        let renamed = parse_porcelain_line("R  \"old name.txt\" -> \"new name.txt\"").unwrap();
+        assert_eq!(renamed.old_path.as_deref(), Some("old name.txt"));
+        assert_eq!(renamed.path, "new name.txt");
+    }
+
+    #[test]
+    fn porcelain_rejects_a_path_that_is_not_valid_utf8() {
+        // \351 is Latin-1 'é': a legal POSIX filename that is not valid UTF-8.
+        // Lossy conversion would yield U+FFFD, producing a path that silently
+        // does not match -- the exact bug this fix removes, wearing a different
+        // hat. Rejecting is only fail-closed because the raw line count makes
+        // the dropped line visible; see parse_git_status_lines.
+        assert!(parse_porcelain_line("?? \"caf\\351.txt\"").is_none());
+    }
+
+    #[test]
+    fn porcelain_rejects_malformed_escapes() {
+        assert!(parse_porcelain_line("?? \"trailing\\\"").is_none());
+        assert!(parse_porcelain_line("?? \"bad\\9.txt\"").is_none());
+    }
+
+    #[test]
+    fn git_status_counts_every_line_even_when_one_cannot_be_parsed() {
+        // A rejected line must not vanish. filter_map drops it from `files`, so
+        // the count has to come from the raw status output; otherwise a changed
+        // path the app cannot represent becomes invisible to verification.
+        let (files, line_count) = parse_git_status_lines("?? ok.txt\n?? \"caf\\351.txt\"");
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(line_count, 2);
     }
 
     #[test]
