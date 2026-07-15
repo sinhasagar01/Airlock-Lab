@@ -284,9 +284,25 @@ export function App() {
     useState<string | null>(null);
   const [resetConfirmationText, setResetConfirmationText] = useState("");
 
+  // In-memory only, defaulting to the first saved repository.
+  //
+  // Persisting the selection needs a key-value store this app does not have --
+  // every storage module is a purpose-built table -- so it is recorded as its
+  // own roadmap item rather than half-built here. Without it a restart falls
+  // back to the first repository, which is exactly today's behaviour: no
+  // regression, one click to re-select.
+  const [activeRepositoryId, setActiveRepositoryId] = useState<string | null>(
+    null,
+  );
   const hasActiveRepository = repositories.length > 0;
   const hasNativeRuntime = isTauriRuntime();
-  const activeRepository = repositories[0] ?? emptyRepository;
+  // Falls back to the first repository when nothing is selected, or when the
+  // selected one is gone: a selection that no longer resolves must not leave the
+  // app pointing at a repository that does not exist.
+  const activeRepository =
+    repositories.find((repository) => repository.id === activeRepositoryId) ??
+    repositories[0] ??
+    emptyRepository;
   const indexedRepositoryCount = useMemo(
     () =>
       repositories.filter((repository) => repository.status === "indexed")
@@ -400,6 +416,14 @@ export function App() {
     gitStatusSummary?.repositoryId === activeRepository.id
       ? gitStatusSummary
       : null;
+  // A destructive native operation targets the repository its proposal names,
+  // and it re-derives everything from durable records -- so a switch cannot
+  // misdirect the write. What a switch *can* do is move the surface out from
+  // under the result: the operation would finish and report against a
+  // repository the user is no longer looking at. Blocked while in flight.
+  const isPatchOperationInFlight = Boolean(
+    applyingPatchArtifactId || rollingBackPatchArtifactId,
+  );
   const effectiveChangedFileCount =
     activeGitStatusSummary?.changedFileCount ?? activeRepository.openChanges;
   const effectiveBranch =
@@ -925,8 +949,14 @@ export function App() {
           candidate.id === appliedChange.id ? appliedChange : candidate,
         ),
       );
-      setGitStatusSummary(result.postApplyGitStatus);
-      setGitStatusState("ready");
+      // Belt and braces alongside the in-flight switch block: the derived
+      // facts already fail closed on a repository-id mismatch, and switching is
+      // blocked while this runs -- but a result must never install itself as the
+      // live status of a repository it does not describe. One comparison.
+      if (result.postApplyGitStatus.repositoryId === activeRepository.id) {
+        setGitStatusSummary(result.postApplyGitStatus);
+        setGitStatusState("ready");
+      }
       setRepositories((currentRepositories) =>
         currentRepositories.map((repository) =>
           repository.id === result.postApplyGitStatus.repositoryId
@@ -978,6 +1008,53 @@ export function App() {
       });
     } finally {
       setApplyingPatchArtifactId(null);
+    }
+  }
+
+  /**
+   * Switches the active repository.
+   *
+   * Every repository-scoped slot is cleared before the new repository's data
+   * arrives. The alternative -- leaving the previous repository's files, diffs,
+   * and previews in place until an async reload replaces them -- renders one
+   * repository's contents under another's name for as long as the load takes.
+   * The derived Git facts already fail closed on a repository-id mismatch; this
+   * clears the slots that carry no id to check.
+   *
+   * Git status reloads through the effect keyed on the active repository's id.
+   * Indexed files do not: they were loaded once at hydrate for the first
+   * repository, so they are reloaded here explicitly.
+   */
+  async function switchActiveRepository(repositoryId: string) {
+    if (repositoryId === activeRepository.id || isPatchOperationInFlight) {
+      return;
+    }
+
+    setActiveRepositoryId(repositoryId);
+    setGitStatusSummary(null);
+    setGitStatusState("idle");
+    setSelectedGitFilePath(null);
+    setGitFileDiff(null);
+    setGitFileDiffState("idle");
+    setSelectedApprovalDiffPath(null);
+    setApprovalGitFileDiff(null);
+    setApprovalGitFileDiffState("idle");
+    setCurrentFingerprintSnapshot(null);
+    setIndexedFiles([]);
+    setSelectedFilePath(null);
+    setFilePreview(null);
+    setFileSearch("");
+    setExtensionFilter("all");
+
+    try {
+      const savedFiles = await loadIndexedFileFacts(repositoryId);
+      setIndexedFiles(savedFiles);
+      setSelectedFilePath(savedFiles[0]?.path ?? null);
+    } catch {
+      // An unreadable index leaves no files rather than the previous
+      // repository's.
+      setIndexedFiles([]);
+      setSelectedFilePath(null);
     }
   }
 
@@ -1078,8 +1155,10 @@ export function App() {
           candidate.id === rolledBackChange.id ? rolledBackChange : candidate,
         ),
       );
-      setGitStatusSummary(result.postRollbackGitStatus);
-      setGitStatusState("ready");
+      if (result.postRollbackGitStatus.repositoryId === activeRepository.id) {
+        setGitStatusSummary(result.postRollbackGitStatus);
+        setGitStatusState("ready");
+      }
       setRepositories((currentRepositories) =>
         currentRepositories.map((repository) =>
           repository.id === result.postRollbackGitStatus.repositoryId
@@ -2502,23 +2581,47 @@ export function App() {
                       {repositories.length} total
                     </StatusPill>
                   </div>
-                  <div className="repository-list">
-                    {repositories.map((repository) => (
-                      <div className="repository-list-item" key={repository.id}>
-                        <Icon name="repository" size="sm" />
-                        <div>
-                          <strong>{repository.name}</strong>
-                          <span>{repository.branch}</span>
-                        </div>
-                        <StatusPill
-                          tone={repositoryTone(repository.status)}
-                          size="sm"
-                          showDot={false}
+                  {isPatchOperationInFlight ? (
+                    <p className="repository-list__blocked" role="status">
+                      A patch operation is running. Switching repositories is
+                      unavailable until it finishes, so its result cannot land
+                      under a different repository's name.
+                    </p>
+                  ) : null}
+                  <div className="repository-list" aria-label="Saved repositories">
+                    {repositories.map((repository) => {
+                      const isActive = repository.id === activeRepository.id;
+
+                      return (
+                        <button
+                          aria-current={isActive ? "true" : undefined}
+                          className={`repository-list-item repository-list-item--button ${
+                            isActive ? "is-active" : ""
+                          }`}
+                          disabled={isPatchOperationInFlight}
+                          key={repository.id}
+                          onClick={() => {
+                            void switchActiveRepository(repository.id);
+                          }}
+                          type="button"
                         >
-                          {repository.status.replace("_", " ")}
-                        </StatusPill>
-                      </div>
-                    ))}
+                          <Icon name="repository" size="sm" />
+                          <div>
+                            <strong>{repository.name}</strong>
+                            <span>{repository.branch}</span>
+                          </div>
+                          <StatusPill
+                            tone={repositoryTone(repository.status)}
+                            size="sm"
+                            showDot={false}
+                          >
+                            {isActive
+                              ? "active"
+                              : repository.status.replace("_", " ")}
+                          </StatusPill>
+                        </button>
+                      );
+                    })}
                   </div>
                 </article>
               </aside>

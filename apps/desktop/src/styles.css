@@ -1372,6 +1372,43 @@ dt {
   border-top: 0;
 }
 
+/* Selecting a repository changes what every other surface describes, so the
+   active row is stated rather than implied by a hover affordance. */
+.repository-list-item--button {
+  background: none;
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  width: 100%;
+}
+
+.repository-list-item--button:hover:not(:disabled) {
+  background: var(--color-surface-muted);
+}
+
+.repository-list-item--button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.repository-list-item--button.is-active strong {
+  color: var(--color-accent);
+}
+
+.repository-list__blocked {
+  background: var(--color-warning-soft);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+  margin-top: 14px;
+  padding: 12px;
+}
+
 .repository-list-item strong,
 .repository-list-item span,
 .run-list-item strong,

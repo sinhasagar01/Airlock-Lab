@@ -14,6 +14,7 @@ import { previewRepositoryFile } from "./storage/filePreview";
 import { scanRepositoryFileTree } from "./storage/fileTreeScanner";
 import { loadGitFileDiff, loadGitStatusSummary } from "./storage/gitChanges";
 import { loadIndexingJobs } from "./storage/indexingJobStore";
+import { loadIndexedFileFacts } from "./storage/indexedFileStore";
 import { KNOWN_SEED_RECORD_IDS } from "./lib/seedRecords";
 import { dryRunGeneratedPatch } from "./storage/patchValidation";
 import {
@@ -3042,5 +3043,188 @@ describe("repository-scoped facts", () => {
     expect(
       await screen.findByText("Refresh Git status to check the working tree."),
     ).toBeInTheDocument();
+  });
+});
+
+describe("repository switching", () => {
+  const secondRepository: RepositorySummary = {
+    id: "repo-disposable",
+    name: "Disposable-QA-Repo",
+    path: "/tmp/disposable",
+    isGitRepository: true,
+    branch: "qa-branch",
+    status: "indexed",
+    openChanges: 5,
+    lastIndexedAt: "Today, 11:00",
+  };
+
+  const bothRepositories = [mockState.repositories[0], secondRepository];
+
+  /** Indexed files differ per repository, so a stale list is visible. */
+  function filesFor(repositoryId: string): IndexedFileFact[] {
+    return repositoryId === secondRepository.id
+      ? [
+          {
+            repositoryId,
+            path: "disposable/only-here.ts",
+            sizeBytes: 10,
+            extension: "ts",
+            modifiedAt: "1783532100",
+          },
+        ]
+      : defaultFiles;
+  }
+
+  it("selects a saved repository and describes it, not the first one", async () => {
+    vi.mocked(loadIndexedFileFacts).mockImplementation(async (repositoryId: string) =>
+      filesFor(repositoryId),
+    );
+    const { user } = renderApp({ repositories: bothRepositories });
+
+    await user.click(screen.getByRole("button", { name: "Repositories" }));
+    await user.click(
+      await screen.findByRole("button", { name: /Disposable-QA-Repo/ }),
+    );
+
+    // The repository detail must describe the repository that was chosen.
+    expect(await screen.findByText("/tmp/disposable")).toBeInTheDocument();
+    expect(await screen.findAllByText("qa-branch")).not.toHaveLength(0);
+    // The first repository's identity must be gone from the detail.
+    expect(screen.queryByText("/workspace")).not.toBeInTheDocument();
+    // And its indexed files must be reloaded for it, not left as the first
+    // repository's.
+    await waitFor(() =>
+      expect(loadIndexedFileFacts).toHaveBeenCalledWith("repo-disposable"),
+    );
+  });
+
+  // The leak this task exists to close, and the one worth its own test:
+  // indexed files were loaded once at hydrate for repositories[0] and never
+  // again. They are not merely rendered -- they are sent to the provider as
+  // context describing the active repository, so a run created after a switch
+  // would ship the previous repository's file paths to OpenAI under this
+  // repository's id and name.
+  it("never sends the previous repository's indexed file paths to the provider", async () => {
+    vi.mocked(loadIndexedFileFacts).mockImplementation(async (repositoryId: string) =>
+      filesFor(repositoryId),
+    );
+    vi.mocked(loadOpenAiProviderConfiguration).mockResolvedValue({
+      configured: true,
+      model: "gpt-5.6-luna",
+      reason: undefined,
+    });
+    vi.mocked(requestOpenAiPlan).mockResolvedValue({
+      summary: "Bounded plan",
+      steps: [],
+      affectedFiles: [],
+      risks: [],
+      validation: [],
+      patchArtifacts: [],
+      approvalRequired: true,
+    });
+    const { user } = renderApp({ repositories: bothRepositories });
+
+    await user.click(screen.getByRole("button", { name: "Repositories" }));
+    await user.click(
+      await screen.findByRole("button", { name: /Disposable-QA-Repo/ }),
+    );
+    // Wait on the UI settling, not on the reload mock: if the wait itself is
+    // what discriminates, the leak assertion below never gets evaluated.
+    await screen.findByText("/tmp/disposable");
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    const providerSelect = screen.getByRole("combobox", {
+      name: "Agent provider",
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("option", { name: "OpenAI · gpt-5.6-luna" }),
+      ).toBeEnabled();
+    });
+    await user.selectOptions(providerSelect, "openai");
+    await user.type(
+      screen.getByRole("textbox", { name: "Agent task request" }),
+      "Plan against the disposable repository",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Generate plan with OpenAI" }),
+    );
+
+    await waitFor(() => expect(requestOpenAiPlan).toHaveBeenCalled());
+    const [payload] = vi.mocked(requestOpenAiPlan).mock.calls[0] as [
+      {
+        repositoryId: string;
+        context: { indexedFileCount: number; keyFiles: string[] };
+      },
+    ];
+    expect(payload.repositoryId).toBe("repo-disposable");
+    // The count discriminates in both directions, which `keyFiles` cannot:
+    // leave the previous repository's files in place and it is defaultFiles's
+    // length; drop the reload and it is 0. Only a reload that actually loaded
+    // this repository's one file gives 1.
+    expect(payload.context.indexedFileCount).toBe(1);
+    expect(payload.context.keyFiles).not.toContain("package.json");
+    expect(payload.context.keyFiles).not.toContain("README.md");
+  });
+
+  it("refuses to switch while a patch operation is in flight, and says why", async () => {
+    vi.mocked(loadIndexedFileFacts).mockImplementation(async (repositoryId: string) =>
+      filesFor(repositoryId),
+    );
+    // An apply that never settles: the operation stays in flight.
+    vi.mocked(applyApprovedPatchArtifact).mockImplementation(
+      () => new Promise(() => {}),
+    );
+    const { user } = renderApp({
+      gitStatus: {
+        ...mockState.gitStatus,
+        isClean: true,
+        changedFileCount: 0,
+        stagedCount: 0,
+        unstagedCount: 0,
+        untrackedCount: 0,
+        files: [],
+      },
+      repositories: bothRepositories,
+    });
+
+    // Drive a real apply to a real in-flight state: `Apply Patch` only appears
+    // once validation, approval, and every readiness gate have passed.
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(
+      await screen.findByRole("button", {
+        name: /generated packages\/ai\/src\/index\.ts/,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Validate & dry-run" }));
+    await screen.findByText("dry run passed");
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
+    await user.click(
+      await screen.findByRole("button", {
+        name: /generated packages\/ai\/src\/index\.ts/,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+    await user.click(await screen.findByRole("button", { name: "Apply Patch" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Confirmation phrase" }),
+      "APPLY PATCH",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Confirm Apply Patch" }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Repositories" }));
+    expect(
+      await screen.findByText(/Switching repositories is unavailable/),
+    ).toBeInTheDocument();
+
+    const row = screen.getByRole("button", { name: /Disposable-QA-Repo/ });
+    expect(row).toBeDisabled();
+    await user.click(row);
+
+    // Still the original repository: the in-flight operation's result must not
+    // land under a repository the user switched to mid-write.
+    expect(screen.queryByText("/tmp/disposable")).not.toBeInTheDocument();
   });
 });
