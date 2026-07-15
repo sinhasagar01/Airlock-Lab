@@ -3407,53 +3407,61 @@ async fn apply_approved_patch_artifact_under_lock(
             "The patch artifact is not linked to the proposed change.",
         ));
     }
-    // An artifact whose attempt ended unresolved is permanently ineligible.
-    // Acknowledging the attempt clears the repository-wide block, so this
-    // artifact-level guard is the only thing preventing that acknowledgement
-    // from re-enabling a patch whose outcome was never proven.
-    if matches!(
-        artifact.get("applyStatus").and_then(Value::as_str),
-        Some("interrupted" | "needs_inspection" | "quarantine_required")
-    ) {
-        return Err(apply_patch_error(
-            "unresolved_apply_attempt",
-            "This patch artifact has an unresolved application attempt and requires manual inspection. It is not eligible for application.",
-        ));
-    }
-    // Rollback is a terminal state, not a return to `ready_to_apply`. Re-applying
-    // would reintroduce the replay that every gate above exists to prevent, so a
-    // rolled-back artifact needs a fresh proposal and validation cycle.
+    // Eligibility is an allow-list, and the default is refusal.
     //
-    // This guard, not the UI, is what stops the second write. The arms above
-    // enumerate blocked statuses rather than allow-listing eligible ones, so a
-    // status they have never heard of falls through to the write — which is
-    // exactly what `rolled_back` did before this arm existed.
-    if matches!(
-        artifact.get("applyStatus").and_then(Value::as_str),
-        Some("rolled_back")
-    ) {
-        return Err(apply_patch_error(
-            "already_rolled_back",
-            "This patch artifact was rolled back and is permanently ineligible for application. Generate and validate a fresh proposal instead.",
-        ));
-    }
-    if matches!(
-        artifact.get("applyStatus").and_then(Value::as_str),
-        Some("rolling_back")
-    ) {
-        return Err(apply_patch_error(
-            "rollback_in_progress",
-            "A rollback of this patch artifact is in progress. It is not eligible for application.",
-        ));
-    }
-    if matches!(
-        artifact.get("applyStatus").and_then(Value::as_str),
-        Some("applying" | "applied" | "applied_verified")
-    ) {
-        return Err(apply_patch_error(
-            "already_applied",
-            "This patch artifact is already applying or has been applied.",
-        ));
+    // This guard used to enumerate the statuses that block, which made its
+    // default *apply*: a status no arm named fell through every check and reached
+    // the write. That was not hypothetical. `rolled_back` did exactly that --
+    // re-applied the patch, wrote the file, and returned `applied_verified` --
+    // and `interrupted`/`needs_inspection` did the same before #1. Both were
+    // fixed by adding an arm, which resolves the instance and leaves the shape.
+    //
+    // Only two states may proceed:
+    //
+    //   * no `applyStatus` at all -- the artifact has never been applied.
+    //   * `apply_failed` -- a previous attempt was rejected by git without
+    //     changing the working tree. Retry is re-gated rather than replayed:
+    //     structure validation, a fresh `git apply --check`, and the full
+    //     snapshot comparison all re-run below in this same request.
+    //
+    // Everything else refuses, including any status added later, and including
+    // `ready_to_apply` -- which nothing writes. Allow-listing an unreachable
+    // status because its name reads well would be the enumerate mistake in
+    // reverse: permission granted speculatively, so a future path that writes it
+    // would apply silently with nobody re-reviewing the decision.
+    //
+    // The `matches!` below chooses a specific message for each known status. It
+    // decides nothing; the condition above already did.
+    let apply_state = artifact.get("applyStatus").and_then(Value::as_str);
+    if !matches!(apply_state, None | Some("apply_failed")) {
+        return Err(match apply_state {
+            // Acknowledging an unresolved attempt clears the repository-wide
+            // block, so this artifact-level guard is the only thing preventing
+            // that acknowledgement from re-enabling a patch whose outcome was
+            // never proven.
+            Some("interrupted" | "needs_inspection" | "quarantine_required") => apply_patch_error(
+                "unresolved_apply_attempt",
+                "This patch artifact has an unresolved application attempt and requires manual inspection. It is not eligible for application.",
+            ),
+            // Rollback is terminal, not a return to eligibility. Re-applying
+            // would reintroduce the replay every gate here exists to prevent.
+            Some("rolled_back") => apply_patch_error(
+                "already_rolled_back",
+                "This patch artifact was rolled back and is permanently ineligible for application. Generate and validate a fresh proposal instead.",
+            ),
+            Some("rolling_back") => apply_patch_error(
+                "rollback_in_progress",
+                "A rollback of this patch artifact is in progress. It is not eligible for application.",
+            ),
+            Some("applying" | "applied" | "applied_verified") => apply_patch_error(
+                "already_applied",
+                "This patch artifact is already applying or has been applied.",
+            ),
+            _ => apply_patch_error(
+                "apply_state_not_eligible",
+                "This patch artifact is not in a state from which it can be applied. Only a generated artifact that has never been applied, or one whose previous attempt failed without changing the working tree, is eligible.",
+            ),
+        });
     }
     if artifact.get("status").and_then(Value::as_str) != Some("generated") {
         return Err(apply_patch_error(
@@ -8875,6 +8883,93 @@ Binary files a/image.png and b/image.png differ";
                 vec!["other.txt".to_string(), "unrelated.txt".to_string()]
             );
             remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// The default for an unrecognised apply state must be refusal.
+    ///
+    /// **This is the whole point of the allow-list, and the only test here that
+    /// tests the shape rather than an arm.** The guard used to enumerate blocked
+    /// statuses, so its default was *apply*: a status no arm named fell through
+    /// to the write. That is not hypothetical -- it is what `rolled_back` did,
+    /// re-applying the patch and returning `applied_verified`.
+    ///
+    /// The status below is deliberately one no code writes and no enum declares.
+    /// Nothing can be added to the guard to make this pass; only inverting it
+    /// can. It stands in for whatever status someone adds next.
+    #[test]
+    fn safe_apply_refuses_an_artifact_with_an_unrecognized_apply_status() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("safe-apply-unknown-status");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+            mutate_apply_artifact(&pool, |artifacts| {
+                artifacts[0]["applyStatus"] = json!("some_future_status");
+            })
+            .await;
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let error = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
+                .await
+                .expect_err("an unrecognised apply state must refuse by default");
+
+            assert_eq!(error.code, "apply_state_not_eligible");
+            assert!(
+                !repository_path.join("generated.txt").exists(),
+                "an unrecognised apply state must never reach the write"
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// Every status that is not explicitly eligible refuses.
+    ///
+    /// `blocked` and `not_applicable` are the argument made concrete. Both are
+    /// declared on `PatchApplyStatus`, neither is written by any live path, and
+    /// both would have reached the write -- including one literally named
+    /// `blocked`.
+    ///
+    /// `ready_to_apply` is refused deliberately even though its name sounds
+    /// eligible. Nothing writes it. Allow-listing an unreachable status because
+    /// its name reads well is the enumerate mistake in reverse: it grants
+    /// permission speculatively, so if a future path ever writes it, apply
+    /// proceeds and nobody re-reviews the decision. Left off, that write fails
+    /// closed until someone consciously adds it.
+    #[test]
+    fn safe_apply_refuses_every_status_that_is_not_explicitly_eligible() {
+        tauri::async_runtime::block_on(async {
+            for status in ["blocked", "not_applicable", "ready_to_apply"] {
+                let repository_path = create_temp_dir(&format!("safe-apply-ineligible-{status}"));
+                init_git_repo(&repository_path);
+                commit_test_file(&repository_path, "README.md", "fixture\n");
+                let pool = create_apply_test_pool().await;
+                let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+                mutate_apply_artifact(&pool, |artifacts| {
+                    artifacts[0]["applyStatus"] = json!(status);
+                })
+                .await;
+
+                let lock_directory = test_apply_lock_directory(&repository_path);
+                let result =
+                    apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input).await;
+
+                assert!(
+                    result.is_err(),
+                    "{status} must not be eligible for application, but the patch applied: {result:?}"
+                );
+                assert_eq!(
+                    result.unwrap_err().code,
+                    "apply_state_not_eligible",
+                    "{status} must refuse through the eligibility default"
+                );
+                assert!(
+                    !repository_path.join("generated.txt").exists(),
+                    "{status} must never reach the write"
+                );
+                remove_temp_dir(&repository_path);
+            }
         });
     }
 
