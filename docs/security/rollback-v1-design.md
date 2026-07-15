@@ -168,6 +168,29 @@ is **structurally unreachable there**.
 truncate, never panic, never silently skip. Unreachable-by-construction is an
 argument; a refusal is a guarantee.
 
+### Correction: Precondition 2 Misdiagnosed The Oversized Case (#4c, Proven)
+
+The paragraph above accepted the precondition-2 refusal as sufficient for an
+oversized target. **Construction proved the two refusals give different
+answers, and precondition 2's was wrong.** A real apply growing a 256,000-byte
+file to 268,800 bytes succeeds and verifies; the baseline persists with a
+truthful `too_large` fingerprint carrying no hash; and rollback refused it as
+`baseline_unavailable` — "no content hash was recorded" — implying a recording
+failure when **nothing failed and a record was kept**. The frontend copy went
+further and said no record existed at all.
+
+The honest reason is the one this section already named: the pre-rollback
+backup. Rollback must store the bytes it is about to destroy, the backup is
+bounded at 256 KiB, and a file past the bound cannot be stored — true even with
+a perfect baseline. A `too_large` baseline fingerprint therefore now refuses as
+`rollback_backup_unavailable` with the size stated, at the baseline stage, and
+the surface says the same before any click. `binary` keeps the generic refusal:
+it is unreachable for a UTF-8-validated patch applied to a `captured` UTF-8
+file.
+
+`MAX_FINGERPRINT_BYTES` was **not** raised — it feeds the validation snapshot
+digest and therefore the apply gate.
+
 ## Write Ordering — And Why It Inverts Apply's
 
 **This is the most losable decision in the design.** A reader comparing rollback

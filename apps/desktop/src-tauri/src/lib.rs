@@ -4299,13 +4299,28 @@ async fn rollback_applied_patch_artifact_under_lock(
             )
         })?
         .to_string();
-    // Only a `captured` fingerprint carries a content hash. A target that was
-    // already oversized or non-UTF-8 when apply finished has no baseline hash,
-    // which resolves here rather than at the backup: no baseline, no rollback.
-    let baseline_target_sha256 = baseline_snapshot
+    // Only a `captured` fingerprint carries a content hash.
+    //
+    // `too_large` gets its own refusal because the generic one misdiagnoses it
+    // (proven by construction, roadmap #4c). An ordinary apply can grow a
+    // 250 KiB file past the 256 KiB bound; nothing fails, and the baseline
+    // persists with a truthful `too_large` fingerprint carrying no hash. Telling
+    // the user "no content hash was recorded" implies a recording failure when
+    // nothing failed — and the baseline is not even the real obstacle. Rollback
+    // must back up the bytes it is about to destroy, the pre-rollback backup is
+    // bounded at 256 KiB, and a file past that bound cannot be stored. That
+    // would be true with a perfect baseline. The refusal names the true reason.
+    let baseline_target_fingerprint = baseline_snapshot
         .target_file_fingerprints
         .iter()
-        .find(|fingerprint| fingerprint.path == file_path)
+        .find(|fingerprint| fingerprint.path == file_path);
+    if baseline_target_fingerprint.is_some_and(|fingerprint| fingerprint.status == "too_large") {
+        return Err(apply_patch_error(
+            "rollback_backup_unavailable",
+            "This file exceeded the 256 KiB rollback backup limit when the patch was applied. Rollback must back up a file before overwriting it and cannot store this one, so this patch cannot be rolled back.",
+        ));
+    }
+    let baseline_target_sha256 = baseline_target_fingerprint
         .filter(|fingerprint| fingerprint.status == "captured")
         .and_then(|fingerprint| fingerprint.content_sha256.clone())
         .ok_or_else(|| {
@@ -8320,6 +8335,99 @@ Binary files a/image.png and b/image.png differ";
                 "a create rollback must delete the file it created"
             );
             assert!(result.post_rollback_git_status.is_clean);
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// A real apply that grows a fingerprintable file past the 256 KiB bound.
+    ///
+    /// Pre-apply: 4,000 lines of 64 bytes = 256,000 bytes — under the
+    /// 262,144-byte `MAX_FINGERPRINT_BYTES`, so the pre-apply fingerprint is
+    /// `captured` and the apply gates all pass. The patch appends 200 more
+    /// 64-byte lines, growing the file to 268,800 bytes — past the bound, so
+    /// the post-apply fingerprint carries no hash.
+    fn oversized_modify_fixture() -> (String, String) {
+        let line = |i: usize| format!("{i:04}{}", "x".repeat(59));
+        let content: String = (0..4000).map(|i| line(i) + "\n").collect();
+        let mut patch = String::from(
+            "diff --git a/big-notes.txt b/big-notes.txt\n--- a/big-notes.txt\n+++ b/big-notes.txt\n@@ -3998,3 +3998,203 @@\n",
+        );
+        for i in 3997..4000 {
+            patch.push(' ');
+            patch.push_str(&line(i));
+            patch.push('\n');
+        }
+        for i in 0..200 {
+            patch.push('+');
+            patch.push_str(&format!("add{i:03}{}", "y".repeat(57)));
+            patch.push('\n');
+        }
+        (content, patch)
+    }
+
+    /// An oversized rollback target is refused for its true reason: the backup.
+    ///
+    /// Proven by construction (roadmap #4c): an ordinary apply that grows a
+    /// 256,000-byte file to 268,800 bytes succeeds and verifies, and the
+    /// baseline persists with a truthful `too_large` fingerprint carrying no
+    /// hash. Rollback used to refuse it as `baseline_unavailable` — "no content
+    /// hash was recorded" — implying a recording failure when nothing failed.
+    /// The real obstacle is the pre-rollback backup: rollback must store the
+    /// bytes it is about to destroy and cannot store a file past the 256 KiB
+    /// bound, which would be true even with a perfect baseline.
+    #[test]
+    fn rollback_refuses_an_oversized_post_apply_target_for_its_true_reason() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("rollback-too-large-target");
+            init_git_repo(&repository_path);
+            let (content, patch) = oversized_modify_fixture();
+            commit_test_file(&repository_path, "big-notes.txt", &content);
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records_for(
+                &pool,
+                &repository_path,
+                "approved",
+                "big-notes.txt",
+                "modify",
+                &patch,
+            )
+            .await;
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let applied = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
+                .await
+                .expect("an apply growing the target past the fingerprint bound");
+            assert_eq!(applied.status, "applied_verified");
+
+            let error = rollback_applied_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                test_rollback_input(ROLLBACK_CONFIRMATION_PHRASE),
+            )
+            .await
+            .expect_err("an oversized target must refuse rollback");
+
+            assert_eq!(
+                error.code, "rollback_backup_unavailable",
+                "the refusal must name the backup bound, not a baseline recording failure"
+            );
+            assert!(
+                error.message.contains("256 KiB"),
+                "the message must state the size limit: {}",
+                error.message
+            );
+            assert!(
+                !error.message.contains("no content hash"),
+                "the message must not imply a recording failure: {}",
+                error.message
+            );
+            // Nothing was written: the oversized file keeps its applied contents.
+            assert_eq!(
+                fs::metadata(repository_path.join("big-notes.txt"))
+                    .unwrap()
+                    .len(),
+                268_800
+            );
             remove_temp_dir(&repository_path);
         });
     }
