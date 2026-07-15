@@ -1573,6 +1573,39 @@ dt {
   margin-top: 22px;
 }
 
+/*
+ * Records the app cannot tie to a saved repository. Shared by the agent run
+ * list and the approval queue: both group rather than drop, because hiding a
+ * record is its own dishonesty. The rule and the label are the whole point --
+ * an unlabelled group would read as more of the active repository's work.
+ */
+.record-list-group {
+  border-top: 1px solid #e4eaf1;
+  display: grid;
+  gap: 10px;
+  margin-top: 6px;
+  padding-top: 14px;
+}
+
+.record-list-group__label {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 740;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.record-list-empty {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 560;
+  line-height: 1.45;
+  margin: 0;
+  padding: 10px 2px;
+}
+
 .agent-run-list-item {
   align-items: start;
   background: #fbfdff;

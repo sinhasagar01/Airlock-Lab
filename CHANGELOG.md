@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Agent Runs and Approvals now show the selected repository's work instead of
+  every repository's. Both lists rendered everything under one repository's
+  selector, and two places printed one repository's name directly above
+  another's branch — each row accurate, the screen as a whole misleading. A
+  record's repository is resolved through the proposal it links to, because the
+  run and the approval only carry a repository *name*, not an identity.
+- A record whose repository link does not resolve is grouped under "Not linked
+  to a saved repository" rather than hidden. Hiding it would be its own
+  dishonesty: those links can dangle, so filtering alone would silently
+  disappear a real approval. The shipped demo records land here once you save a
+  real repository, and stay marked "Demo record".
+- Counts now agree with the lists they label. The Approvals heading, the queue
+  counts, and the sidebar badge count the repository you are looking at;
+  Overview and Settings still report the whole workspace and now say so.
+
 - Saved repositories can now be selected. The list was display-only: you could
   add repositories and only ever use the first. Selecting one switches every
   repository-scoped surface to it, and switching is unavailable while an apply

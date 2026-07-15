@@ -182,6 +182,80 @@ it did. Items are ordered by how much they protect or clarify that claim.
   their backfilled baselines preserve exactly today's behaviour for exactly
   those rows.
 
+- **#6 Repository switching.** `activeRepository = repositories[0]` was
+  hardcoded: repositories could be added and only the first ever used, and the
+  saved list was display-only.
+
+  **The original framing said "a broken promise in the UI rather than a safety
+  issue." That undersold it.** The app had never had to be honest about *which*
+  repository a fact belonged to, because there was only ever one. Switching is
+  what turns that into a lie, and the lie was not confined to the screen: the
+  derived Git facts (branch, cleanliness, changed-file count) and the indexed
+  file list are sent to the provider as context describing the active
+  repository. A run created in the switch window shipped another repository's
+  branch and **file paths** to OpenAI under this repository's id and name. Both
+  proven by test before the fix; the second by a margin of fourteen files.
+
+  Landed: the list is selectable and every repository-scoped surface follows the
+  selection; derived Git facts fail closed on a repository-id mismatch — to
+  `unknown`, or to the active repository's own saved record, never to the other
+  repository's numbers; `activeIndexingJob = indexingJobs[0]` — **a second
+  hardcoded index this entry never mentioned** — was scoped by id; every
+  repository-scoped slot is cleared before the new repository's data arrives;
+  switching is blocked while an apply or rollback is in flight, with the
+  post-apply/post-rollback status writes additionally guarded by repository id.
+
+  **Agent Runs and Approvals are now scoped too.** They rendered every
+  repository's work in one list, and two sites printed one repository's name
+  directly above another's branch. Each record resolves through its linked
+  proposal (`proposal.runId` / `proposal.approvalRequestId` →
+  `proposal.repositoryId`), because `AgentRun` and `ApprovalRequest` carry
+  `repository` as a display *name*, not an id — the same link the apply
+  readiness gate already compares, so the lists and the gate cannot disagree
+  about what "this repository's work" means. **Three outcomes, not two:** the
+  active repository's work; another saved repository's work, hidden; and records
+  whose link does not resolve, which appear under an explicit "not linked to a
+  saved repository" group rather than being dropped (see the Won't Do entry).
+  Hiding one would be its own dishonesty, and this document already records that
+  those links can dangle.
+
+  **Correction to this entry's earlier claim about the demo records.** It said
+  they carry `repositoryId: "repo-workspace"`, which "can never match a real
+  `repo-${path}`, so they land in that group permanently". The first clause is
+  true; **"permanently" is withdrawn.** `createMockRepositories()` returns
+  exactly one repository whose id *is* `repo-workspace`, and it is the
+  repository list's initial value — so the demo records resolve to it before
+  hydration, permanently whenever storage fails (see the hazard below), and
+  throughout the test suite, whose saved-repository fixture is also
+  `repo-workspace`. Only once hydration installs a real `repo-${path}` do they
+  land unlinked. Resolution is uniform and no record is special-cased by id:
+  the fixture run genuinely belongs to the fixture repository, so resolving it
+  there is accurate rather than a lie.
+
+  That fixture collision is why the new tests use a real-shaped id. Against the
+  default fixture a "demo records are unlinked" assertion is not merely vacuous,
+  it is *wrong* — which is the fourth vacuous-fixture catch in this project and
+  the first found before the test was written.
+
+  **Verified on screen rather than argued**, which is what the earlier entry
+  asked for: with a real-shaped repository saved, both demo runs and both demo
+  approvals render inside the labelled group, the scoped lists read "No agent run
+  belongs to this repository", and the detail Branch reads "Not linked to a saved
+  repository" instead of the active repository's branch.
+
+  **Two count figures, deliberately.** A count that labels a scoped list must
+  count that list, so the Approvals hero, both list pills, and the sidebar badge
+  count what is shown. Overview and Settings keep the workspace total and now say
+  so ("across all repositories"). Leaving one unlabelled number contradicting
+  another is the shape #2 fixed between Overview and Changes.
+
+  A note the type system could not give: `activeAgentRun` is now genuinely
+  nullable, and TypeScript could not see it. `visibleAgentRuns[0]` infers as
+  `AgentRun` even on an empty list (`noUncheckedIndexedAccess` is off), and a
+  `const` narrows to its *initializer's* type at every read, so a `| null`
+  annotation was silently discarded and `strict` stayed green over a render that
+  threw. `.at(0)` is what made the compiler produce the fourteen sites.
+
 ## Next
 
 ### #4d No gate enforces refreshed validation before retrying a failed apply
@@ -212,57 +286,6 @@ unreadable index renders as a clean working tree. The apply gate no longer
 trusts this path (the validation snapshot fails closed), and post-apply
 verification fails closed, so this is display-only today. Reporting it honestly
 needs an explicit `unknown` state on the contract in `packages/core`.
-
-### #6 Repository switching — partially landed
-
-`activeRepository = repositories[0]` was hardcoded: repositories could be added
-and only the first ever used, and the saved list was display-only. The list is
-now selectable and every repository-scoped surface follows the selection.
-
-**The original framing said "a broken promise in the UI rather than a safety
-issue." That undersold it.** The app had never had to be honest about *which*
-repository a fact belonged to, because there was only ever one. Switching is
-what turns that into a lie, and the lie was not confined to the screen: the
-derived Git facts (branch, cleanliness, changed-file count) and the indexed file
-list are sent to the provider as context describing the active repository. A run
-created in the switch window shipped another repository's branch and **file
-paths** to OpenAI under this repository's id and name. Both proven by test
-before the fix; the second by a margin of fourteen files.
-
-**Landed:**
-
-- Derived Git facts fail closed on a repository-id mismatch — to `unknown`, or
-  to the active repository's own saved record, never to the other repository's
-  numbers.
-- `activeIndexingJob = indexingJobs[0]` — **a second hardcoded index this entry
-  never mentioned**, alongside `repositories[0]`. An indexing job carries the
-  repository it describes; taking the first rendered whichever repository
-  indexed most recently as though it were the active one. Scoped by id.
-- Selectable rows; every repository-scoped slot cleared before the new
-  repository's data arrives; indexed files reloaded (Git status already reloads
-  through the effect keyed on the active repository's id).
-- Switching blocked while an apply or rollback is in flight, with the reason
-  shown, and the post-apply/post-rollback status writes additionally guarded by
-  repository id.
-
-**Remaining:** Agent Runs and Approvals are still repository-blind. They render
-every repository's work in one list, and two sites print one repository's name
-directly above another's branch (`{activeAgentRun.repository}` beside
-`{activeRepository.branch}`, and the same shape in the approval detail). Latent
-before switching; **live now**. It is a display lie rather than a write hazard —
-readiness blocks apply on `repositoryMatches` — but it is the aggregate lie: each
-row individually accurate while the screen as a whole misleads.
-
-The fix is to filter both lists to the active repository, resolving each record's
-repository through its linked proposal (`proposal.runId` /
-`proposal.approvalRequestId` → `proposal.repositoryId`), because `AgentRun` and
-`ApprovalRequest` carry `repository` as a display *name*, not an id. Records
-whose link does not resolve must appear under an explicit "not linked to a saved
-repository" group rather than being dropped — see the Won't Do entry on plain
-filtering. Seeded demo records carry `repositoryId: "repo-workspace"`, which can
-never match a real `repo-${path}`, so they land in that group permanently. That
-is honest and consistent with their "Demo record" marking, but it should be
-verified on screen rather than assumed.
 
 ### #6a Persist the active repository selection
 
@@ -461,6 +484,29 @@ Surfaced during investigation; recorded so they are not rediscovered.
   is that nothing enforces the reference.
 - **Hardcoded home path.** `createMockRepositories` embeds a real absolute home
   directory as fixture data. Harmless locally, wrong to ship.
+- **A storage failure leaves the fabricated mock repository active,
+  permanently.** Hydration's `catch` sets `storageStatus` to `unavailable` and
+  never calls `setRepositories`, so `repositories` keeps its initial value —
+  the `createMockRepositories()` fixture, with the hardcoded home path above —
+  and the app presents it as a saved repository for the rest of the session.
+  Every repository-scoped surface then resolves against a repository that does
+  not exist. The demo records link to it *correctly* (its id is the
+  `repo-workspace` they name), so they render as ordinary work on an ordinary
+  repository, with a branch and an indexed-file count beside them.
+
+  **This is #2's fabrication problem in a different shape.** #2 removed the
+  writes that put fixtures into the same tables as real records where nothing
+  distinguished them; this is a fixture presented *as* a record with nothing
+  marking it — surfaced by #6, which made it visible by giving the fixture's id
+  a job to do. Observed, not argued: in the browser preview both demo runs render
+  in the main list under "AI-Developer-Workspace / main" with no group.
+
+  Recorded rather than fixed, deliberately. The honest fallback is "no
+  repository", but that is a decision about what the browser preview is *for* —
+  it currently depends on this fixture to render anything at all — and the fix
+  belongs with the `createMockRepositories` hardcoded home path, which rides
+  with the rename. Scoping it into #6 would have been a product-scope decision
+  smuggled into a display fix.
 - **`ensureProposedPatchArtifacts` rebuilds artifacts from `files`.** Any stored
   artifact whose `filePath` is absent from `files` is silently dropped, and it
   runs over every saved change on hydrate. Not reachable today — every creation

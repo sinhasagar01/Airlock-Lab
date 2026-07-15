@@ -74,6 +74,11 @@ import {
   workspace,
 } from "./lib/appData";
 import {
+  resolveAgentRunRepositoryId,
+  resolveApprovalRepositoryId,
+  scopeRecordsToRepository,
+} from "./lib/repositoryScoping";
+import {
   mergeSeedApprovalRequests,
   mergeSeedProposedChanges,
   reconcileAgentRunApprovalStatuses,
@@ -321,25 +326,98 @@ export function App() {
   const activeIndexingJob = indexingJobs.find(
     (job) => job.repositoryId === activeRepository.id,
   );
-  const activeAgentRun =
-    agentRuns.find((run) => run.id === selectedAgentRunId) ?? agentRuns[0];
+  const savedRepositoryIds = useMemo(
+    () => repositories.map((repository) => repository.id),
+    [repositories],
+  );
+  // Agent Runs and Approvals were repository-blind: they rendered every
+  // repository's work under one repository's selector. Neither record can
+  // answer which repository it belongs to on its own -- both carry
+  // `repository` as a display *name* -- so the durable link runs through the
+  // proposal. Records whose link does not resolve are grouped, never dropped.
+  const scopedAgentRuns = useMemo(
+    () =>
+      scopeRecordsToRepository({
+        records: agentRuns,
+        resolveRepositoryId: (run) =>
+          resolveAgentRunRepositoryId(run.id, persistedProposedChanges),
+        activeRepositoryId: activeRepository.id,
+        savedRepositoryIds,
+      }),
+    [
+      activeRepository.id,
+      agentRuns,
+      persistedProposedChanges,
+      savedRepositoryIds,
+    ],
+  );
+  const visibleAgentRuns = useMemo(
+    () => [...scopedAgentRuns.scoped, ...scopedAgentRuns.unlinked],
+    [scopedAgentRuns],
+  );
+  const scopedApprovalRequests = useMemo(
+    () =>
+      scopeRecordsToRepository({
+        records: approvalRequests,
+        resolveRepositoryId: (approval) =>
+          resolveApprovalRepositoryId(approval, persistedProposedChanges),
+        activeRepositoryId: activeRepository.id,
+        savedRepositoryIds,
+      }),
+    [
+      activeRepository.id,
+      approvalRequests,
+      persistedProposedChanges,
+      savedRepositoryIds,
+    ],
+  );
+  const visibleApprovalRequests = useMemo(
+    () => [
+      ...scopedApprovalRequests.scoped,
+      ...scopedApprovalRequests.unlinked,
+    ],
+    [scopedApprovalRequests],
+  );
+  // Falls back to the first *visible* run: a selection pointing at another
+  // repository's run must not survive a switch. `null` is reachable -- a
+  // repository with no runs of its own and nothing unlinked -- so the detail
+  // card is guarded rather than dereferencing it.
+  // `.at(0)`, not `[0]`: `noUncheckedIndexedAccess` is off, so `[0]` infers as
+  // `AgentRun` even on an empty list, and TypeScript then narrows this const to
+  // its initializer's type at every read -- an annotation alone is silently
+  // discarded. `.at(0)` returns `AgentRun | undefined`, which is the truth, and
+  // is what makes the compiler force every consumer to prove it has a run.
+  const activeAgentRun: AgentRun | null =
+    visibleAgentRuns.find((run) => run.id === selectedAgentRunId) ??
+    visibleAgentRuns.at(0) ??
+    null;
+  const activeAgentRunIsScopedToRepository = visibleAgentRuns.some(
+    (run) =>
+      run.id === activeAgentRun?.id &&
+      scopedAgentRuns.scoped.includes(run),
+  );
   const activeProposedPlan =
-    proposedChangePlans.find((plan) => plan.runId === activeAgentRun.id) ??
+    proposedChangePlans.find((plan) => plan.runId === activeAgentRun?.id) ??
     null;
   const activePersistedProposedChange =
     persistedProposedChanges.find(
-      (change) => change.runId === activeAgentRun.id,
+      (change) => change.runId === activeAgentRun?.id,
     ) ?? null;
   const activeRunApproval =
     approvalRequests.find(
-      (approval) => approval.agentRunId === activeAgentRun.id,
+      (approval) => approval.agentRunId === activeAgentRun?.id,
     ) ?? null;
   const selectedApprovalRequest =
-    approvalRequests.find(
+    visibleApprovalRequests.find(
       (approval) => approval.id === selectedApprovalRequestId,
     ) ??
-    approvalRequests[0] ??
+    visibleApprovalRequests[0] ??
     null;
+  const selectedApprovalIsScopedToRepository = visibleApprovalRequests.some(
+    (approval) =>
+      approval.id === selectedApprovalRequest?.id &&
+      scopedApprovalRequests.scoped.includes(approval),
+  );
   const selectedApprovalRun = selectedApprovalRequest
     ? (agentRuns.find((run) => run.id === selectedApprovalRequest.agentRunId) ??
       null)
@@ -356,7 +434,14 @@ export function App() {
           change.runId === selectedApprovalRequest.agentRunId,
       ) ?? null)
     : null;
+  // Two figures, deliberately. `pendingApprovalCount` is the workspace total
+  // and is only rendered where it says so; the Approvals surfaces count the
+  // list they sit above. A count that labels a scoped list must count that
+  // list -- Overview disagreeing with Changes was exactly this shape.
   const pendingApprovalCount = approvalRequests.filter(
+    (approval) => approval.status === "pending",
+  ).length;
+  const visiblePendingApprovalCount = visibleApprovalRequests.filter(
     (approval) => approval.status === "pending",
   ).length;
   const waitingAgentRunCount = agentRuns.filter(
@@ -2013,6 +2098,91 @@ export function App() {
     );
   }
 
+  // Shared by the scoped list and the unlinked group so the two cannot drift
+  // into rendering a record differently depending on which one it landed in.
+  function renderAgentRunRow(run: AgentRun) {
+    const runApproval = approvalRequests.find(
+      (approval) => approval.agentRunId === run.id,
+    );
+
+    return (
+      <button
+        aria-current={activeAgentRun?.id === run.id ? "true" : undefined}
+        aria-label={`Open agent run ${run.title}`}
+        className="agent-run-list-item"
+        key={run.id}
+        onClick={() => setSelectedAgentRunId(run.id)}
+        type="button"
+      >
+        <IconBadge icon="agent" tone="agent" size="sm" />
+        <span>
+          <strong>{run.title}</strong>
+          <small>
+            {run.repository} · {agentProviderName(run.providerId)} · {run.model}
+          </small>
+        </span>
+        <StatusPill tone={agentRunTone(run.status)} size="sm" showDot={false}>
+          {run.status.replaceAll("_", " ")}
+        </StatusPill>
+        {isSeededRunId(run.id) ? (
+          <StatusPill tone="agent" size="sm" showDot={false}>
+            Demo record
+          </StatusPill>
+        ) : null}
+        <small>
+          {run.startedAt} · {runApproval ? "approval required" : "no approval"}
+        </small>
+      </button>
+    );
+  }
+
+  function renderApprovalRow(approval: ApprovalRequest) {
+    const linkedRun = agentRuns.find((run) => run.id === approval.agentRunId);
+
+    return (
+      <button
+        aria-current={
+          selectedApprovalRequest?.id === approval.id ? "true" : undefined
+        }
+        aria-label={`Review approval ${approval.title}`}
+        className="approval-queue-item"
+        key={approval.id}
+        onClick={() => setSelectedApprovalRequestId(approval.id)}
+        type="button"
+      >
+        <IconBadge icon="approval" tone="warning" size="sm" />
+        <span>
+          <strong>{approval.title}</strong>
+          <small>
+            {linkedRun?.title ?? "No linked run"} · {approval.files.length}{" "}
+            files · {approval.createdAt}
+          </small>
+        </span>
+        <span className="approval-queue-item__status">
+          <StatusPill
+            tone={approvalStatusTone(approval.status)}
+            size="sm"
+            showDot={false}
+          >
+            {approval.status}
+          </StatusPill>
+          <StatusPill
+            tone={approvalRiskTone(approval.risk)}
+            size="sm"
+            showDot={false}
+          >
+            {approval.risk} risk
+          </StatusPill>
+          {isSeededRecordId(approval.id) ? (
+            <StatusPill tone="agent" size="sm" showDot={false}>
+              Demo record
+            </StatusPill>
+          ) : null}
+        </span>
+      </button>
+    );
+  }
+
   return (
     <AppShell
       workspaceClassName={
@@ -2024,7 +2194,7 @@ export function App() {
         <Sidebar
           activeSection={activeSection}
           onSelectSection={setActiveSection}
-          pendingApprovalCount={pendingApprovalCount}
+          pendingApprovalCount={visiblePendingApprovalCount}
         />
       }
     >
@@ -2033,7 +2203,7 @@ export function App() {
         description={sectionHeaders[activeSection].description}
         eyebrow={sectionEyebrows[activeSection]}
         onChooseRepository={selectRepositories}
-        pendingApprovalCount={pendingApprovalCount}
+        pendingApprovalCount={visiblePendingApprovalCount}
         providerName={agentProviderName(selectedAgentProviderId)}
         title={sectionHeaders[activeSection].title}
       />
@@ -2057,10 +2227,15 @@ export function App() {
           tone="accent"
           value={repositories.length}
         />
+        {/*
+          Workspace-level, sitting beside the workspace's repository count --
+          and it says so. Agent Runs itself is scoped to the active repository,
+          so an unlabelled total here would contradict the list it links to.
+        */}
         <SummaryCard
           detail={`${waitingAgentRunCount} ${
             waitingAgentRunCount === 1 ? "run is" : "runs are"
-          } waiting for human approval`}
+          } waiting for human approval across all repositories`}
           icon="agent"
           label="Agent runs"
           tone="agent"
@@ -2188,8 +2363,8 @@ export function App() {
                         </h3>
                         <p>
                           {pendingApprovalCount > 0
-                            ? "Review them before any patch can be applied."
-                            : "Nothing is waiting on you."}
+                            ? "Across all repositories. Review them before any patch can be applied."
+                            : "Nothing is waiting on you, in any repository."}
                         </p>
                       </div>
                     </div>
@@ -2764,141 +2939,138 @@ export function App() {
                 <h2>Recent agent runs</h2>
               </div>
               <StatusPill tone="agent" size="sm">
-                {agentRuns.length} runs
+                {visibleAgentRuns.length} runs
               </StatusPill>
             </div>
 
             <div className="agent-run-list">
-              {agentRuns.map((run) => {
-                const runApproval = approvalRequests.find(
-                  (approval) => approval.agentRunId === run.id,
-                );
-
-                return (
-                  <button
-                    aria-current={
-                      activeAgentRun.id === run.id ? "true" : undefined
-                    }
-                    aria-label={`Open agent run ${run.title}`}
-                    className="agent-run-list-item"
-                    key={run.id}
-                    onClick={() => setSelectedAgentRunId(run.id)}
-                    type="button"
-                  >
-                    <IconBadge icon="agent" tone="agent" size="sm" />
-                    <span>
-                      <strong>{run.title}</strong>
-                      <small>
-                        {run.repository} · {agentProviderName(run.providerId)} ·{" "}
-                        {run.model}
-                      </small>
-                    </span>
-                    <StatusPill
-                      tone={agentRunTone(run.status)}
-                      size="sm"
-                      showDot={false}
-                    >
-                      {run.status.replaceAll("_", " ")}
-                    </StatusPill>
-                    {isSeededRunId(run.id) ? (
-                      <StatusPill tone="agent" size="sm" showDot={false}>
-                        Demo record
-                      </StatusPill>
-                    ) : null}
-                    <small>
-                      {run.startedAt} ·{" "}
-                      {runApproval ? "approval required" : "no approval"}
-                    </small>
-                  </button>
-                );
-              })}
+              {scopedAgentRuns.scoped.length > 0 ? (
+                scopedAgentRuns.scoped.map(renderAgentRunRow)
+              ) : (
+                <p className="record-list-empty">
+                  No agent run belongs to this repository.
+                </p>
+              )}
+              {scopedAgentRuns.unlinked.length > 0 ? (
+                <div
+                  aria-label="Not linked to a saved repository"
+                  className="record-list-group"
+                  role="group"
+                >
+                  <p className="record-list-group__label">
+                    Not linked to a saved repository
+                  </p>
+                  {scopedAgentRuns.unlinked.map(renderAgentRunRow)}
+                </div>
+              ) : null}
             </div>
           </aside>
 
-          <article className="overview-card agent-run-detail-card">
-            <div className="overview-card__header">
-              <div>
-                <p className="card-eyebrow card-eyebrow--dot">
-                  Selected Agent Run
-                </p>
-                <h2>{activeAgentRun.title}</h2>
+          {activeAgentRun === null ? (
+            <article className="overview-card agent-run-detail-card">
+              <div className="overview-card__header">
+                <div>
+                  <p className="card-eyebrow card-eyebrow--dot">
+                    Selected Agent Run
+                  </p>
+                  <h2>No agent run selected</h2>
+                </div>
               </div>
-              <StatusPill tone={agentRunTone(activeAgentRun.status)}>
-                {activeAgentRun.status.replaceAll("_", " ")}
-              </StatusPill>
-            </div>
+              <p className="tab-card-copy">
+                No agent run belongs to this repository, and none is waiting to be
+                linked to one. Describe a task above to create a review-only plan.
+              </p>
+            </article>
+          ) : (
+            <article className="overview-card agent-run-detail-card">
+              <div className="overview-card__header">
+                <div>
+                  <p className="card-eyebrow card-eyebrow--dot">
+                    Selected Agent Run
+                  </p>
+                  <h2>{activeAgentRun.title}</h2>
+                </div>
+                <StatusPill tone={agentRunTone(activeAgentRun.status)}>
+                  {activeAgentRun.status.replaceAll("_", " ")}
+                </StatusPill>
+              </div>
 
-            <p className="tab-card-copy">{activeAgentRun.taskSummary}</p>
+              <p className="tab-card-copy">{activeAgentRun.taskSummary}</p>
 
-            <dl className="tab-fact-grid agent-detail-fact-grid">
-              <div>
-                <dt>Provider / Model</dt>
-                <dd>
-                  {agentProviderName(activeAgentRun.providerId)} ·{" "}
-                  {activeAgentRun.model}
-                </dd>
-              </div>
-              <div>
-                <dt>Repository</dt>
-                <dd>{activeAgentRun.repository}</dd>
-              </div>
-              <div>
-                <dt>Branch</dt>
-                <dd>{activeRepository.branch}</dd>
-              </div>
-              <div>
-                <dt>Started / Elapsed</dt>
-                <dd>
-                  {activeAgentRun.startedAt} · {activeAgentRun.elapsed}
-                </dd>
-              </div>
-              <div>
-                <dt>Confidence</dt>
-                <dd>{activeAgentRun.confidence}</dd>
-              </div>
-              <div>
-                <dt>Approval Requirement</dt>
-                <dd>
-                  {activeAgentRun.approvalRequired
-                    ? "Human approval required"
-                    : "No approval required"}
-                </dd>
-              </div>
-            </dl>
+              <dl className="tab-fact-grid agent-detail-fact-grid">
+                <div>
+                  <dt>Provider / Model</dt>
+                  <dd>
+                    {agentProviderName(activeAgentRun.providerId)} ·{" "}
+                    {activeAgentRun.model}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Repository</dt>
+                  <dd>{activeAgentRun.repository}</dd>
+                </div>
+                <div>
+                  <dt>Branch</dt>
+                  <dd>
+                    {activeAgentRunIsScopedToRepository
+                      ? activeRepository.branch
+                      : "Not linked to a saved repository"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Started / Elapsed</dt>
+                  <dd>
+                    {activeAgentRun.startedAt} · {activeAgentRun.elapsed}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Confidence</dt>
+                  <dd>{activeAgentRun.confidence}</dd>
+                </div>
+                <div>
+                  <dt>Approval Requirement</dt>
+                  <dd>
+                    {activeAgentRun.approvalRequired
+                      ? "Human approval required"
+                      : "No approval required"}
+                  </dd>
+                </div>
+              </dl>
 
-            {activeAgentRun.id === demoWorkflow.runId ? (
-              <div className="agent-detail-section demo-workflow-inline">
+              {activeAgentRun.id === demoWorkflow.runId ? (
+                <div className="agent-detail-section demo-workflow-inline">
+                  <div className="overview-card__header">
+                    <p className="card-eyebrow">Demo workflow</p>
+                    <StatusPill tone="warning" size="sm">
+                      seeded path
+                    </StatusPill>
+                  </div>
+                  <p>
+                    This run is linked to persisted proposal{" "}
+                    <strong>{demoWorkflowProposal?.id ?? "not available"}</strong>
+                    , approval{" "}
+                    <strong>{demoWorkflowApproval?.id ?? "not available"}</strong>
+                    , generated patch artifact records, and matching local Git
+                    diffs when the same paths appear in Git status.
+                  </p>
+                </div>
+              ) : null}
+
+              <div className="agent-detail-section provider-context-card">
                 <div className="overview-card__header">
-                  <p className="card-eyebrow">Demo workflow</p>
-                  <StatusPill tone="warning" size="sm">
-                    seeded path
+                  <p className="card-eyebrow">Provider Context</p>
+                  <StatusPill tone="success" size="sm">
+                    {provider.status}
                   </StatusPill>
                 </div>
                 <p>
-                  This run is linked to persisted proposal{" "}
-                  <strong>{demoWorkflowProposal?.id ?? "not available"}</strong>
-                  , approval{" "}
-                  <strong>{demoWorkflowApproval?.id ?? "not available"}</strong>
-                  , generated patch artifact records, and matching local Git
-                  diffs when the same paths appear in Git status.
+                  {activeAgentRun.providerId === "openai"
+                    ? "OpenAI produced validated review records from bounded repository context. Generated artifacts are proposals only and remain separate from local Git diffs."
+                    : "The deterministic mock provider is connected for local planning and approval rehearsal. Mock runs do not generate patch content."}
                 </p>
               </div>
-            ) : null}
-
-            <div className="agent-detail-section provider-context-card">
-              <div className="overview-card__header">
-                <p className="card-eyebrow">Provider Context</p>
-                <StatusPill tone="success" size="sm">
-                  {provider.status}
-                </StatusPill>
-              </div>
-              <p>
-                {activeAgentRun.providerId === "openai"
-                  ? "OpenAI produced validated review records from bounded repository context. Generated artifacts are proposals only and remain separate from local Git diffs."
-                  : "The deterministic mock provider is connected for local planning and approval rehearsal. Mock runs do not generate patch content."}
-              </p>
-            </div>
-          </article>
+            </article>
+          )}
 
           <article className="overview-card proposed-plan-card">
             <div className="overview-card__header">
@@ -3285,7 +3457,7 @@ export function App() {
                 >
                   Review approval
                 </PrimaryButton>
-                {activeAgentRun.id === demoWorkflow.runId ? (
+                {activeAgentRun?.id === demoWorkflow.runId ? (
                   <SecondaryButton
                     icon="changes"
                     onClick={openDemoChangeReview}
@@ -3305,7 +3477,7 @@ export function App() {
             <div className="overview-card__header">
               <div>
                 <p className="card-eyebrow">Human Approval Review</p>
-                <h2>{pendingApprovalCount} pending approvals</h2>
+                <h2>{visiblePendingApprovalCount} pending approvals</h2>
               </div>
               <StatusPill tone="warning">Review before execution</StatusPill>
             </div>
@@ -3324,61 +3496,30 @@ export function App() {
                   <h2>Requests</h2>
                 </div>
                 <StatusPill tone="warning" size="sm">
-                  {approvalRequests.length} total
+                  {visibleApprovalRequests.length} total
                 </StatusPill>
               </div>
 
               <div className="approval-queue-list">
-                {approvalRequests.map((approval) => {
-                  const linkedRun = agentRuns.find(
-                    (run) => run.id === approval.agentRunId,
-                  );
-
-                  return (
-                    <button
-                      aria-current={
-                        selectedApprovalRequest?.id === approval.id
-                          ? "true"
-                          : undefined
-                      }
-                      aria-label={`Review approval ${approval.title}`}
-                      className="approval-queue-item"
-                      key={approval.id}
-                      onClick={() => setSelectedApprovalRequestId(approval.id)}
-                      type="button"
-                    >
-                      <IconBadge icon="approval" tone="warning" size="sm" />
-                      <span>
-                        <strong>{approval.title}</strong>
-                        <small>
-                          {linkedRun?.title ?? "No linked run"} ·{" "}
-                          {approval.files.length} files · {approval.createdAt}
-                        </small>
-                      </span>
-                      <span className="approval-queue-item__status">
-                        <StatusPill
-                          tone={approvalStatusTone(approval.status)}
-                          size="sm"
-                          showDot={false}
-                        >
-                          {approval.status}
-                        </StatusPill>
-                        <StatusPill
-                          tone={approvalRiskTone(approval.risk)}
-                          size="sm"
-                          showDot={false}
-                        >
-                          {approval.risk} risk
-                        </StatusPill>
-                        {isSeededRecordId(approval.id) ? (
-                          <StatusPill tone="agent" size="sm" showDot={false}>
-                            Demo record
-                          </StatusPill>
-                        ) : null}
-                      </span>
-                    </button>
-                  );
-                })}
+                {scopedApprovalRequests.scoped.length > 0 ? (
+                  scopedApprovalRequests.scoped.map(renderApprovalRow)
+                ) : (
+                  <p className="record-list-empty">
+                    No approval belongs to this repository.
+                  </p>
+                )}
+                {scopedApprovalRequests.unlinked.length > 0 ? (
+                  <div
+                    aria-label="Not linked to a saved repository"
+                    className="record-list-group"
+                    role="group"
+                  >
+                    <p className="record-list-group__label">
+                      Not linked to a saved repository
+                    </p>
+                    {scopedApprovalRequests.unlinked.map(renderApprovalRow)}
+                  </div>
+                ) : null}
               </div>
             </aside>
 
@@ -3419,7 +3560,11 @@ export function App() {
                   </div>
                   <div>
                     <dt>Branch</dt>
-                    <dd>{activeRepository.branch}</dd>
+                    <dd>
+                      {selectedApprovalIsScopedToRepository
+                        ? activeRepository.branch
+                        : "Not linked to a saved repository"}
+                    </dd>
                   </div>
                   <div>
                     <dt>Risk</dt>
@@ -4193,7 +4338,7 @@ export function App() {
                     ? storageStatus
                     : row.title === "Indexing policy"
                       ? scanTarget.includes.join(", ")
-                      : `${pendingApprovalCount} pending`;
+                      : `${pendingApprovalCount} pending (all repositories)`;
                 const isIndexingPolicy = row.title === "Indexing policy";
                 const action = isProviderAdapters
                   ? () => {

@@ -277,8 +277,17 @@ repository's live status. Native is unaffected either way: a destructive command
 targets the repository its proposal names and re-derives every check from
 durable records.
 
+Agent Runs and Approvals are scoped to the active repository. Neither record can
+identify its own repository — both carry `repository` as a display name — so each
+is resolved through its linked proposal's `repositoryId`, the same link the apply
+readiness gate compares. Another saved repository's work is not shown; a record
+whose link does not resolve is grouped under "Not linked to a saved repository"
+rather than dropped, because those links can dangle and hiding a real approval is
+its own dishonesty. A record that is not scoped to the active repository no longer
+prints that repository's branch beside its own name. Counts that label a scoped
+list count that list; Overview and Settings keep the workspace total and say so.
+
 The selection is in-memory; a restart falls back to the first saved repository.
-Agent Runs and Approvals are not yet scoped to the active repository.
 
 ## Active Safety Boundary
 

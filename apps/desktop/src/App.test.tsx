@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ApprovalRequest, PersistedProposedChange } from "@ai-dev/ai";
 import type { GitFileDiff, GitStatusSummary } from "@ai-dev/core";
@@ -2437,7 +2437,9 @@ describe("App smoke tests", () => {
       await screen.findByRole("heading", { name: "1 pending approvals" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("0 runs are waiting for human approval"),
+      screen.getByText(
+        "0 runs are waiting for human approval across all repositories",
+      ),
     ).toBeInTheDocument();
     expect(screen.getByText("Request approved")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
@@ -3226,5 +3228,259 @@ describe("repository switching", () => {
     // Still the original repository: the in-flight operation's result must not
     // land under a repository the user switched to mid-write.
     expect(screen.queryByText("/tmp/disposable")).not.toBeInTheDocument();
+  });
+});
+
+describe("repository-scoped agent runs and approvals", () => {
+  /**
+   * Real-shaped ids on purpose. The default fixture repository is
+   * `repo-workspace`, which is exactly the id the shipped demo proposals carry
+   * -- against that fixture a "demo records are unlinked" assertion is not
+   * merely vacuous, it is wrong, because there they genuinely do link.
+   */
+  const activeRepository: RepositorySummary = {
+    id: "repo-/tmp/scoped",
+    name: "Scoped-Repo",
+    path: "/tmp/scoped",
+    isGitRepository: true,
+    branch: "release-2026-07",
+    status: "indexed",
+    openChanges: 0,
+    lastIndexedAt: "Today, 11:00",
+  };
+
+  const otherRepository: RepositorySummary = {
+    id: "repo-/tmp/other",
+    name: "Other-Repo",
+    path: "/tmp/other",
+    isGitRepository: true,
+    branch: "other-branch",
+    status: "indexed",
+    openChanges: 0,
+    lastIndexedAt: "Today, 11:20",
+  };
+
+  /** `repositories[0]` is the active one when nothing is selected. */
+  const bothRepositories = [activeRepository, otherRepository];
+
+  function proposalsFor(
+    mvpShellRepositoryId: string,
+    indexRefreshRepositoryId?: string,
+  ): PersistedProposedChange[] {
+    return defaultProposedChanges
+      .map((change) =>
+        change.id === "proposal-mvp-shell"
+          ? { ...change, repositoryId: mvpShellRepositoryId }
+          : { ...change, repositoryId: indexRefreshRepositoryId ?? "" },
+      )
+      .filter(
+        (change) =>
+          change.id !== "proposal-index-refresh" ||
+          indexRefreshRepositoryId !== undefined,
+      );
+  }
+
+  it("splits agent runs into the active repository's work and an explicit unlinked group", async () => {
+    // `run-mvp-shell` links to this repository. `run-index-refresh` loses its
+    // proposal entirely, so nothing can say which repository it belongs to.
+    const { user } = renderApp({
+      repositories: [activeRepository],
+      proposedChanges: proposalsFor(activeRepository.id),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+
+    const unlinkedGroup = await screen.findByRole("group", {
+      name: "Not linked to a saved repository",
+    });
+
+    // Fails in both directions: with no filter the unlinked run sits in the
+    // main list and the group never renders; over-filter and the scoped run
+    // disappears from it.
+    expect(
+      within(unlinkedGroup).getByRole("button", {
+        name: /Refresh repository context index/,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(unlinkedGroup).queryByRole("button", {
+        name: /Draft app shell implementation plan/,
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: /Open agent run Draft app shell implementation plan/,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("hides another saved repository's agent run without grouping it as unlinked", async () => {
+    const { user } = renderApp({
+      repositories: bothRepositories,
+      proposedChanges: proposalsFor(activeRepository.id, otherRepository.id),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+
+    expect(
+      await screen.findByRole("button", {
+        name: /Open agent run Draft app shell implementation plan/,
+      }),
+    ).toBeInTheDocument();
+    // Another repository's work: not shown here, and not mislabelled as
+    // unlinked either -- its link resolves perfectly well.
+    expect(
+      screen.queryByRole("button", {
+        name: /Open agent run Refresh repository context index/,
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("group", { name: "Not linked to a saved repository" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not print the active repository's branch beside an unlinked run", async () => {
+    const { user } = renderApp({
+      repositories: [activeRepository],
+      proposedChanges: proposalsFor(activeRepository.id),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(
+      await screen.findByRole("button", {
+        name: /Open agent run Refresh repository context index/,
+      }),
+    );
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Refresh repository context index",
+      }),
+    ).toBeInTheDocument();
+    // The whole defect: one repository's name printed directly above another
+    // repository's branch. `release-2026-07` belongs to no run on this screen.
+    expect(screen.queryByText("release-2026-07")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Not linked to a saved repository", {
+        selector: "dd",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders an empty agent run detail rather than crashing when no run is visible", async () => {
+    // Both demo runs belong to the other saved repository, so the active
+    // repository has no runs and nothing is unlinked. Before the guard, the
+    // detail card dereferenced an undefined run and the render threw.
+    const { user } = renderApp({
+      repositories: bothRepositories,
+      proposedChanges: proposalsFor(otherRepository.id, otherRepository.id),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "No agent run selected" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("group", { name: "Not linked to a saved repository" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("splits approvals into the active repository's work and an explicit unlinked group", async () => {
+    const { user } = renderApp({
+      repositories: [activeRepository],
+      proposedChanges: proposalsFor(activeRepository.id),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Approvals" }));
+
+    const unlinkedGroup = await screen.findByRole("group", {
+      name: "Not linked to a saved repository",
+    });
+
+    expect(
+      within(unlinkedGroup).getByRole("button", {
+        name: /Approve indexing job persistence follow-up/,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: /Review approval Approve provider abstraction patch plan/,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(unlinkedGroup).queryByRole("button", {
+        name: /Approve provider abstraction patch plan/,
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides another saved repository's approval without grouping it as unlinked", async () => {
+    const { user } = renderApp({
+      repositories: bothRepositories,
+      proposedChanges: proposalsFor(activeRepository.id, otherRepository.id),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Approvals" }));
+
+    expect(
+      await screen.findByRole("button", {
+        name: /Review approval Approve provider abstraction patch plan/,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: /Review approval Approve indexing job persistence follow-up/,
+      }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("group", { name: "Not linked to a saved repository" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not print the active repository's branch beside an unlinked approval", async () => {
+    const { user } = renderApp({
+      repositories: [activeRepository],
+      proposedChanges: proposalsFor(activeRepository.id),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Approvals" }));
+    await user.click(
+      await screen.findByRole("button", {
+        name: /Review approval Approve indexing job persistence follow-up/,
+      }),
+    );
+
+    // Exactly one survivor, and it is the "Repository Context" side card, which
+    // prints the active repository's branch under the active repository's own
+    // name and is honest. The approval fact grid printed the same branch under
+    // the *approval's* repository name -- two rows, one lie. Without the fix
+    // this is 2 and the assertion fails.
+    expect(screen.getAllByText("release-2026-07", { selector: "dd" })).toHaveLength(
+      1,
+    );
+    expect(
+      screen.getByText("Not linked to a saved repository", {
+        selector: "dd",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("counts only the approvals it shows above the list it shows them in", async () => {
+    // One scoped approval, one unlinked, one belonging elsewhere. The hero
+    // counted every repository's pending approvals above a scoped list.
+    const { user } = renderApp({
+      repositories: bothRepositories,
+      proposedChanges: proposalsFor(activeRepository.id, otherRepository.id),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Approvals" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "1 pending approvals" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "2 pending approvals" }),
+    ).not.toBeInTheDocument();
   });
 });
