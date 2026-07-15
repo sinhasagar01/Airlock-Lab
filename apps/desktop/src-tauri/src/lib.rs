@@ -807,40 +807,28 @@ fn validate_generated_patch_structure(input: &PatchValidationInput) -> Result<()
         .copied()
         .filter(|line| line.starts_with("diff --git "))
         .collect();
-    let Some(first_hunk_index) = lines.iter().position(|line| line.starts_with("@@ ")) else {
+    if !lines.iter().any(|line| line.starts_with("@@ ")) {
         return Err("The artifact must contain a unified diff hunk.".to_string());
-    };
-    let metadata_lines = &lines[..first_hunk_index];
-    let old_headers: Vec<&str> = metadata_lines
-        .iter()
-        .copied()
-        .filter(|line| line.starts_with("--- "))
-        .collect();
-    let new_headers: Vec<&str> = metadata_lines
-        .iter()
-        .copied()
-        .filter(|line| line.starts_with("+++ "))
-        .collect();
+    }
 
-    if diff_headers.len() != 1
-        || diff_headers[0] != expected_diff_header
-        || old_headers.len() != 1
-        || new_headers.len() != 1
-    {
+    let sections = unified_diff_sections(raw_diff)?;
+
+    if diff_headers.len() != 1 || diff_headers[0] != expected_diff_header || sections.len() != 1 {
         return Err("The artifact must contain one matching single-file unified diff.".to_string());
     }
 
-    let expected_old_header = format!("--- a/{}", input.file_path);
-    let expected_new_header = format!("+++ b/{}", input.file_path);
-    let old_header = old_headers[0];
-    let new_header = new_headers[0];
+    let section = &sections[0];
+    let expected_old_path = format!("a/{}", input.file_path);
+    let expected_new_path = format!("b/{}", input.file_path);
+    let old_path = section.old_path.as_str();
+    let new_path = section.new_path.as_str();
     let operation_matches = match input.operation.as_str() {
-        "create" => old_header == "--- /dev/null" && new_header == expected_new_header,
-        "delete" => old_header == expected_old_header && new_header == "+++ /dev/null",
-        "modify" => old_header == expected_old_header && new_header == expected_new_header,
+        "create" => old_path == "/dev/null" && new_path == expected_new_path,
+        "delete" => old_path == expected_old_path && new_path == "/dev/null",
+        "modify" => old_path == expected_old_path && new_path == expected_new_path,
         "unknown" => {
-            (old_header == expected_old_header || old_header == "--- /dev/null")
-                && (new_header == expected_new_header || new_header == "+++ /dev/null")
+            (old_path == expected_old_path || old_path == "/dev/null")
+                && (new_path == expected_new_path || new_path == "/dev/null")
         }
         _ => false,
     };
@@ -1034,17 +1022,110 @@ fn git_status_evidence_changed(previous: &Value, current: &Value) -> bool {
     .any(|key| previous.get(key) != current.get(key))
 }
 
+struct UnifiedDiffSection {
+    old_path: String,
+    new_path: String,
+}
+
+fn hunk_span(spec: &str) -> Option<usize> {
+    match spec.split_once(',') {
+        Some((_, count)) => count.parse().ok(),
+        None => Some(1),
+    }
+}
+
+fn parse_hunk_line_counts(line: &str) -> Option<(usize, usize)> {
+    let rest = line.strip_prefix("@@ ")?;
+    let end = rest.find(" @@")?;
+    let mut ranges = rest[..end].split(' ');
+    let old_spec = ranges.next()?.strip_prefix('-')?;
+    let new_spec = ranges.next()?.strip_prefix('+')?;
+
+    if ranges.next().is_some() {
+        return None;
+    }
+
+    Some((hunk_span(old_spec)?, hunk_span(new_spec)?))
+}
+
+/// Walks every section of a unified diff, consuming each hunk body by its
+/// declared line counts. Git accepts traditional sections that carry no
+/// `diff --git` header, so a file smuggled after the first hunk is only visible
+/// to a parser that tracks hunk boundaries instead of stopping at the first
+/// `@@ `. Consuming bodies by count also keeps content lines such as
+/// `--- signature` from being read as file headers.
+fn unified_diff_sections(raw_diff: &str) -> Result<Vec<UnifiedDiffSection>, String> {
+    let lines: Vec<&str> = raw_diff.lines().collect();
+    let mut sections = Vec::new();
+    let mut pending_old_path: Option<String> = None;
+    let mut index = 0;
+
+    while index < lines.len() {
+        let line = lines[index];
+
+        if line.starts_with("@@ ") {
+            let (old_count, new_count) = parse_hunk_line_counts(line)
+                .ok_or_else(|| "The patch contains a malformed hunk header.".to_string())?;
+            let (mut old_seen, mut new_seen) = (0usize, 0usize);
+            index += 1;
+
+            while index < lines.len() && (old_seen < old_count || new_seen < new_count) {
+                match lines[index].chars().next() {
+                    Some(' ') | None => {
+                        old_seen += 1;
+                        new_seen += 1;
+                    }
+                    Some('-') => old_seen += 1,
+                    Some('+') => new_seen += 1,
+                    Some('\\') => {}
+                    _ => return Err("The patch contains a malformed hunk body.".to_string()),
+                }
+                index += 1;
+            }
+
+            if old_seen != old_count || new_seen != new_count {
+                return Err("The patch contains an incomplete hunk.".to_string());
+            }
+
+            continue;
+        }
+
+        if let Some(old_path) = line.strip_prefix("--- ") {
+            if pending_old_path.is_some() {
+                return Err("The patch contains an unmatched source header.".to_string());
+            }
+            pending_old_path = Some(old_path.to_string());
+        } else if let Some(new_path) = line.strip_prefix("+++ ") {
+            let old_path = pending_old_path.take().ok_or_else(|| {
+                "The patch contains a target header without a source header.".to_string()
+            })?;
+            sections.push(UnifiedDiffSection {
+                old_path,
+                new_path: new_path.to_string(),
+            });
+        }
+
+        index += 1;
+    }
+
+    if pending_old_path.is_some() {
+        return Err("The patch contains an unmatched source header.".to_string());
+    }
+
+    Ok(sections)
+}
+
 fn parsed_unified_diff_paths(raw_diff: &str) -> BTreeSet<String> {
-    raw_diff
-        .lines()
-        .take_while(|line| !line.starts_with("@@ "))
-        .filter_map(|line| {
-            line.strip_prefix("--- ")
-                .or_else(|| line.strip_prefix("+++ "))
+    unified_diff_sections(raw_diff)
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|section| [section.old_path, section.new_path])
+        .filter(|path| path != "/dev/null")
+        .filter_map(|path| {
+            path.strip_prefix("a/")
+                .or_else(|| path.strip_prefix("b/"))
+                .map(str::to_string)
         })
-        .filter(|path| *path != "/dev/null")
-        .filter_map(|path| path.strip_prefix("a/").or_else(|| path.strip_prefix("b/")))
-        .map(str::to_string)
         .collect()
 }
 
@@ -4869,6 +4950,48 @@ mod tests {
         assert!(validate_generated_patch_structure(&binary_payload).is_err());
         assert!(validate_generated_patch_structure(&oversized).is_err());
         assert!(validate_generated_patch_structure(&too_many_lines).is_err());
+    }
+
+    #[test]
+    fn generated_patch_structure_rejects_a_second_file_section_after_the_first_hunk() {
+        let repository_path = Path::new("/tmp/repository");
+        // A traditional patch section needs no `diff --git` line, so a second
+        // file smuggled after the first hunk is invisible to header counting
+        // that stops at the first `@@ `. Git applies both sections.
+        let smuggled = test_patch_validation_input(
+            repository_path,
+            "safe.txt",
+            "modify",
+            "diff --git a/safe.txt b/safe.txt\n--- a/safe.txt\n+++ b/safe.txt\n@@ -1 +1 @@\n-old\n+new\n--- a/.env\n+++ b/.env\n@@ -1 +1 @@\n-SECRET=real\n+STOLEN=1\n",
+        );
+
+        assert!(validate_generated_patch_structure(&smuggled).is_err());
+    }
+
+    #[test]
+    fn parsed_unified_diff_paths_sees_every_section_of_a_multi_file_patch() {
+        let paths = parsed_unified_diff_paths(
+            "diff --git a/safe.txt b/safe.txt\n--- a/safe.txt\n+++ b/safe.txt\n@@ -1 +1 @@\n-old\n+new\n--- a/.env\n+++ b/.env\n@@ -1 +1 @@\n-SECRET=real\n+STOLEN=1\n",
+        );
+
+        assert!(paths.contains("safe.txt"));
+        assert!(paths.contains(".env"));
+    }
+
+    #[test]
+    fn generated_patch_structure_accepts_hunk_content_that_looks_like_diff_metadata() {
+        let repository_path = Path::new("/tmp/repository");
+        // Removing a line whose text begins with "-- " produces a "--- " body
+        // line, and adding one beginning with "++ " produces "+++ ". These are
+        // hunk content, not headers, and must not be rejected.
+        let content_like_headers = test_patch_validation_input(
+            repository_path,
+            "notes.md",
+            "modify",
+            "diff --git a/notes.md b/notes.md\n--- a/notes.md\n+++ b/notes.md\n@@ -1 +1 @@\n--- signature line\n+++ replacement line\n",
+        );
+
+        assert!(validate_generated_patch_structure(&content_like_headers).is_ok());
     }
 
     #[test]
