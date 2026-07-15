@@ -279,6 +279,36 @@ struct PostRollbackVerification {
     message: String,
 }
 
+/// The rollback baseline, asserted positively.
+///
+/// Un-rollbackability used to be inferred from an *absence* — no
+/// `repository_snapshot` inside `post_apply_evidence_json` — and absence cannot
+/// distinguish "not recorded" from "failed to load" or "written by an older
+/// version". This record replaces the inference: apply (or the backfill, or
+/// reconciliation) states what it knows, with a reason when it knows nothing.
+///
+/// Only an **apply-time** observation may say `recorded`. A reconciled outcome's
+/// snapshot is taken at reconciliation, not at apply, and an edit made in the
+/// crash-to-reconciliation window is inside its hash — invisible to the drift
+/// check, so rollback would destroy the edit and verify the destruction. Proven
+/// by test before this record existed.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RollbackBaselineRecord {
+    /// "recorded" | "unavailable".
+    status: String,
+    /// Why it is unavailable: "target_too_large" |
+    /// "target_fingerprint_unavailable" | "reconciled_outcome" | "not_recorded".
+    reason: Option<String>,
+    /// Who asserted it: "apply" | "reconciliation" | "backfill".
+    source: String,
+    target_path: String,
+    content_sha256: Option<String>,
+    branch: Option<String>,
+    head_sha: Option<String>,
+    captured_at: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RollbackAppliedPatchArtifactResult {
@@ -358,6 +388,7 @@ struct PatchApplyAttemptRecord {
     post_apply_evidence: Option<PatchApplyEvidence>,
     post_apply_verification: Option<PostApplyPathVerification>,
     post_rollback_verification: Option<PostRollbackVerification>,
+    rollback_baseline: Option<RollbackBaselineRecord>,
     current_git_status_changed: Option<bool>,
     message: String,
 }
@@ -1345,6 +1376,90 @@ fn set_artifact_post_apply_verification(
     Ok(())
 }
 
+/// Builds the rollback baseline at apply-finalize time, from ingredients that
+/// cannot involve a git subprocess.
+///
+/// Branch and HEAD come from the pre-write snapshot: it was gated unchanged
+/// against validation in this same request, and `git apply` cannot move HEAD.
+/// The target's post-apply content hash is one filesystem read. The old
+/// evidence path's one fragile ingredient — a `git status` subprocess — was
+/// precisely the ingredient rollback never needed.
+///
+/// This never fails and never blocks the apply: an uncapturable target becomes
+/// an explicit `unavailable` with its reason, because the apply itself is
+/// already complete and verified — that claim is true regardless of whether the
+/// undo was recorded.
+fn build_apply_rollback_baseline(
+    repository_root: &Path,
+    file_path: &str,
+    final_snapshot: &RepositoryValidationSnapshot,
+) -> RollbackBaselineRecord {
+    let branch = final_snapshot
+        .branch
+        .clone()
+        .filter(|value| !value.is_empty());
+    let head_sha = final_snapshot
+        .head_sha
+        .clone()
+        .filter(|value| !value.is_empty());
+    let fingerprint = fingerprint_target_file(repository_root, file_path);
+    let (status, reason, content_sha256) = match fingerprint.status.as_str() {
+        "captured" => match (&fingerprint.content_sha256, &branch, &head_sha) {
+            (Some(_), Some(_), Some(_)) => ("recorded", None, fingerprint.content_sha256.clone()),
+            _ => ("unavailable", Some("not_recorded".to_string()), None),
+        },
+        // An ordinary apply can grow the target past the fingerprint bound.
+        // The honest reason is the rollback backup, which cannot store a file
+        // past 256 KiB — recorded here so the refusal and the surface can say
+        // so without re-deriving it.
+        "too_large" => ("unavailable", Some("target_too_large".to_string()), None),
+        _ => (
+            "unavailable",
+            Some("target_fingerprint_unavailable".to_string()),
+            None,
+        ),
+    };
+
+    RollbackBaselineRecord {
+        status: status.to_string(),
+        reason,
+        source: "apply".to_string(),
+        target_path: file_path.to_string(),
+        content_sha256,
+        branch,
+        head_sha,
+        captured_at: now_unix_seconds(),
+    }
+}
+
+fn set_artifact_rollback_baseline(
+    artifacts: &mut Value,
+    artifact_id: &str,
+    baseline: &RollbackBaselineRecord,
+) -> Result<(), ApplyPatchError> {
+    let artifact = artifacts
+        .as_array_mut()
+        .and_then(|items| {
+            items
+                .iter_mut()
+                .find(|item| item.get("id").and_then(Value::as_str) == Some(artifact_id))
+        })
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| {
+            apply_patch_error(
+                "artifact_not_found",
+                "The persisted patch artifact is unavailable.",
+            )
+        })?;
+    // The artifact carries the claim and its reason only; the attempt row holds
+    // the full record and is what rollback consults.
+    artifact.insert(
+        "rollbackBaseline".to_string(),
+        json!({ "status": baseline.status, "reason": baseline.reason }),
+    );
+    Ok(())
+}
+
 fn set_artifact_rollback_metadata(
     artifacts: &mut Value,
     artifact_id: &str,
@@ -1561,6 +1676,10 @@ async fn ensure_patch_apply_tables(pool: &SqlitePool) -> Result<(), ApplyPatchEr
             "post_rollback_verification_json",
             "ALTER TABLE patch_apply_attempts ADD COLUMN post_rollback_verification_json TEXT",
         ),
+        (
+            "rollback_baseline_json",
+            "ALTER TABLE patch_apply_attempts ADD COLUMN rollback_baseline_json TEXT",
+        ),
     ] {
         if !table_columns.iter().any(|existing| existing == column) {
             sqlx::query(statement).execute(pool).await.map_err(|_| {
@@ -1582,6 +1701,120 @@ async fn ensure_patch_apply_tables(pool: &SqlitePool) -> Result<(), ApplyPatchEr
             "Legacy apply attempt state could not be normalized safely.",
         )
     })?;
+    backfill_rollback_baselines(pool).await?;
+    Ok(())
+}
+
+/// Fills the rollback-baseline assertion for rows written before it existed.
+///
+/// This **copies** recorded observations out of `post_apply_evidence_json`; it
+/// never derives one. Without it, switching rollback to the explicit field would
+/// regress capability for every legacy row whose baseline exists and works
+/// today. A row with nothing usable gets an explicit `unavailable` so that,
+/// after this runs, NULL never means anything for an `applied_verified` row.
+///
+/// Stated bound, not an assumption: a legacy row classified `applied_verified`
+/// by *reconciliation* is indistinguishable from an apply-finalized one, and its
+/// evidence snapshot is reconciliation-time. Backfilling it as `recorded`
+/// preserves exactly today's behaviour for exactly those rows — no wider, no
+/// narrower. New reconciled outcomes are asserted `unavailable` at the source.
+async fn backfill_rollback_baselines(pool: &SqlitePool) -> Result<(), ApplyPatchError> {
+    let storage_error = || {
+        apply_patch_error(
+            "storage_unavailable",
+            "Legacy rollback baselines could not be reconciled safely.",
+        )
+    };
+    let rows = sqlx::query(
+        "SELECT id, proposed_change_id, patch_artifact_id, post_apply_evidence_json FROM patch_apply_attempts WHERE status = 'applied_verified' AND rollback_baseline_json IS NULL",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|_| storage_error())?;
+    for row in rows {
+        let attempt_id: String = row.try_get("id").unwrap_or_default();
+        let proposal_id: String = row.try_get("proposed_change_id").unwrap_or_default();
+        let artifact_id: String = row.try_get("patch_artifact_id").unwrap_or_default();
+        let target_path: Option<String> =
+            sqlx::query("SELECT patch_artifacts_json FROM proposed_changes WHERE id = ? LIMIT 1")
+                .bind(&proposal_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(|_| storage_error())?
+                .and_then(|proposal| proposal.try_get::<String, _>("patch_artifacts_json").ok())
+                .and_then(|artifacts_json| serde_json::from_str::<Value>(&artifacts_json).ok())
+                .and_then(|artifacts| {
+                    artifacts.as_array().and_then(|items| {
+                        items
+                            .iter()
+                            .find(|item| {
+                                item.get("id").and_then(Value::as_str) == Some(artifact_id.as_str())
+                            })
+                            .and_then(|item| item.get("filePath").and_then(Value::as_str))
+                            .map(str::to_string)
+                    })
+                });
+        let snapshot = row
+            .try_get::<Option<String>, _>("post_apply_evidence_json")
+            .unwrap_or(None)
+            .as_deref()
+            .and_then(|value| serde_json::from_str::<PatchApplyEvidence>(value).ok())
+            .and_then(|evidence| evidence.repository_snapshot);
+        let unavailable = |reason: &str, path: &str| RollbackBaselineRecord {
+            status: "unavailable".to_string(),
+            reason: Some(reason.to_string()),
+            source: "backfill".to_string(),
+            target_path: path.to_string(),
+            content_sha256: None,
+            branch: None,
+            head_sha: None,
+            captured_at: now_unix_seconds(),
+        };
+        let baseline = match (&target_path, snapshot) {
+            (Some(path), Some(snapshot)) => {
+                let branch = snapshot.branch.clone().filter(|value| !value.is_empty());
+                let head_sha = snapshot.head_sha.clone().filter(|value| !value.is_empty());
+                let fingerprint = snapshot
+                    .target_file_fingerprints
+                    .iter()
+                    .find(|fingerprint| fingerprint.path == *path);
+                match fingerprint {
+                    Some(fingerprint)
+                        if fingerprint.status == "captured"
+                            && fingerprint.content_sha256.is_some()
+                            && branch.is_some()
+                            && head_sha.is_some() =>
+                    {
+                        RollbackBaselineRecord {
+                            status: "recorded".to_string(),
+                            reason: None,
+                            source: "backfill".to_string(),
+                            target_path: path.clone(),
+                            content_sha256: fingerprint.content_sha256.clone(),
+                            branch,
+                            head_sha,
+                            captured_at: snapshot.captured_at.clone(),
+                        }
+                    }
+                    Some(fingerprint) if fingerprint.status == "too_large" => {
+                        unavailable("target_too_large", path)
+                    }
+                    _ => unavailable("not_recorded", path),
+                }
+            }
+            (Some(path), None) => unavailable("not_recorded", path),
+            (None, _) => unavailable("not_recorded", ""),
+        };
+        let baseline_json = serde_json::to_string(&baseline).map_err(|_| storage_error())?;
+        sqlx::query(
+            "UPDATE patch_apply_attempts SET rollback_baseline_json = ? WHERE id = ? AND rollback_baseline_json IS NULL",
+        )
+        .bind(baseline_json)
+        .bind(&attempt_id)
+        .execute(pool)
+        .await
+        .map_err(|_| storage_error())?;
+    }
     Ok(())
 }
 
@@ -3924,6 +4157,12 @@ async fn apply_approved_patch_artifact_under_lock(
         "quarantine_required"
     };
     let verification_error = (!is_verified).then_some(post_apply_verification.message.as_str());
+    // The rollback baseline, asserted before the state that reports success is
+    // persisted, so a verified apply can never exist without a statement about
+    // its undo. Only a verified apply gets one: a quarantined artifact is
+    // permanently ineligible for rollback on its status alone.
+    let rollback_baseline = is_verified
+        .then(|| build_apply_rollback_baseline(&repository_root, &file_path, &final_snapshot));
     set_artifact_apply_metadata(
         &mut artifacts,
         &input.patch_artifact_id,
@@ -3938,6 +4177,9 @@ async fn apply_approved_patch_artifact_under_lock(
         &input.patch_artifact_id,
         &post_apply_verification,
     )?;
+    if let Some(baseline) = rollback_baseline.as_ref() {
+        set_artifact_rollback_baseline(&mut artifacts, &input.patch_artifact_id, baseline)?;
+    }
     let applied_artifacts_json = serde_json::to_string(&artifacts).map_err(|_| {
         apply_patch_error(
             "apply_state_persistence_failed",
@@ -3982,9 +4224,17 @@ async fn apply_approved_patch_artifact_under_lock(
     );
     let post_apply_evidence_json = serde_json::to_string(&post_apply_evidence).ok();
     let post_apply_verification_json = serde_json::to_string(&post_apply_verification).ok();
+    let rollback_baseline_json = rollback_baseline
+        .as_ref()
+        .and_then(|baseline| serde_json::to_string(baseline).ok());
     let attempt_error_code = (!is_verified).then_some("unexpected_post_apply_paths");
-    let _ = sqlx::query(
-        "UPDATE patch_apply_attempts SET status = ?, error_code = ?, sanitized_error = ?, completed_at = ?, post_apply_evidence_json = ?, post_apply_git_status_json = ?, post_apply_verification_json = ? WHERE id = ?",
+    // Checked, no longer fire-and-forget: this row carries the rollback
+    // baseline, and a baseline that silently failed to persist would recreate
+    // the absence-as-signal hole this record exists to remove. The write has
+    // already happened, so failure here is reported the way every post-write
+    // persistence failure is — the apply happened, the audit record did not.
+    let finalize = sqlx::query(
+        "UPDATE patch_apply_attempts SET status = ?, error_code = ?, sanitized_error = ?, completed_at = ?, post_apply_evidence_json = ?, post_apply_git_status_json = ?, post_apply_verification_json = ?, rollback_baseline_json = ? WHERE id = ?",
     )
     .bind(artifact_apply_status)
     .bind(attempt_error_code)
@@ -3993,9 +4243,22 @@ async fn apply_approved_patch_artifact_under_lock(
     .bind(post_apply_evidence_json)
     .bind(post_apply_status_json)
     .bind(post_apply_verification_json)
+    .bind(rollback_baseline_json)
     .bind(&attempt_id)
     .execute(pool)
-    .await;
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "apply_state_persistence_failed",
+            "The patch application finished, but its audit record could not be finalized. Review Changes immediately.",
+        )
+    })?;
+    if finalize.rows_affected() != 1 {
+        return Err(apply_patch_error(
+            "apply_state_persistence_failed",
+            "The patch application finished, but its audit record could not be finalized. Review Changes immediately.",
+        ));
+    }
 
     Ok(ApplyApprovedPatchArtifactResult {
         status: artifact_apply_status.to_string(),
@@ -4231,13 +4494,16 @@ async fn rollback_applied_patch_artifact_under_lock(
 
     // The baseline: what the target looked like immediately after apply.
     //
-    // Apply captures this best-effort — the snapshot is `.ok()` and the persist
-    // is fire-and-forget — so an artifact can be `applied_verified` with no
-    // baseline at all. That is not an edge case to paper over: with no record of
-    // what apply left behind, no drift check is possible, and rollback's entire
-    // safety rule is "do not overwrite user edits made after apply". Refuse.
+    // A positive assertion, never an inference from absence. Apply states what
+    // it recorded (or why it could not) in `rollback_baseline_json`; the
+    // backfill fills legacy rows from their recorded evidence; reconciliation
+    // asserts `unavailable` because its snapshot is reconciliation-time and an
+    // edit made in the crash window would be inside its hash. Anything that is
+    // not an explicit `recorded` refuses: with no apply-time record of what
+    // apply left behind, no drift check is possible, and rollback's entire
+    // safety rule is "do not overwrite user edits made after apply".
     let attempt_rows = sqlx::query(
-        "SELECT id, backup_id, post_apply_evidence_json FROM patch_apply_attempts WHERE repository_id = ? AND proposed_change_id = ? AND patch_artifact_id = ? AND status = 'applied_verified'",
+        "SELECT id, backup_id, rollback_baseline_json FROM patch_apply_attempts WHERE repository_id = ? AND proposed_change_id = ? AND patch_artifact_id = ? AND status = 'applied_verified'",
     )
     .bind(&input.repository_id)
     .bind(&input.proposed_change_id)
@@ -4266,67 +4532,73 @@ async fn rollback_applied_patch_artifact_under_lock(
                 "The pre-apply backup reference is unavailable. This patch cannot be rolled back.",
             )
         })?;
-    let baseline_snapshot = apply_attempt_row
-        .try_get::<Option<String>, _>("post_apply_evidence_json")
+    let rollback_baseline: RollbackBaselineRecord = apply_attempt_row
+        .try_get::<Option<String>, _>("rollback_baseline_json")
         .unwrap_or(None)
-        .and_then(|value| serde_json::from_str::<PatchApplyEvidence>(&value).ok())
-        .and_then(|evidence| evidence.repository_snapshot)
+        .as_deref()
+        .and_then(|value| serde_json::from_str(value).ok())
         .ok_or_else(|| {
             apply_patch_error(
                 "baseline_unavailable",
-                "No post-apply baseline was recorded for this patch, so drift since the apply cannot be ruled out. This patch cannot be rolled back.",
+                "No rollback baseline was recorded for this patch, so drift since the apply cannot be ruled out. This patch cannot be rolled back.",
             )
         })?;
-    let baseline_branch = baseline_snapshot
+    if rollback_baseline.status != "recorded" {
+        // The reason names the truth. `too_large` refuses for the pre-rollback
+        // backup bound (proven misdiagnosed before, roadmap #4c): rollback must
+        // back up the bytes it is about to destroy and cannot store a file past
+        // 256 KiB — true even with a perfect baseline. A reconciled outcome's
+        // snapshot is reconciliation-time, so edits made in the crash window
+        // cannot be ruled out.
+        return Err(match rollback_baseline.reason.as_deref() {
+            Some("target_too_large") => apply_patch_error(
+                "rollback_backup_unavailable",
+                "This file exceeded the 256 KiB rollback backup limit when the patch was applied. Rollback must back up a file before overwriting it and cannot store this one, so this patch cannot be rolled back.",
+            ),
+            Some("reconciled_outcome") => apply_patch_error(
+                "baseline_unavailable",
+                "This apply was interrupted and its outcome was reconciled later, so the file's contents immediately after the apply were never recorded. Edits made before reconciliation cannot be ruled out. This patch cannot be rolled back.",
+            ),
+            _ => apply_patch_error(
+                "baseline_unavailable",
+                "No rollback baseline was recorded for this patch, so drift since the apply cannot be ruled out. This patch cannot be rolled back.",
+            ),
+        });
+    }
+    if rollback_baseline.target_path != file_path {
+        return Err(apply_patch_error(
+            "invalid_persisted_record",
+            "The rollback baseline does not describe the artifact's target path. This patch cannot be rolled back.",
+        ));
+    }
+    let baseline_branch = rollback_baseline
         .branch
-        .as_deref()
+        .clone()
         .filter(|branch| !branch.is_empty())
         .ok_or_else(|| {
             apply_patch_error(
                 "baseline_unavailable",
-                "The post-apply baseline has no recorded branch. This patch cannot be rolled back.",
+                "The rollback baseline has no recorded branch. This patch cannot be rolled back.",
             )
-        })?
-        .to_string();
-    let baseline_head_sha = baseline_snapshot
+        })?;
+    let baseline_head_sha = rollback_baseline
         .head_sha
-        .as_deref()
+        .clone()
         .filter(|head| !head.is_empty())
         .ok_or_else(|| {
             apply_patch_error(
                 "baseline_unavailable",
-                "The post-apply baseline has no recorded HEAD. This patch cannot be rolled back.",
+                "The rollback baseline has no recorded HEAD. This patch cannot be rolled back.",
             )
-        })?
-        .to_string();
-    // Only a `captured` fingerprint carries a content hash.
-    //
-    // `too_large` gets its own refusal because the generic one misdiagnoses it
-    // (proven by construction, roadmap #4c). An ordinary apply can grow a
-    // 250 KiB file past the 256 KiB bound; nothing fails, and the baseline
-    // persists with a truthful `too_large` fingerprint carrying no hash. Telling
-    // the user "no content hash was recorded" implies a recording failure when
-    // nothing failed — and the baseline is not even the real obstacle. Rollback
-    // must back up the bytes it is about to destroy, the pre-rollback backup is
-    // bounded at 256 KiB, and a file past that bound cannot be stored. That
-    // would be true with a perfect baseline. The refusal names the true reason.
-    let baseline_target_fingerprint = baseline_snapshot
-        .target_file_fingerprints
-        .iter()
-        .find(|fingerprint| fingerprint.path == file_path);
-    if baseline_target_fingerprint.is_some_and(|fingerprint| fingerprint.status == "too_large") {
-        return Err(apply_patch_error(
-            "rollback_backup_unavailable",
-            "This file exceeded the 256 KiB rollback backup limit when the patch was applied. Rollback must back up a file before overwriting it and cannot store this one, so this patch cannot be rolled back.",
-        ));
-    }
-    let baseline_target_sha256 = baseline_target_fingerprint
-        .filter(|fingerprint| fingerprint.status == "captured")
-        .and_then(|fingerprint| fingerprint.content_sha256.clone())
+        })?;
+    let baseline_target_sha256 = rollback_baseline
+        .content_sha256
+        .clone()
+        .filter(|hash| is_valid_sha256(hash))
         .ok_or_else(|| {
             apply_patch_error(
                 "baseline_unavailable",
-                "The post-apply baseline has no content hash for the target file, so drift since the apply cannot be ruled out. This patch cannot be rolled back.",
+                "The rollback baseline has no content hash for the target file, so drift since the apply cannot be ruled out. This patch cannot be rolled back.",
             )
         })?;
 
@@ -4488,11 +4760,11 @@ async fn rollback_applied_patch_artifact_under_lock(
         "rollback-backup-{}-{unique_suffix}",
         input.patch_artifact_id
     );
-    let pre_restore_evidence = patch_apply_evidence(
-        &artifact_digest,
-        Some(baseline_snapshot.clone()),
-        Some(&pre_restore_git_status),
-    );
+    // No repository snapshot here: the baseline is a `RollbackBaselineRecord`
+    // now, not a snapshot, and inventing one at rollback time would be
+    // rollback-time evidence labelled as if it described the apply.
+    let pre_restore_evidence =
+        patch_apply_evidence(&artifact_digest, None, Some(&pre_restore_git_status));
     let pre_restore_evidence_json = serde_json::to_string(&pre_restore_evidence).ok();
     let approval_request_id = linked_approval_id.unwrap_or_default();
 
@@ -4731,14 +5003,36 @@ async fn persist_reconciled_attempt(
     sanitized_error: Option<&str>,
     post_apply_evidence: Option<&PatchApplyEvidence>,
     post_apply_git_status: Option<&GitStatusSummary>,
+    rollback_baseline: Option<RollbackBaselineRecord>,
 ) -> Result<(), ApplyPatchError> {
     let completed_at = now_unix_seconds();
     let post_evidence_json =
         post_apply_evidence.and_then(|evidence| serde_json::to_string(evidence).ok());
     let post_status_json = post_apply_git_status
         .and_then(|summary| serde_json::to_string(&git_status_summary_json(summary)).ok());
+    // A reconciled `applied_verified` row must never be left with a NULL
+    // baseline: the backfill would later promote its reconciliation-time
+    // evidence to `recorded`, and a reconciliation-time hash can contain an
+    // edit made in the crash window — the drift check cannot see it, so
+    // rollback would destroy the edit and verify the destruction. If a caller
+    // classifies verified without saying so explicitly, fail closed here.
+    let rollback_baseline = rollback_baseline.or_else(|| {
+        (status == "applied_verified").then(|| RollbackBaselineRecord {
+            status: "unavailable".to_string(),
+            reason: Some("reconciled_outcome".to_string()),
+            source: "reconciliation".to_string(),
+            target_path: String::new(),
+            content_sha256: None,
+            branch: None,
+            head_sha: None,
+            captured_at: now_unix_seconds(),
+        })
+    });
+    let rollback_baseline_json = rollback_baseline
+        .as_ref()
+        .and_then(|baseline| serde_json::to_string(baseline).ok());
     sqlx::query(
-        "UPDATE patch_apply_attempts SET status = ?, error_code = ?, sanitized_error = ?, completed_at = ?, post_apply_evidence_json = ?, post_apply_git_status_json = ? WHERE id = ?",
+        "UPDATE patch_apply_attempts SET status = ?, error_code = ?, sanitized_error = ?, completed_at = ?, post_apply_evidence_json = ?, post_apply_git_status_json = ?, rollback_baseline_json = COALESCE(?, rollback_baseline_json) WHERE id = ?",
     )
     .bind(status)
     .bind(if sanitized_error.is_some() {
@@ -4750,6 +5044,7 @@ async fn persist_reconciled_attempt(
     .bind(completed_at)
     .bind(post_evidence_json)
     .bind(post_status_json)
+    .bind(rollback_baseline_json)
     .bind(attempt_id)
     .execute(pool)
     .await
@@ -4951,6 +5246,7 @@ async fn classify_unfinished_apply_attempt(
             Some(message),
             None,
             None,
+            None,
         )
         .await?;
         persist_reconciled_artifact(
@@ -4987,6 +5283,7 @@ async fn classify_unfinished_apply_attempt(
             Some(&message),
             None,
             None,
+            None,
         )
         .await;
     };
@@ -5005,6 +5302,7 @@ async fn classify_unfinished_apply_attempt(
                 Some(&message),
                 None,
                 None,
+                None,
             )
             .await;
         }
@@ -5018,6 +5316,7 @@ async fn classify_unfinished_apply_attempt(
                 &attempt_id,
                 "needs_inspection",
                 Some(&message),
+                None,
                 None,
                 None,
             )
@@ -5035,6 +5334,7 @@ async fn classify_unfinished_apply_attempt(
             &attempt_id,
             "interrupted",
             Some(&message),
+            None,
             None,
             None,
         )
@@ -5127,6 +5427,7 @@ async fn classify_unfinished_apply_attempt(
                     Some(&message),
                     None,
                     None,
+                    None,
                 )
                 .await;
             }
@@ -5154,6 +5455,7 @@ async fn classify_unfinished_apply_attempt(
             Some(&message),
             None,
             None,
+            None,
         )
         .await;
     }
@@ -5175,6 +5477,7 @@ async fn classify_unfinished_apply_attempt(
             &attempt_id,
             "interrupted",
             Some(&message),
+            None,
             None,
             None,
         )
@@ -5201,6 +5504,7 @@ async fn classify_unfinished_apply_attempt(
                     &attempt_id,
                     "needs_inspection",
                     Some(&message),
+                    None,
                     None,
                     None,
                 )
@@ -5252,6 +5556,7 @@ async fn classify_unfinished_apply_attempt(
             Some(&message),
             Some(&post_evidence),
             Some(&current_status),
+            None,
         )
         .await;
     }
@@ -5335,6 +5640,21 @@ async fn classify_unfinished_apply_attempt(
             )
         };
     let artifact_message = (status != "applied_verified").then_some(message.as_str());
+    // A reconciled verified outcome asserts its rollback baseline unavailable.
+    // The snapshot in `post_evidence` was captured at *reconciliation* time; an
+    // edit made in the crash window is inside its hash, invisible to rollback's
+    // drift check. Only an apply-time observation may ever say `recorded`.
+    let reconciled_rollback_baseline =
+        (status == "applied_verified").then(|| RollbackBaselineRecord {
+            status: "unavailable".to_string(),
+            reason: Some("reconciled_outcome".to_string()),
+            source: "reconciliation".to_string(),
+            target_path: file_path.to_string(),
+            content_sha256: None,
+            branch: None,
+            head_sha: None,
+            captured_at: now_unix_seconds(),
+        });
     persist_reconciled_artifact(
         pool,
         &proposal_id,
@@ -5352,6 +5672,7 @@ async fn classify_unfinished_apply_attempt(
         artifact_message,
         Some(&post_evidence),
         Some(&current_status),
+        reconciled_rollback_baseline,
     )
     .await?;
     if let Some(verification) = post_apply_verification.as_ref() {
@@ -5371,7 +5692,7 @@ async fn load_patch_apply_attempt_records(
     pool: &SqlitePool,
 ) -> Result<Vec<PatchApplyAttemptRecord>, ApplyPatchError> {
     let rows = sqlx::query(
-        "SELECT id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, sanitized_error, backup_id, rollback_backup_id, started_at, completed_at, pre_apply_evidence_json, post_apply_evidence_json, post_apply_verification_json, post_rollback_verification_json FROM patch_apply_attempts ORDER BY started_at DESC LIMIT 100",
+        "SELECT id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, sanitized_error, backup_id, rollback_backup_id, started_at, completed_at, pre_apply_evidence_json, post_apply_evidence_json, post_apply_verification_json, post_rollback_verification_json, rollback_baseline_json FROM patch_apply_attempts ORDER BY started_at DESC LIMIT 100",
     )
     .fetch_all(pool)
     .await
@@ -5402,6 +5723,10 @@ async fn load_patch_apply_attempt_records(
                 .try_get::<Option<String>, _>("post_rollback_verification_json")
                 .unwrap_or(None)
                 .and_then(|value| serde_json::from_str(&value).ok());
+            let rollback_baseline: Option<RollbackBaselineRecord> = row
+                .try_get::<Option<String>, _>("rollback_baseline_json")
+                .unwrap_or(None)
+                .and_then(|value| serde_json::from_str(&value).ok());
             let current_git_status_changed = match (&pre_apply_evidence, &post_apply_evidence) {
                 (Some(pre), Some(post)) => post.git_status.as_ref().and_then(|current| {
                     pre.git_status
@@ -5426,6 +5751,7 @@ async fn load_patch_apply_attempt_records(
                 post_apply_evidence,
                 post_apply_verification,
                 post_rollback_verification,
+                rollback_baseline,
                 current_git_status_changed,
                 message: apply_attempt_message(&status),
             }
@@ -6252,8 +6578,10 @@ mod tests {
             .execute(pool)
             .await
             .expect("reset proposal status");
+        // rollback_baseline_json is nulled too: it is written by the checked
+        // finalize UPDATE, which a crash mid-apply never reaches.
         sqlx::query(
-            "UPDATE patch_apply_attempts SET status = 'applying', completed_at = NULL, sanitized_error = NULL, post_apply_evidence_json = NULL, post_apply_git_status_json = NULL WHERE id = ?",
+            "UPDATE patch_apply_attempts SET status = 'applying', completed_at = NULL, sanitized_error = NULL, post_apply_evidence_json = NULL, post_apply_git_status_json = NULL, rollback_baseline_json = NULL WHERE id = ?",
         )
         .bind(&result.apply_attempt_id)
         .execute(pool)
@@ -7430,6 +7758,7 @@ mod tests {
                 Some(&verification.message),
                 None,
                 Some(&unexpected_status),
+                None,
             )
             .await
             .expect("persist quarantined attempt");
@@ -8432,6 +8761,292 @@ Binary files a/image.png and b/image.png differ";
         });
     }
 
+    /// A reconciliation-classified apply must refuse rollback.
+    ///
+    /// A crashed apply that reconciliation later proves `applied_verified` gets
+    /// its evidence snapshot at *reconciliation* time, not apply time. An edit
+    /// made in the crash-to-reconciliation window — kept reverse-applicable by
+    /// landing outside the patched region — is inside that snapshot's hash, so
+    /// the drift check cannot see it, and rollback would restore the pre-apply
+    /// bytes over the user's edit while reporting a verified undo. The contents
+    /// immediately after the apply were never recorded and cannot be
+    /// reconstructed, so the only honest baseline for a reconciled outcome is
+    /// "unavailable".
+    #[test]
+    fn rollback_refuses_a_reconciliation_classified_apply() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("rollback-reconciled-apply");
+            init_git_repo(&repository_path);
+            let pool = create_apply_test_pool().await;
+            // A multi-line target with the patch at the top: an edit appended at
+            // the bottom is outside the hunk's neighborhood, so the reverse
+            // check cannot see it — verified by probe: `git apply --check -R`
+            // passes with the appended line, and rejects the same append on a
+            // single-line file.
+            let pre_apply =
+                "alpha\nbravo\ncharlie\ndelta\necho\nfoxtrot\ngolf\nhotel\nindia\njuliet\n";
+            let diff = "diff --git a/notes.txt b/notes.txt\n--- a/notes.txt\n+++ b/notes.txt\n@@ -1,4 +1,4 @@\n-alpha\n+ALPHA PATCHED\n bravo\n charlie\n delta\n";
+            commit_test_file(&repository_path, "notes.txt", pre_apply);
+            let input = seed_apply_test_records_for(
+                &pool,
+                &repository_path,
+                "approved",
+                "notes.txt",
+                "modify",
+                diff,
+            )
+            .await;
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let applied = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
+                .await
+                .expect("apply the multi-line modify");
+            assert_eq!(applied.status, "applied_verified");
+            // The crash: the attempt is stuck at `applying`, the write is done.
+            reset_successful_apply_to_unfinished(&pool, &applied, false, false).await;
+            // The user's edit before the next launch.
+            let edited = format!(
+                "{}user note added before reconciliation\n",
+                fs::read_to_string(repository_path.join("notes.txt")).unwrap()
+            );
+            fs::write(repository_path.join("notes.txt"), &edited)
+                .expect("simulate an edit in the crash window");
+
+            let attempts =
+                reconcile_interrupted_patch_apply_attempts_with_pool(&pool, &lock_directory)
+                    .await
+                    .expect("reconcile the crashed apply");
+            let attempt = attempts
+                .iter()
+                .find(|attempt| attempt.apply_attempt_id == applied.apply_attempt_id)
+                .expect("the reconciled attempt");
+            assert_eq!(
+                attempt.status, "applied_verified",
+                "fixture: reconciliation must classify this crash as verified"
+            );
+
+            let error = rollback_applied_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                test_rollback_input(ROLLBACK_CONFIRMATION_PHRASE),
+            )
+            .await
+            .expect_err(
+                "a reconciliation-classified apply has no apply-time baseline and must refuse",
+            );
+
+            assert_eq!(error.code, "baseline_unavailable");
+            assert_eq!(
+                fs::read_to_string(repository_path.join("notes.txt")).unwrap(),
+                edited,
+                "the user's crash-window edit must survive"
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// Apply asserts its rollback baseline positively, from ingredients that
+    /// cannot involve a git subprocess.
+    #[test]
+    fn apply_records_a_rollback_baseline_positively() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("apply-records-baseline");
+            init_git_repo(&repository_path);
+            let pool = create_apply_test_pool().await;
+            let applied = seed_and_apply_modify(&pool, &repository_path).await;
+
+            let row =
+                sqlx::query("SELECT rollback_baseline_json FROM patch_apply_attempts WHERE id = ?")
+                    .bind(&applied.apply_attempt_id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("load the finalized attempt row");
+            let baseline: Value = serde_json::from_str(
+                &row.try_get::<Option<String>, _>("rollback_baseline_json")
+                    .expect("read the baseline column")
+                    .expect("apply must write a baseline assertion"),
+            )
+            .expect("the baseline must be well-formed JSON");
+
+            assert_eq!(baseline["status"], "recorded");
+            assert_eq!(baseline["source"], "apply");
+            assert_eq!(baseline["targetPath"], ROLLBACK_TARGET);
+            let disk_hash = sha256_hex(
+                &fs::read(repository_path.join(ROLLBACK_TARGET)).expect("read applied file"),
+            );
+            assert_eq!(
+                baseline["contentSha256"],
+                disk_hash.as_str(),
+                "the recorded hash must be the post-apply bytes on disk"
+            );
+            assert_eq!(
+                baseline["headSha"],
+                applied
+                    .post_apply_git_status
+                    .head_sha
+                    .clone()
+                    .unwrap()
+                    .as_str()
+            );
+            assert_eq!(
+                baseline["branch"],
+                applied
+                    .post_apply_git_status
+                    .branch
+                    .clone()
+                    .unwrap()
+                    .as_str()
+            );
+
+            // The artifact carries the assertion too, for the display surface.
+            let artifact_row = sqlx::query(
+                "SELECT patch_artifacts_json FROM proposed_changes WHERE id = 'proposal-apply'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("load artifact state");
+            let artifacts: Value = serde_json::from_str(
+                &artifact_row
+                    .try_get::<String, _>("patch_artifacts_json")
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(artifacts[0]["rollbackBaseline"]["status"], "recorded");
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// An oversized post-apply target records an unavailable baseline with its
+    /// honest reason, rather than nothing.
+    #[test]
+    fn apply_records_an_unavailable_baseline_for_an_oversized_target() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("apply-baseline-too-large");
+            init_git_repo(&repository_path);
+            let (content, patch) = oversized_modify_fixture();
+            commit_test_file(&repository_path, "big-notes.txt", &content);
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records_for(
+                &pool,
+                &repository_path,
+                "approved",
+                "big-notes.txt",
+                "modify",
+                &patch,
+            )
+            .await;
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let applied = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
+                .await
+                .expect("the oversized-growth apply");
+
+            let row =
+                sqlx::query("SELECT rollback_baseline_json FROM patch_apply_attempts WHERE id = ?")
+                    .bind(&applied.apply_attempt_id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("load the finalized attempt row");
+            let baseline: Value = serde_json::from_str(
+                &row.try_get::<Option<String>, _>("rollback_baseline_json")
+                    .expect("read the baseline column")
+                    .expect("apply must assert unavailability explicitly, not by absence"),
+            )
+            .expect("well-formed baseline JSON");
+
+            assert_eq!(baseline["status"], "unavailable");
+            assert_eq!(baseline["reason"], "target_too_large");
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// The explicit assertion is the authority. Evidence that would have passed
+    /// the old absence-based check must not resurrect a rollback the assertion
+    /// refuses.
+    #[test]
+    fn rollback_consults_the_explicit_baseline_not_the_evidence() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("rollback-explicit-baseline");
+            init_git_repo(&repository_path);
+            let pool = create_apply_test_pool().await;
+            let applied = seed_and_apply_modify(&pool, &repository_path).await;
+            // post_apply_evidence_json remains intact and fully usable; only the
+            // assertion says unavailable.
+            sqlx::query("UPDATE patch_apply_attempts SET rollback_baseline_json = ? WHERE id = ?")
+                .bind(r#"{"status":"unavailable","reason":"not_recorded","source":"apply","targetPath":"My Notes.md","contentSha256":null,"branch":null,"headSha":null,"capturedAt":"1783532400"}"#)
+                .bind(&applied.apply_attempt_id)
+                .execute(&pool)
+                .await
+                .expect("assert unavailability explicitly");
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let error = rollback_applied_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                test_rollback_input(ROLLBACK_CONFIRMATION_PHRASE),
+            )
+            .await
+            .expect_err("an explicit unavailable assertion must refuse rollback");
+
+            assert_eq!(error.code, "baseline_unavailable");
+            assert_eq!(
+                fs::read_to_string(repository_path.join(ROLLBACK_TARGET)).unwrap(),
+                ROLLBACK_POST_APPLY_CONTENT
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// A legacy row whose apply recorded usable evidence keeps its rollback
+    /// capability: the baseline is backfilled by copying the recorded
+    /// observation, never by deriving one.
+    #[test]
+    fn ensure_backfills_a_rollback_baseline_from_recorded_evidence() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("backfill-recorded");
+            init_git_repo(&repository_path);
+            let pool = create_apply_test_pool().await;
+            let applied = seed_and_apply_modify(&pool, &repository_path).await;
+            // Simulate a row written before baselines existed.
+            sqlx::query(
+                "UPDATE patch_apply_attempts SET rollback_baseline_json = NULL WHERE id = ?",
+            )
+            .bind(&applied.apply_attempt_id)
+            .execute(&pool)
+            .await
+            .expect("simulate a legacy attempt row");
+
+            ensure_patch_apply_tables(&pool)
+                .await
+                .expect("ensure runs the backfill");
+
+            let row =
+                sqlx::query("SELECT rollback_baseline_json FROM patch_apply_attempts WHERE id = ?")
+                    .bind(&applied.apply_attempt_id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("load the backfilled row");
+            let baseline: Value = serde_json::from_str(
+                &row.try_get::<Option<String>, _>("rollback_baseline_json")
+                    .unwrap()
+                    .expect("backfill must fill the legacy row"),
+            )
+            .unwrap();
+            assert_eq!(baseline["status"], "recorded");
+            assert_eq!(baseline["source"], "backfill");
+
+            // Capability preserved: the backfilled baseline supports a rollback.
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let result = rollback_applied_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                test_rollback_input(ROLLBACK_CONFIRMATION_PHRASE),
+            )
+            .await
+            .expect("a backfilled baseline must keep the legacy row rollbackable");
+            assert_eq!(result.status, "rolled_back");
+            remove_temp_dir(&repository_path);
+        });
+    }
+
     /// The load-bearing safety rule: rollback must not overwrite user edits made
     /// after the apply.
     #[test]
@@ -8493,23 +9108,43 @@ Binary files a/image.png and b/image.png differ";
         });
     }
 
-    /// Apply persists its baseline best-effort, so an artifact can be
-    /// `applied_verified` with nothing to compare against. With no baseline no
-    /// drift check is possible, and rollback's whole safety rule depends on one.
+    /// A legacy row with no assertion and no usable evidence is permanently
+    /// un-rollbackable, and the backfill says so explicitly rather than leaving
+    /// the absence to speak.
     #[test]
-    fn rollback_refuses_an_artifact_with_no_post_apply_baseline() {
+    fn rollback_refuses_an_artifact_with_no_recorded_baseline() {
         tauri::async_runtime::block_on(async {
             let repository_path = create_temp_dir("rollback-no-baseline");
             init_git_repo(&repository_path);
             let pool = create_apply_test_pool().await;
             let applied = seed_and_apply_modify(&pool, &repository_path).await;
+            // A row written before baselines were asserted, whose best-effort
+            // evidence persist also failed: nothing usable anywhere.
             sqlx::query(
-                "UPDATE patch_apply_attempts SET post_apply_evidence_json = NULL WHERE id = ?",
+                "UPDATE patch_apply_attempts SET rollback_baseline_json = NULL, post_apply_evidence_json = NULL WHERE id = ?",
             )
             .bind(&applied.apply_attempt_id)
             .execute(&pool)
             .await
-            .expect("simulate apply's fire-and-forget baseline persist failing");
+            .expect("simulate a legacy row with no usable evidence");
+
+            ensure_patch_apply_tables(&pool)
+                .await
+                .expect("ensure runs the backfill");
+            let row =
+                sqlx::query("SELECT rollback_baseline_json FROM patch_apply_attempts WHERE id = ?")
+                    .bind(&applied.apply_attempt_id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("load the backfilled row");
+            let baseline: Value = serde_json::from_str(
+                &row.try_get::<Option<String>, _>("rollback_baseline_json")
+                    .unwrap()
+                    .expect("the backfill must assert unavailability explicitly"),
+            )
+            .unwrap();
+            assert_eq!(baseline["status"], "unavailable");
+            assert_eq!(baseline["reason"], "not_recorded");
 
             let lock_directory = test_apply_lock_directory(&repository_path);
             let error = rollback_applied_patch_artifact_with_pool(
@@ -8518,7 +9153,7 @@ Binary files a/image.png and b/image.png differ";
                 test_rollback_input(ROLLBACK_CONFIRMATION_PHRASE),
             )
             .await
-            .expect_err("no baseline means no rollback");
+            .expect_err("no recorded baseline means no rollback");
 
             assert_eq!(error.code, "baseline_unavailable");
             assert_eq!(
