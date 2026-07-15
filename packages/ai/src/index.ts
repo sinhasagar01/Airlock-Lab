@@ -211,7 +211,10 @@ export type PatchApplyAttemptStatus =
   | "failed"
   | "interrupted"
   | "needs_inspection"
-  | "quarantine_required";
+  | "quarantine_required"
+  // Terminal. A human recorded that they inspected an unresolved attempt. This
+  // clears the repository-wide apply block; it never re-enables the artifact.
+  | "inspected";
 
 export type PatchValidationStatus =
   | "not_validated"

@@ -29,6 +29,7 @@ const MAX_FINGERPRINT_BYTES: u64 = 256 * 1024;
 const MAX_FINGERPRINT_TARGETS: usize = 64;
 const WORKSPACE_DATABASE_URL: &str = "sqlite:workspace.db";
 const APPLY_CONFIRMATION_PHRASE: &str = "APPLY PATCH";
+const ACKNOWLEDGE_CONFIRMATION_PHRASE: &str = "INSPECTED";
 const GIT_APPLY_TIMEOUT: Duration = Duration::from_secs(15);
 const GIT_CHILD_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const APPLY_LOCK_STALE_AFTER_SECONDS: u64 = 5 * 60;
@@ -227,6 +228,23 @@ struct ApplyApprovedPatchArtifactInput {
     approval_request_id: String,
     patch_artifact_id: String,
     confirmation_phrase: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AcknowledgeApplyAttemptInput {
+    apply_attempt_id: String,
+    confirmation_phrase: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AcknowledgeApplyAttemptResult {
+    apply_attempt_id: String,
+    status: String,
+    acknowledged_from_status: String,
+    acknowledged_at: String,
+    message: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1361,6 +1379,14 @@ async fn ensure_patch_apply_tables(pool: &SqlitePool) -> Result<(), ApplyPatchEr
         (
             "post_apply_verification_json",
             "ALTER TABLE patch_apply_attempts ADD COLUMN post_apply_verification_json TEXT",
+        ),
+        (
+            "acknowledged_at",
+            "ALTER TABLE patch_apply_attempts ADD COLUMN acknowledged_at TEXT",
+        ),
+        (
+            "acknowledged_from_status",
+            "ALTER TABLE patch_apply_attempts ADD COLUMN acknowledged_from_status TEXT",
         ),
     ] {
         if !table_columns.iter().any(|existing| existing == column) {
@@ -2689,6 +2715,95 @@ async fn apply_approved_patch_artifact_with_pool(
     result
 }
 
+/// Records that a human inspected an unresolved apply attempt.
+///
+/// Without this, `quarantine_required`, `needs_inspection`, and `interrupted`
+/// are permanent: they block every future apply for the repository and no
+/// command transitions out of them, so the only exit is editing SQLite by hand.
+///
+/// Acknowledgement is deliberately narrow. It records the inspection and clears
+/// the repository-wide block. It never applies, retries, restores, or reads the
+/// repository, and it never re-enables the artifact whose outcome was unproven:
+/// that artifact stays permanently blocked by its own apply state. The original
+/// classification is preserved in `acknowledged_from_status` for audit.
+async fn acknowledge_patch_apply_attempt_with_pool(
+    pool: &SqlitePool,
+    input: AcknowledgeApplyAttemptInput,
+) -> Result<AcknowledgeApplyAttemptResult, ApplyPatchError> {
+    if input.confirmation_phrase != ACKNOWLEDGE_CONFIRMATION_PHRASE {
+        return Err(apply_patch_error(
+            "confirmation_required",
+            "Type INSPECTED exactly to record that this attempt was reviewed manually.",
+        ));
+    }
+    if input.apply_attempt_id.trim().is_empty()
+        || input.apply_attempt_id.len() > 240
+        || input.apply_attempt_id.contains('\0')
+    {
+        return Err(apply_patch_error(
+            "invalid_identifier",
+            "The apply attempt identifier is invalid.",
+        ));
+    }
+
+    ensure_patch_apply_tables(pool).await?;
+    let attempt_row = sqlx::query("SELECT status FROM patch_apply_attempts WHERE id = ? LIMIT 1")
+        .bind(&input.apply_attempt_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|_| {
+            apply_patch_error(
+                "storage_unavailable",
+                "The apply attempt could not be verified.",
+            )
+        })?
+        .ok_or_else(|| {
+            apply_patch_error("attempt_not_found", "The apply attempt is unavailable.")
+        })?;
+    let current_status: String = attempt_row.try_get("status").unwrap_or_default();
+
+    // `pending` and `applying` may still be live or reconcilable. Only a
+    // terminal, already-reconciled classification can be acknowledged.
+    if !matches!(
+        current_status.as_str(),
+        "interrupted" | "needs_inspection" | "quarantine_required"
+    ) {
+        return Err(apply_patch_error(
+            "attempt_not_inspectable",
+            "Only a reconciled interrupted, quarantined, or ambiguous attempt can be acknowledged.",
+        ));
+    }
+
+    let acknowledged_at = now_unix_seconds();
+    let update = sqlx::query(
+        "UPDATE patch_apply_attempts SET status = 'inspected', acknowledged_at = ?, acknowledged_from_status = status WHERE id = ? AND status IN ('interrupted', 'needs_inspection', 'quarantine_required')",
+    )
+    .bind(&acknowledged_at)
+    .bind(&input.apply_attempt_id)
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "The inspection acknowledgement could not be recorded.",
+        )
+    })?;
+    if update.rows_affected() != 1 {
+        return Err(apply_patch_error(
+            "attempt_not_inspectable",
+            "The apply attempt changed while it was being acknowledged.",
+        ));
+    }
+
+    Ok(AcknowledgeApplyAttemptResult {
+        apply_attempt_id: input.apply_attempt_id,
+        status: "inspected".to_string(),
+        acknowledged_from_status: current_status,
+        acknowledged_at,
+        message: "The attempt was recorded as manually inspected. Its artifact remains permanently ineligible for application, and no patch was retried or rolled back.".to_string(),
+    })
+}
+
 async fn apply_approved_patch_artifact_under_lock(
     pool: &SqlitePool,
     input: ApplyApprovedPatchArtifactInput,
@@ -2834,9 +2949,22 @@ async fn apply_approved_patch_artifact_under_lock(
             "The patch artifact is not linked to the proposed change.",
         ));
     }
+    // An artifact whose attempt ended unresolved is permanently ineligible.
+    // Acknowledging the attempt clears the repository-wide block, so this
+    // artifact-level guard is the only thing preventing that acknowledgement
+    // from re-enabling a patch whose outcome was never proven.
     if matches!(
         artifact.get("applyStatus").and_then(Value::as_str),
-        Some("applying" | "applied" | "applied_verified" | "quarantine_required")
+        Some("interrupted" | "needs_inspection" | "quarantine_required")
+    ) {
+        return Err(apply_patch_error(
+            "unresolved_apply_attempt",
+            "This patch artifact has an unresolved application attempt and requires manual inspection. It is not eligible for application.",
+        ));
+    }
+    if matches!(
+        artifact.get("applyStatus").and_then(Value::as_str),
+        Some("applying" | "applied" | "applied_verified")
     ) {
         return Err(apply_patch_error(
             "already_applied",
@@ -4141,6 +4269,26 @@ async fn apply_approved_patch_artifact(
 }
 
 #[tauri::command]
+async fn acknowledge_patch_apply_attempt(
+    database_instances: tauri::State<'_, DbInstances>,
+    input: AcknowledgeApplyAttemptInput,
+) -> Result<AcknowledgeApplyAttemptResult, ApplyPatchError> {
+    let instances = database_instances.0.read().await;
+    let pool = match instances.get(WORKSPACE_DATABASE_URL) {
+        Some(DbPool::Sqlite(pool)) => pool.clone(),
+        _ => {
+            return Err(apply_patch_error(
+                "storage_unavailable",
+                "Native workspace storage is unavailable. No attempt was acknowledged.",
+            ));
+        }
+    };
+    drop(instances);
+
+    acknowledge_patch_apply_attempt_with_pool(&pool, input).await
+}
+
+#[tauri::command]
 async fn reconcile_interrupted_patch_apply_attempts(
     app_handle: tauri::AppHandle,
     database_instances: tauri::State<'_, DbInstances>,
@@ -4979,6 +5127,110 @@ mod tests {
         assert!(validate_generated_patch_structure(&binary_payload).is_err());
         assert!(validate_generated_patch_structure(&oversized).is_err());
         assert!(validate_generated_patch_structure(&too_many_lines).is_err());
+    }
+
+    #[test]
+    fn safe_apply_rejects_an_artifact_left_in_an_unresolved_attempt_state() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("safe-apply-unresolved-artifact");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+            mutate_apply_artifact(&pool, |artifacts| {
+                artifacts[0]["applyStatus"] = json!("interrupted");
+            })
+            .await;
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let error = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
+                .await
+                .expect_err("an unresolved artifact must never be applied again");
+
+            assert_eq!(error.code, "unresolved_apply_attempt");
+            assert!(!repository_path.join("generated.txt").exists());
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    #[test]
+    fn acknowledging_an_inspected_attempt_unblocks_the_repository_without_retrying() {
+        tauri::async_runtime::block_on(async {
+            let pool = create_apply_test_pool().await;
+            ensure_patch_apply_tables(&pool)
+                .await
+                .expect("apply tables");
+            sqlx::query(
+                "INSERT INTO patch_apply_attempts (id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, started_at) VALUES ('attempt-quarantined', 'proposal-apply', 'artifact-apply', 'approval-apply', 'repo-ack', 'quarantine_required', '1783532400')",
+            )
+            .execute(&pool)
+            .await
+            .expect("seed quarantined attempt");
+
+            let wrong_phrase = acknowledge_patch_apply_attempt_with_pool(
+                &pool,
+                AcknowledgeApplyAttemptInput {
+                    apply_attempt_id: "attempt-quarantined".to_string(),
+                    confirmation_phrase: "inspected".to_string(),
+                },
+            )
+            .await
+            .expect_err("acknowledgement requires the exact phrase");
+            assert_eq!(wrong_phrase.code, "confirmation_required");
+
+            let result = acknowledge_patch_apply_attempt_with_pool(
+                &pool,
+                AcknowledgeApplyAttemptInput {
+                    apply_attempt_id: "attempt-quarantined".to_string(),
+                    confirmation_phrase: ACKNOWLEDGE_CONFIRMATION_PHRASE.to_string(),
+                },
+            )
+            .await
+            .expect("acknowledge an inspected attempt");
+
+            assert_eq!(result.status, "inspected");
+            // The audit trail must survive acknowledgement.
+            let row = sqlx::query(
+                "SELECT status, acknowledged_from_status FROM patch_apply_attempts WHERE id = 'attempt-quarantined'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("load acknowledged attempt");
+            assert_eq!(row.try_get::<String, _>("status").unwrap(), "inspected");
+            assert_eq!(
+                row.try_get::<String, _>("acknowledged_from_status")
+                    .unwrap(),
+                "quarantine_required"
+            );
+        });
+    }
+
+    #[test]
+    fn acknowledgement_refuses_an_attempt_that_has_not_been_reconciled() {
+        tauri::async_runtime::block_on(async {
+            let pool = create_apply_test_pool().await;
+            ensure_patch_apply_tables(&pool)
+                .await
+                .expect("apply tables");
+            sqlx::query(
+                "INSERT INTO patch_apply_attempts (id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, started_at) VALUES ('attempt-applying', 'proposal-apply', 'artifact-apply', 'approval-apply', 'repo-ack', 'applying', '1783532400')",
+            )
+            .execute(&pool)
+            .await
+            .expect("seed in-flight attempt");
+
+            let error = acknowledge_patch_apply_attempt_with_pool(
+                &pool,
+                AcknowledgeApplyAttemptInput {
+                    apply_attempt_id: "attempt-applying".to_string(),
+                    confirmation_phrase: ACKNOWLEDGE_CONFIRMATION_PHRASE.to_string(),
+                },
+            )
+            .await
+            .expect_err("an in-flight attempt must reconcile before acknowledgement");
+
+            assert_eq!(error.code, "attempt_not_inspectable");
+        });
     }
 
     #[test]
@@ -6255,6 +6507,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
+            acknowledge_patch_apply_attempt,
             apply_approved_patch_artifact,
             create_openai_plan,
             get_openai_provider_configuration,

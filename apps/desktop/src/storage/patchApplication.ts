@@ -6,6 +6,7 @@ import type {
 } from "@ai-dev/ai";
 
 export const APPLY_PATCH_CONFIRMATION = "APPLY PATCH";
+export const ACKNOWLEDGE_INSPECTION_CONFIRMATION = "INSPECTED";
 
 type NativeGitStatusSummary = {
   repository_id: string;
@@ -124,6 +125,38 @@ export async function applyApprovedPatchArtifact(
       ...result,
       postApplyGitStatus: normalizeGitStatus(result.postApplyGitStatus),
     };
+  } catch (error) {
+    throw normalizeNativeError(error);
+  }
+}
+
+export type AcknowledgeApplyAttemptResult = {
+  applyAttemptId: string;
+  status: "inspected";
+  acknowledgedFromStatus: string;
+  acknowledgedAt: string;
+  message: string;
+};
+
+/**
+ * Records that a human inspected an unresolved apply attempt, clearing the
+ * repository-wide apply block. It never retries, restores, or re-enables the
+ * artifact, which stays permanently ineligible.
+ */
+export async function acknowledgePatchApplyAttempt(
+  applyAttemptId: string,
+  confirmationPhrase: string,
+): Promise<AcknowledgeApplyAttemptResult> {
+  try {
+    return await invoke<AcknowledgeApplyAttemptResult>(
+      "acknowledge_patch_apply_attempt",
+      {
+        input: {
+          applyAttemptId,
+          confirmationPhrase,
+        },
+      },
+    );
   } catch (error) {
     throw normalizeNativeError(error);
   }
