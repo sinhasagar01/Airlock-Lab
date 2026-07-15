@@ -3526,6 +3526,7 @@ fn apply_attempt_message(status: &str) -> String {
         "failed" => "The interrupted attempt did not change the working tree and was not retried.".to_string(),
         "interrupted" => "The apply process stopped before complete recovery evidence was available. Manual inspection is required.".to_string(),
         "needs_inspection" => "Repository evidence is ambiguous after an interrupted apply. Manual inspection is required.".to_string(),
+        "inspected" => "A human recorded that this attempt was inspected manually. Its artifact remains ineligible for application, and no patch was retried or rolled back.".to_string(),
         "pending" => "The patch apply attempt was recorded but has not started writing files.".to_string(),
         "applying" => "The patch apply attempt has not recorded a terminal result.".to_string(),
         _ => "The patch apply attempt has a recorded terminal state.".to_string(),
@@ -5146,6 +5147,52 @@ mod tests {
             let error = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
                 .await
                 .expect_err("an unresolved artifact must never be applied again");
+
+            assert_eq!(error.code, "unresolved_apply_attempt");
+            assert!(!repository_path.join("generated.txt").exists());
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    #[test]
+    fn safe_apply_stays_blocked_for_its_artifact_after_the_attempt_is_acknowledged() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("safe-apply-acknowledged-artifact");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+            ensure_patch_apply_tables(&pool)
+                .await
+                .expect("apply tables");
+            mutate_apply_artifact(&pool, |artifacts| {
+                artifacts[0]["applyStatus"] = json!("quarantine_required");
+            })
+            .await;
+            sqlx::query(
+                "INSERT INTO patch_apply_attempts (id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, started_at) VALUES ('attempt-ack', 'proposal-apply', 'artifact-apply', 'approval-apply', 'repo-apply', 'quarantine_required', '1783532400')",
+            )
+            .execute(&pool)
+            .await
+            .expect("seed quarantined attempt");
+
+            // Acknowledging clears the repository-wide unresolved-attempt block,
+            // which is what isolates the artifact-level guard as the only thing
+            // still standing between this artifact and a second write.
+            acknowledge_patch_apply_attempt_with_pool(
+                &pool,
+                AcknowledgeApplyAttemptInput {
+                    apply_attempt_id: "attempt-ack".to_string(),
+                    confirmation_phrase: ACKNOWLEDGE_CONFIRMATION_PHRASE.to_string(),
+                },
+            )
+            .await
+            .expect("acknowledge the quarantined attempt");
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let error = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
+                .await
+                .expect_err("an acknowledged artifact must never become appliable again");
 
             assert_eq!(error.code, "unresolved_apply_attempt");
             assert!(!repository_path.join("generated.txt").exists());
