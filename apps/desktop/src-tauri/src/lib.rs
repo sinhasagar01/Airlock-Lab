@@ -373,39 +373,56 @@ struct OpenAiPlanInput {
     context: OpenAiPlanContext,
 }
 
-fn git_output(repository_path: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
+/// Runs a fixed command with a deadline and returns its stdout on success.
+///
+/// Only the mutating apply command used to be bounded, so any `git status` or
+/// `git diff` read could hang indefinitely. Rollback has to read git status to
+/// verify what it restored, which makes an unbounded read a liveness hole in a
+/// destructive path.
+///
+/// stdout is drained on a separate thread rather than after the wait: git status
+/// output routinely exceeds a pipe buffer, and waiting first would deadlock with
+/// the child blocked on a full pipe. stderr is discarded, as everywhere else, so
+/// raw git text cannot reach a caller.
+fn run_bounded_capture(
+    program: &str,
+    working_directory: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Option<Vec<u8>> {
+    let mut child = Command::new(program)
         .args(args)
-        .current_dir(repository_path)
-        .output()
+        .current_dir(working_directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut buffer = Vec::new();
+        std::io::Read::read_to_end(&mut stdout, &mut buffer).map(|_| buffer)
+    });
+    let outcome = wait_for_child_with_timeout(&mut child, timeout);
+    let captured = reader.join().ok()?.ok()?;
 
-    if !output.status.success() {
-        return None;
+    match outcome {
+        FixedGitApplyOutcome::Succeeded => Some(captured),
+        _ => None,
     }
+}
+
+fn git_output(repository_path: &str, args: &[&str]) -> Option<String> {
+    let stdout = run_bounded_capture("git", repository_path, args, GIT_APPLY_TIMEOUT)?;
 
     // Only trailing whitespace is safe to strip. Porcelain v1 encodes an
     // unstaged change as a leading space in `XY PATH`, and trimming the start
     // shifts every path slice on the first status line by one byte.
-    Some(
-        String::from_utf8_lossy(&output.stdout)
-            .trim_end()
-            .to_string(),
-    )
+    Some(String::from_utf8_lossy(&stdout).trim_end().to_string())
 }
 
 fn git_output_raw(repository_path: &str, args: &[&str]) -> Option<Vec<u8>> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(repository_path)
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    Some(output.stdout)
+    run_bounded_capture("git", repository_path, args, GIT_APPLY_TIMEOUT)
 }
 
 fn should_skip_path(path: &Path) -> bool {
@@ -6721,6 +6738,63 @@ mod tests {
         assert!(unsafe_old_path_diff.raw_diff.is_none());
 
         remove_temp_dir(&repository);
+    }
+
+    #[test]
+    fn bounded_capture_terminates_a_child_that_exceeds_its_deadline() {
+        let repository_path = create_temp_dir("bounded-capture-timeout");
+        let started_at = Instant::now();
+
+        // Only the fixed apply command had a deadline. Any status or diff read
+        // could hang forever, and rollback has to read git status to verify what
+        // it restored.
+        let output = run_bounded_capture(
+            "sleep",
+            repository_path.to_str().unwrap(),
+            &["30"],
+            Duration::from_millis(250),
+        );
+
+        assert!(output.is_none());
+        assert!(
+            started_at.elapsed() < Duration::from_secs(5),
+            "the child was not terminated at its deadline"
+        );
+        remove_temp_dir(&repository_path);
+    }
+
+    #[test]
+    fn bounded_capture_drains_output_larger_than_a_pipe_buffer() {
+        let repository_path = create_temp_dir("bounded-capture-large");
+        init_git_repo(&repository_path);
+        // Comfortably past a 64 KiB pipe buffer: waiting on the child before
+        // draining its stdout would deadlock here.
+        for index in 0..4_000 {
+            fs::write(repository_path.join(format!("file-{index:05}.txt")), "x\n").unwrap();
+        }
+
+        let summary = load_git_status_summary(
+            "repo-large".to_string(),
+            repository_path.to_string_lossy().to_string(),
+        );
+
+        assert_eq!(summary.changed_file_count, 4_000);
+        assert_eq!(summary.files.len(), 4_000);
+        remove_temp_dir(&repository_path);
+    }
+
+    #[test]
+    fn bounded_capture_reports_a_failing_command_as_unavailable() {
+        let repository_path = create_temp_dir("bounded-capture-fail");
+
+        // Not a git repository: git exits non-zero and the caller must see None
+        // rather than empty output.
+        assert!(git_output(
+            repository_path.to_str().unwrap(),
+            &["status", "--porcelain=v1"]
+        )
+        .is_none());
+        remove_temp_dir(&repository_path);
     }
 
     #[test]
