@@ -5237,6 +5237,46 @@ async fn classify_unfinished_apply_attempt(
     //
     // The exit already exists: `INSPECTED` clears the repository-wide block while
     // the artifact stays permanently ineligible.
+    // The probes below speak only about patches, so they may only be run for the
+    // statuses they can speak about.
+    //
+    // `pending` and `applying` are apply attempts: forward and reverse
+    // `git apply --check` are evidence about them. A status this function has
+    // never heard of is some other operation, and patch-shaped probes say
+    // nothing about it — the same reasoning that gives `rolling_back` an
+    // unconditional verdict rather than a probed one. Classifying an unknown
+    // status `failed` on evidence that does not describe it would unblock the
+    // repository on a model that does not fit.
+    //
+    // `needs_inspection` is the honest verdict: no outcome can be proven safely.
+    // It blocks, and `INSPECTED` clears it — which is the door that makes the
+    // unresolved-attempt gate's default safe to invert.
+    if !matches!(
+        attempt_status.as_str(),
+        "pending" | "applying" | "rolling_back"
+    ) {
+        let message = "This apply attempt was left in a state this version does not recognise, so its outcome cannot be determined. Manual inspection is required; nothing was retried, applied, or restored.";
+        persist_reconciled_attempt(
+            pool,
+            &attempt_id,
+            "needs_inspection",
+            Some(message),
+            None,
+            None,
+            None,
+        )
+        .await?;
+        return persist_reconciled_artifact(
+            pool,
+            &proposal_id,
+            &artifact_id,
+            "needs_inspection",
+            backup_id.as_deref(),
+            Some(message),
+            None,
+        )
+        .await;
+    }
     if attempt_status == "rolling_back" {
         let message = "A rollback stopped before it could prove what it wrote. The target file's contents cannot be determined from the available evidence. Manual inspection is required; nothing was retried or restored.";
         persist_reconciled_attempt(
@@ -5783,12 +5823,23 @@ async fn reconcile_interrupted_patch_apply_attempts_with_pool(
         };
         mark_abandoned_apply_locks_stale(pool, &repository_id).await?;
     }
-    // `rolling_back` joins this list because a state the reconciler cannot see is
-    // strictly worse than a state with no exit: it would be an attempt stuck
-    // mid-write, the target in an unknown state, and the repository still
-    // accepting applies as though nothing were pending.
+    // Reconciliation sees everything that does not already carry a verdict, and
+    // the default for a status it has never heard of is therefore *reconcile*.
+    //
+    // This list enumerated the in-flight statuses instead, which made its
+    // default *never reconcile*: an attempt in an unrecognised status was never
+    // seen, never classified, never resolved. `rolling_back` had to be added by
+    // hand for exactly that reason, and the next status would have needed the
+    // same hand.
+    //
+    // The exempt statuses are those with a verdict. Note this is **not** the
+    // same list as the unresolved-attempt gate's: `interrupted`,
+    // `needs_inspection`, and `quarantine_required` are exempt here because
+    // reconciliation has nothing left to add, yet they still block the
+    // repository because a human has not acted. "Classified" and "resolved" are
+    // different questions, so they get different lists.
     let unfinished_rows = sqlx::query(
-        "SELECT id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, backup_id, pre_apply_evidence_json FROM patch_apply_attempts WHERE status IN ('pending', 'applying', 'rolling_back') ORDER BY started_at ASC",
+        "SELECT id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, backup_id, pre_apply_evidence_json FROM patch_apply_attempts WHERE status NOT IN ('applied', 'applied_verified', 'failed', 'interrupted', 'needs_inspection', 'quarantine_required', 'rolled_back', 'inspected') ORDER BY started_at ASC",
     )
     .fetch_all(pool)
     .await
@@ -9713,6 +9764,121 @@ Binary files a/image.png and b/image.png differ";
                 );
                 remove_temp_dir(&repository_path);
             }
+        });
+    }
+
+    /// An unrecognised attempt status is seen by reconciliation. (A3's shape.)
+    ///
+    /// The query enumerated the in-flight statuses, so its default was *never
+    /// reconcile*: an attempt in an unknown status was never seen, never
+    /// classified, never resolved. Combined with A2's inversion it would block
+    /// forever with no door, which is why the two land together.
+    ///
+    /// The verdict is `needs_inspection` unconditionally, with no probe. The
+    /// forward and reverse `git apply --check` probes speak only about patches;
+    /// they say nothing about an operation we cannot name, and classifying an
+    /// unknown status `failed` on patch-shaped evidence would unblock the
+    /// repository on a model that does not fit.
+    #[test]
+    fn an_unrecognized_attempt_status_is_seen_and_classified_by_reconciliation() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("a3-unknown-seen");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let pool = create_apply_test_pool().await;
+            seed_apply_test_records(&pool, &repository_path, "approved").await;
+            ensure_patch_apply_tables(&pool)
+                .await
+                .expect("apply tables");
+            seed_attempt_with_status(&pool, "attempt-future", "some_future_status").await;
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let attempts =
+                reconcile_interrupted_patch_apply_attempts_with_pool(&pool, &lock_directory)
+                    .await
+                    .expect("reconcile");
+
+            let reconciled = attempts
+                .iter()
+                .find(|attempt| attempt.apply_attempt_id == "attempt-future")
+                .expect("the unknown attempt must appear in the records");
+            assert_eq!(
+                reconciled.status, "needs_inspection",
+                "an unrecognised attempt status must be classified, not skipped"
+            );
+            assert_eq!(
+                attempt_status(&pool, "attempt-future").await,
+                "needs_inspection",
+                "the classification must be durable"
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// An unrecognised status is never judged by patch-shaped probes.
+    ///
+    /// This is the dangerous half, and it needs complete apply evidence to show:
+    /// with a full pre-apply snapshot and a working tree back at its pre-apply
+    /// state, the classifier's `failed` arm fires — fingerprints match, git
+    /// status is unchanged, the forward check passes — and `failed` **does not
+    /// block the repository**. So without the classifier's allow-list, an
+    /// unrecognised operation would be declared a no-op on evidence that
+    /// describes a patch and says nothing about it, and the repository would be
+    /// freed.
+    ///
+    /// The honest verdict is `needs_inspection`: no outcome can be proven
+    /// safely. It blocks, and `INSPECTED` clears it.
+    #[test]
+    fn an_unrecognized_attempt_status_is_never_judged_by_patch_shaped_probes() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("a3-unknown-no-probe");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let applied = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
+                .await
+                .expect("apply, to produce complete pre-apply evidence");
+            // Rewind to an unfinished attempt that still carries its evidence,
+            // then relabel it as an operation this version cannot name.
+            reset_successful_apply_to_unfinished(&pool, &applied, false, false).await;
+            sqlx::query(
+                "UPDATE patch_apply_attempts SET status = 'some_future_status' WHERE id = ?",
+            )
+            .bind(&applied.apply_attempt_id)
+            .execute(&pool)
+            .await
+            .expect("relabel the attempt");
+            // Put the tree back where the patch-shaped probes will read it as
+            // "nothing happened".
+            fs::remove_file(repository_path.join("generated.txt")).expect("revert the tree");
+
+            reconcile_interrupted_patch_apply_attempts_with_pool(&pool, &lock_directory)
+                .await
+                .expect("reconcile");
+
+            assert_eq!(
+                attempt_status(&pool, &applied.apply_attempt_id).await,
+                "needs_inspection",
+                "an unnameable operation must not be judged a no-op by patch evidence"
+            );
+            // And it still blocks, which is what `failed` would not have done.
+            let blocked = apply_approved_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                ApplyApprovedPatchArtifactInput {
+                    repository_id: "repo-apply".to_string(),
+                    proposed_change_id: "proposal-apply".to_string(),
+                    approval_request_id: "approval-apply".to_string(),
+                    patch_artifact_id: "artifact-apply".to_string(),
+                    confirmation_phrase: APPLY_CONFIRMATION_PHRASE.to_string(),
+                },
+            )
+            .await
+            .expect_err("the repository must stay blocked");
+            assert_eq!(blocked.code, "unresolved_apply_attempt");
+            remove_temp_dir(&repository_path);
         });
     }
 
