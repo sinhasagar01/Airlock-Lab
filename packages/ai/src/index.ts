@@ -186,6 +186,10 @@ export type ProposedChangeStatus =
   | "rejected"
   | "superseded"
   | "applied"
+  // Terminal. The applied patch was restored from its pre-apply backup. The
+  // proposal moves with its artifact: leaving it `applied` after the change was
+  // undone would render a lie on the product's most honest surface.
+  | "rolled_back"
   | "quarantine_required";
 
 export type ProposedPatchArtifactStatus =
@@ -201,6 +205,13 @@ export type PatchApplyStatus =
   | "interrupted"
   | "needs_inspection"
   | "quarantine_required"
+  // In flight. A rollback has persisted its "we started" marker and is writing.
+  | "rolling_back"
+  // Terminal, and permanently ineligible: re-applying would reintroduce the
+  // replay every apply gate exists to prevent, so a fresh proposal and
+  // validation cycle are required. The native apply guard enforces this — the
+  // rendering below it is not what stops a second write.
+  | "rolled_back"
   | "blocked";
 
 export type PatchApplyAttemptStatus =
@@ -212,6 +223,13 @@ export type PatchApplyAttemptStatus =
   | "interrupted"
   | "needs_inspection"
   | "quarantine_required"
+  // In flight. Persisted before the restore write, and blocking: an abandoned
+  // `rolling_back` attempt stops every later apply or rollback for the
+  // repository until a human clears it, and reconciliation classifies it
+  // unconditionally to `quarantine_required`.
+  | "rolling_back"
+  // Terminal. The restore completed and post-restore verification proved it.
+  | "rolled_back"
   // Terminal. A human recorded that they inspected an unresolved attempt. This
   // clears the repository-wide apply block; it never re-enables the artifact.
   | "inspected";
@@ -268,6 +286,29 @@ export type PostApplyPathVerification = {
   message: string;
 };
 
+/**
+ * Post-restore evidence.
+ *
+ * Deliberately not `PostApplyPathVerification`. Rollback proves a delta against
+ * the pre-restore tree rather than a single approved path: the target leaves the
+ * changed set and the staged set is untouched. The expectation is not "the tree
+ * is clean" and not "nothing is staged" — the user may have dirtied or staged
+ * unrelated files since the apply, and quarantining a repository where nothing
+ * went wrong would be a false account.
+ */
+export type PostRollbackVerification = {
+  status: "rolled_back" | "quarantine_required";
+  targetPath: string;
+  expectedChangedPaths: string[];
+  observedChangedPaths: string[];
+  unexpectedPaths: string[];
+  missingExpectedPaths: string[];
+  expectedStagedPaths: string[];
+  observedStagedPaths: string[];
+  verifiedAt: string;
+  message: string;
+};
+
 export type PatchApplyAttempt = {
   applyAttemptId: string;
   repositoryId: string;
@@ -275,6 +316,7 @@ export type PatchApplyAttempt = {
   approvalRequestId: string;
   patchArtifactId: string;
   backupId?: string;
+  rollbackBackupId?: string;
   status: PatchApplyAttemptStatus;
   startedAt: string;
   completedAt?: string;
@@ -282,6 +324,7 @@ export type PatchApplyAttempt = {
   preApplyEvidence?: PatchApplyEvidence;
   postApplyEvidence?: PatchApplyEvidence;
   postApplyVerification?: PostApplyPathVerification;
+  postRollbackVerification?: PostRollbackVerification;
   currentGitStatusChanged?: boolean;
   message: string;
 };
@@ -333,6 +376,13 @@ export type ProposedPatchArtifact = {
   backupId?: string;
   postApplyGitStatus?: GitStatusSummary;
   postApplyVerification?: PostApplyPathVerification;
+  // The bytes rollback destroyed, stored apart from `backupId` — the pre-apply
+  // backup it restores *from*. Conflating the two is how a recovery path
+  // destroys what it is recovering.
+  rollbackBackupId?: string;
+  rolledBackAt?: string;
+  rolledBackBy?: "local_user";
+  postRollbackVerification?: PostRollbackVerification;
 };
 
 export type ProviderPatchArtifact = {

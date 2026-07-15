@@ -30,6 +30,7 @@ const MAX_FINGERPRINT_TARGETS: usize = 64;
 const WORKSPACE_DATABASE_URL: &str = "sqlite:workspace.db";
 const APPLY_CONFIRMATION_PHRASE: &str = "APPLY PATCH";
 const ACKNOWLEDGE_CONFIRMATION_PHRASE: &str = "INSPECTED";
+const ROLLBACK_CONFIRMATION_PHRASE: &str = "ROLL BACK";
 const GIT_APPLY_TIMEOUT: Duration = Duration::from_secs(15);
 const GIT_CHILD_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const APPLY_LOCK_STALE_AFTER_SECONDS: u64 = 5 * 60;
@@ -230,6 +231,68 @@ struct ApplyApprovedPatchArtifactInput {
     confirmation_phrase: String,
 }
 
+/// Rollback carries durable IDs and the typed phrase only.
+///
+/// No path, no bytes, no Git arguments: native reloads every durable record and
+/// re-derives every check. There is deliberately no `approvalRequestId` — the
+/// approval authorized the apply, not the undo, and the linked ID is read from
+/// the persisted proposal rather than accepted from the caller.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RollbackAppliedPatchArtifactInput {
+    repository_id: String,
+    proposed_change_id: String,
+    patch_artifact_id: String,
+    confirmation_phrase: String,
+}
+
+/// The bytes rollback is about to destroy, captured once.
+///
+/// One read serves both the drift check and the pre-rollback backup. Reading
+/// twice would widen the TOCTOU window recorded under roadmap #12 and could
+/// hash different bytes than it stores.
+#[derive(Debug)]
+struct RollbackTargetCapture {
+    content: String,
+    content_sha256: String,
+}
+
+/// Post-restore evidence.
+///
+/// Deliberately not `PostApplyPathVerification`. Rollback's expectation is a
+/// delta against the pre-restore tree rather than a single approved path, and it
+/// carries staged-path evidence that apply has no analogue for. Conflating the
+/// two would render a staged-set mismatch as "no unexpected paths, quarantined
+/// anyway" — an unexplained refusal.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PostRollbackVerification {
+    status: String,
+    target_path: String,
+    expected_changed_paths: Vec<String>,
+    observed_changed_paths: Vec<String>,
+    unexpected_paths: Vec<String>,
+    missing_expected_paths: Vec<String>,
+    expected_staged_paths: Vec<String>,
+    observed_staged_paths: Vec<String>,
+    verified_at: String,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RollbackAppliedPatchArtifactResult {
+    status: String,
+    rollback_attempt_id: String,
+    proposed_change_id: String,
+    patch_artifact_id: String,
+    rollback_backup_id: String,
+    rolled_back_at: String,
+    post_rollback_git_status: GitStatusSummary,
+    post_rollback_verification: PostRollbackVerification,
+    message: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AcknowledgeApplyAttemptInput {
@@ -247,7 +310,7 @@ struct AcknowledgeApplyAttemptResult {
     message: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ApplyPatchBackupFile {
     path: String,
@@ -286,6 +349,7 @@ struct PatchApplyAttemptRecord {
     approval_request_id: String,
     patch_artifact_id: String,
     backup_id: Option<String>,
+    rollback_backup_id: Option<String>,
     status: String,
     started_at: String,
     completed_at: Option<String>,
@@ -293,6 +357,7 @@ struct PatchApplyAttemptRecord {
     pre_apply_evidence: Option<PatchApplyEvidence>,
     post_apply_evidence: Option<PatchApplyEvidence>,
     post_apply_verification: Option<PostApplyPathVerification>,
+    post_rollback_verification: Option<PostRollbackVerification>,
     current_git_status_changed: Option<bool>,
     message: String,
 }
@@ -1280,6 +1345,63 @@ fn set_artifact_post_apply_verification(
     Ok(())
 }
 
+fn set_artifact_rollback_metadata(
+    artifacts: &mut Value,
+    artifact_id: &str,
+    status: &str,
+    rollback_backup_id: Option<&str>,
+    rolled_back_at: Option<&str>,
+    rollback_error: Option<&str>,
+    verification: Option<&PostRollbackVerification>,
+    post_rollback_git_status: Option<&GitStatusSummary>,
+) -> Result<(), ApplyPatchError> {
+    let artifact = artifacts
+        .as_array_mut()
+        .and_then(|items| {
+            items
+                .iter_mut()
+                .find(|item| item.get("id").and_then(Value::as_str) == Some(artifact_id))
+        })
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| {
+            apply_patch_error(
+                "artifact_not_found",
+                "The persisted patch artifact is unavailable.",
+            )
+        })?;
+
+    artifact.insert("applyStatus".to_string(), json!(status));
+    if let Some(rollback_backup_id) = rollback_backup_id {
+        artifact.insert("rollbackBackupId".to_string(), json!(rollback_backup_id));
+    }
+    if let Some(rolled_back_at) = rolled_back_at {
+        artifact.insert("rolledBackAt".to_string(), json!(rolled_back_at));
+        artifact.insert("rolledBackBy".to_string(), json!("local_user"));
+    }
+    if let Some(error) = rollback_error {
+        artifact.insert("applyError".to_string(), json!(error));
+    }
+    if let Some(verification) = verification {
+        artifact.insert(
+            "postRollbackVerification".to_string(),
+            serde_json::to_value(verification).map_err(|_| {
+                apply_patch_error(
+                    "rollback_state_persistence_failed",
+                    "Post-restore verification could not be serialized safely.",
+                )
+            })?,
+        );
+    }
+    if let Some(summary) = post_rollback_git_status {
+        artifact.insert(
+            "postApplyGitStatus".to_string(),
+            git_status_summary_json(summary),
+        );
+    }
+
+    Ok(())
+}
+
 fn set_artifact_apply_metadata(
     artifacts: &mut Value,
     artifact_id: &str,
@@ -1337,6 +1459,24 @@ async fn ensure_patch_apply_tables(pool: &SqlitePool) -> Result<(), ApplyPatchEr
         apply_patch_error(
             "storage_unavailable",
             "Native backup storage is unavailable. The patch was not applied.",
+        )
+    })?;
+    // A separate table, not an extra row in `patch_apply_backups`.
+    //
+    // Conflating the bytes we restore *from* with the bytes we overwrote is how a
+    // recovery path destroys what it is recovering. Reconciliation already reads
+    // `patch_apply_backups` scoped by four IDs expecting apply semantics, and an
+    // extra row there could be mistaken for the pre-apply backup — the one thing
+    // rollback restores from.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS patch_rollback_backups (id TEXT PRIMARY KEY, rollback_attempt_id TEXT NOT NULL, proposed_change_id TEXT NOT NULL, patch_artifact_id TEXT NOT NULL, repository_id TEXT NOT NULL, files_json TEXT NOT NULL, created_at TEXT NOT NULL)",
+    )
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "Native rollback backup storage is unavailable. Nothing was rolled back.",
         )
     })?;
     sqlx::query(
@@ -1409,6 +1549,17 @@ async fn ensure_patch_apply_tables(pool: &SqlitePool) -> Result<(), ApplyPatchEr
         (
             "acknowledged_from_status",
             "ALTER TABLE patch_apply_attempts ADD COLUMN acknowledged_from_status TEXT",
+        ),
+        // Distinct from `backup_id`, which stays the pre-apply backup a rollback
+        // restores *from* and which reconciliation reads with apply semantics.
+        // The bytes rollback destroyed get their own column and their own table.
+        (
+            "rollback_backup_id",
+            "ALTER TABLE patch_apply_attempts ADD COLUMN rollback_backup_id TEXT",
+        ),
+        (
+            "post_rollback_verification_json",
+            "ALTER TABLE patch_apply_attempts ADD COLUMN post_rollback_verification_json TEXT",
         ),
     ] {
         if !table_columns.iter().any(|existing| existing == column) {
@@ -1527,11 +1678,23 @@ async fn release_repository_apply_lock(
     Ok(())
 }
 
+/// Acquires the repository-scoped lock for a destructive operation.
+///
+/// `operation` is an audit record: it names which of the two destructive
+/// operations held the lock. Hardcoding `apply_patch` here once rollback exists
+/// would misreport a rollback as an apply in the durable lock trail.
+///
+/// The unresolved-attempt gate runs here, which is why rollback calls this
+/// *before* inserting its own `rolling_back` row — the gate cannot see a row that
+/// does not exist yet, so rollback cannot block itself. Once inserted, an
+/// abandoned `rolling_back` row does block every later apply or rollback until a
+/// human clears it with `INSPECTED`. Both behaviours are intended.
 async fn acquire_repository_apply_lock(
     pool: &SqlitePool,
     lock_directory: &Path,
     repository_id: &str,
     patch_artifact_id: &str,
+    operation: &str,
 ) -> Result<RepositoryApplyLock, ApplyPatchError> {
     let mut lock = try_repository_file_lock(lock_directory, repository_id)?.ok_or_else(|| {
         apply_patch_error(
@@ -1542,7 +1705,7 @@ async fn acquire_repository_apply_lock(
 
     mark_abandoned_apply_locks_stale(pool, repository_id).await?;
     let unresolved_attempt = sqlx::query(
-        "SELECT id FROM patch_apply_attempts WHERE repository_id = ? AND status IN ('pending', 'applying', 'interrupted', 'needs_inspection', 'quarantine_required') LIMIT 1",
+        "SELECT id FROM patch_apply_attempts WHERE repository_id = ? AND status IN ('pending', 'applying', 'rolling_back', 'interrupted', 'needs_inspection', 'quarantine_required') LIMIT 1",
     )
     .bind(repository_id)
     .fetch_optional(pool)
@@ -1577,7 +1740,7 @@ async fn acquire_repository_apply_lock(
         "repositoryId": repository_id,
         "processId": process_id,
         "startedAt": &started_at,
-        "operation": "apply_patch",
+        "operation": operation,
         "patchArtifactId": patch_artifact_id,
         "staleAfter": stale_after,
     });
@@ -1613,11 +1776,12 @@ async fn acquire_repository_apply_lock(
     })?;
 
     sqlx::query(
-        "INSERT INTO patch_apply_locks (id, repository_id, process_id, operation, patch_artifact_id, status, started_at, stale_after) VALUES (?, ?, ?, 'apply_patch', ?, 'active', ?, ?)",
+        "INSERT INTO patch_apply_locks (id, repository_id, process_id, operation, patch_artifact_id, status, started_at, stale_after) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)",
     )
     .bind(&lock_id)
     .bind(repository_id)
     .bind(i64::from(process_id))
+    .bind(operation)
     .bind(patch_artifact_id)
     .bind(&started_at)
     .bind(stale_after as i64)
@@ -1724,6 +1888,182 @@ fn create_apply_backup(
         content_sha256: Some(content_hash),
         content: Some(content),
     })
+}
+
+/// Reads and hashes the bytes rollback is about to destroy.
+///
+/// Called immediately before the write, so its hash is both the drift evidence
+/// and the pre-rollback backup content — one read, one hash, no chance of
+/// storing different bytes than were checked.
+///
+/// Every non-capturable state refuses explicitly rather than being skipped or
+/// truncated. By the time this runs the drift check has already established that
+/// the target is `captured`, within bounds, and valid UTF-8, so the oversized and
+/// binary arms are unreachable by construction — but unreachable-by-construction
+/// is an argument, and a refusal is a guarantee.
+fn capture_rollback_target(
+    repository_root: &Path,
+    file_path: &str,
+) -> Result<RollbackTargetCapture, ApplyPatchError> {
+    let backup_unavailable = || {
+        apply_patch_error(
+            "rollback_backup_unavailable",
+            "The current file cannot be backed up, so it will not be overwritten. Nothing was rolled back.",
+        )
+    };
+
+    let target_path = repository_root.join(file_path);
+    let metadata = fs::symlink_metadata(&target_path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            apply_patch_error(
+                "target_missing",
+                "The target file no longer exists. Rollback will not resurrect a file that was deleted after the patch was applied.",
+            )
+        } else {
+            backup_unavailable()
+        }
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(backup_unavailable());
+    }
+    if metadata.len() > MAX_FINGERPRINT_BYTES {
+        return Err(backup_unavailable());
+    }
+    let canonical_target = fs::canonicalize(&target_path).map_err(|_| backup_unavailable())?;
+    if !canonical_target.starts_with(repository_root) {
+        return Err(apply_patch_error(
+            "outside_repository",
+            "The target file resolves outside the selected repository. Nothing was rolled back.",
+        ));
+    }
+    let content_bytes = fs::read(&canonical_target).map_err(|_| backup_unavailable())?;
+    if content_bytes.contains(&0) {
+        return Err(backup_unavailable());
+    }
+    let content_sha256 = sha256_hex(&content_bytes);
+    let content = String::from_utf8(content_bytes).map_err(|_| backup_unavailable())?;
+
+    Ok(RollbackTargetCapture {
+        content,
+        content_sha256,
+    })
+}
+
+/// Collects the safe changed-path and staged-path sets from a Git status read.
+///
+/// Returns `None` if any observed path is unrepresentable, which fails closed:
+/// an unsafe path we cannot compare is not a path we may ignore.
+fn rollback_status_path_sets(
+    status: &GitStatusSummary,
+) -> Option<(BTreeSet<String>, BTreeSet<String>)> {
+    let mut changed_paths = BTreeSet::new();
+    let mut staged_paths = BTreeSet::new();
+    for file in &status.files {
+        for path in [Some(file.path.as_str()), file.old_path.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            if !is_safe_relative_git_path(path) {
+                return None;
+            }
+            changed_paths.insert(path.to_string());
+            if file.stage == "staged" || file.stage == "both" {
+                staged_paths.insert(path.to_string());
+            }
+        }
+    }
+
+    Some((changed_paths, staged_paths))
+}
+
+/// Proves what the restore actually did, as a delta against the pre-restore tree.
+///
+/// The expectation is deliberately **not** "the tree is clean" and **not**
+/// "nothing is staged". Apply required a clean tree, so restoring the pre-apply
+/// content returns the target to HEAD's content and it simply leaves `git status`
+/// — but the user may have dirtied or staged *unrelated* files since the apply,
+/// and over-refusing on those would quarantine a repository where nothing went
+/// wrong. A false quarantine is a false account, which is the failure class the
+/// porcelain-parser fix was landed to remove.
+///
+/// So both sets are compared as deltas: the target leaves the changed set, and
+/// the staged set is untouched. The target is guaranteed absent from
+/// `pre_restore_staged_paths` by the `target_staged` precondition, so requiring
+/// the staged set to be *unchanged* still proves the target did not become
+/// staged.
+#[allow(clippy::too_many_arguments)]
+fn verify_post_rollback_state(
+    file_path: &str,
+    operation: &str,
+    repository_root: &Path,
+    restored_content_sha256: Option<&str>,
+    pre_restore_changed_paths: &BTreeSet<String>,
+    pre_restore_staged_paths: &BTreeSet<String>,
+    pre_restore_head_sha: Option<&str>,
+    post_rollback_git_status: &GitStatusSummary,
+) -> PostRollbackVerification {
+    let mut expected_changed_paths = pre_restore_changed_paths.clone();
+    expected_changed_paths.remove(file_path);
+
+    let observed = rollback_status_path_sets(post_rollback_git_status);
+    let (observed_changed_paths, observed_staged_paths) = observed
+        .clone()
+        .unwrap_or_else(|| (BTreeSet::new(), BTreeSet::new()));
+
+    let unexpected_paths = observed_changed_paths
+        .difference(&expected_changed_paths)
+        .cloned()
+        .collect::<Vec<_>>();
+    let missing_expected_paths = expected_changed_paths
+        .difference(&observed_changed_paths)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    // The filesystem is checked directly rather than inferred from Git status:
+    // status says a path is unmodified, the hash says the bytes are the exact
+    // pre-apply bytes we stored.
+    let target_path = repository_root.join(file_path);
+    let filesystem_matches = match operation {
+        "create" => !target_path.exists(),
+        _ => match (restored_content_sha256, fs::read(&target_path)) {
+            (Some(expected_hash), Ok(bytes)) => sha256_hex(&bytes) == expected_hash,
+            _ => false,
+        },
+    };
+
+    let head_unchanged = post_rollback_git_status.head_sha.as_deref() == pre_restore_head_sha;
+    let status_is_consistent = post_rollback_git_status.is_git_repository
+        && post_rollback_git_status.changed_file_count == post_rollback_git_status.files.len();
+    let verified = observed.is_some()
+        && filesystem_matches
+        && head_unchanged
+        && status_is_consistent
+        && unexpected_paths.is_empty()
+        && missing_expected_paths.is_empty()
+        && observed_staged_paths == *pre_restore_staged_paths;
+
+    let message = if verified {
+        "Post-restore verification confirmed the target returned to its pre-apply contents and that no other path changed. Nothing was staged, committed, or removed from Git history."
+    } else {
+        "Post-restore verification could not prove that the rollback restored only the target path. The outcome is quarantined for manual inspection."
+    };
+
+    PostRollbackVerification {
+        status: if verified {
+            "rolled_back".to_string()
+        } else {
+            "quarantine_required".to_string()
+        },
+        target_path: file_path.to_string(),
+        expected_changed_paths: expected_changed_paths.into_iter().collect(),
+        observed_changed_paths: observed_changed_paths.into_iter().collect(),
+        unexpected_paths,
+        missing_expected_paths,
+        expected_staged_paths: pre_restore_staged_paths.iter().cloned().collect(),
+        observed_staged_paths: observed_staged_paths.into_iter().collect(),
+        verified_at: now_unix_seconds(),
+        message: message.to_string(),
+    }
 }
 
 fn validate_apply_target_boundary(
@@ -2825,6 +3165,7 @@ async fn apply_approved_patch_artifact_with_pool(
         lock_directory,
         &input.repository_id,
         &input.patch_artifact_id,
+        "apply_patch",
     )
     .await?;
     let result = apply_approved_patch_artifact_under_lock(pool, input).await;
@@ -3077,6 +3418,32 @@ async fn apply_approved_patch_artifact_under_lock(
         return Err(apply_patch_error(
             "unresolved_apply_attempt",
             "This patch artifact has an unresolved application attempt and requires manual inspection. It is not eligible for application.",
+        ));
+    }
+    // Rollback is a terminal state, not a return to `ready_to_apply`. Re-applying
+    // would reintroduce the replay that every gate above exists to prevent, so a
+    // rolled-back artifact needs a fresh proposal and validation cycle.
+    //
+    // This guard, not the UI, is what stops the second write. The arms above
+    // enumerate blocked statuses rather than allow-listing eligible ones, so a
+    // status they have never heard of falls through to the write — which is
+    // exactly what `rolled_back` did before this arm existed.
+    if matches!(
+        artifact.get("applyStatus").and_then(Value::as_str),
+        Some("rolled_back")
+    ) {
+        return Err(apply_patch_error(
+            "already_rolled_back",
+            "This patch artifact was rolled back and is permanently ineligible for application. Generate and validate a fresh proposal instead.",
+        ));
+    }
+    if matches!(
+        artifact.get("applyStatus").and_then(Value::as_str),
+        Some("rolling_back")
+    ) {
+        return Err(apply_patch_error(
+            "rollback_in_progress",
+            "A rollback of this patch artifact is in progress. It is not eligible for application.",
         ));
     }
     if matches!(
@@ -3635,10 +4002,694 @@ async fn apply_approved_patch_artifact_under_lock(
     })
 }
 
+/// User-initiated restore of one `applied_verified` patch from its app-local
+/// pre-apply backup.
+///
+/// Restores **only** from the app-local backup. Never Git: no `reset`,
+/// `checkout`, `clean`, `add`, or `commit` appears anywhere in this path.
+async fn rollback_applied_patch_artifact_with_pool(
+    pool: &SqlitePool,
+    lock_directory: &Path,
+    input: RollbackAppliedPatchArtifactInput,
+) -> Result<RollbackAppliedPatchArtifactResult, ApplyPatchError> {
+    #[cfg(test)]
+    let _rollback_guard = PATCH_APPLY_LOCK.lock().await;
+    #[cfg(not(test))]
+    let _rollback_guard = PATCH_APPLY_LOCK.try_lock().map_err(|_| {
+        apply_patch_error(
+            "apply_locked",
+            "Another patch operation is already active in this app process. Nothing was rolled back.",
+        )
+    })?;
+
+    if input.confirmation_phrase != ROLLBACK_CONFIRMATION_PHRASE {
+        return Err(apply_patch_error(
+            "confirmation_required",
+            "Type ROLL BACK exactly to confirm this working-tree modification.",
+        ));
+    }
+    if [
+        &input.repository_id,
+        &input.proposed_change_id,
+        &input.patch_artifact_id,
+    ]
+    .iter()
+    .any(|id| id.trim().is_empty() || id.len() > 240 || id.contains('\0'))
+    {
+        return Err(apply_patch_error(
+            "invalid_identifier",
+            "A durable rollback identifier is invalid.",
+        ));
+    }
+
+    ensure_patch_apply_tables(pool).await?;
+    // Acquired before the `rolling_back` row is inserted: the unresolved-attempt
+    // gate lives inside this call, and rollback must not block itself.
+    let lock = acquire_repository_apply_lock(
+        pool,
+        lock_directory,
+        &input.repository_id,
+        &input.patch_artifact_id,
+        "rollback_patch",
+    )
+    .await?;
+    let result = rollback_applied_patch_artifact_under_lock(pool, input).await;
+    let _ = release_repository_apply_lock(pool, &lock).await;
+    result
+}
+
+async fn rollback_applied_patch_artifact_under_lock(
+    pool: &SqlitePool,
+    input: RollbackAppliedPatchArtifactInput,
+) -> Result<RollbackAppliedPatchArtifactResult, ApplyPatchError> {
+    let repository_row =
+        sqlx::query("SELECT path, is_git_repository FROM repositories WHERE id = ? LIMIT 1")
+            .bind(&input.repository_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|_| {
+                apply_patch_error(
+                    "storage_unavailable",
+                    "The saved repository record could not be verified.",
+                )
+            })?
+            .ok_or_else(|| {
+                apply_patch_error(
+                    "repository_unavailable",
+                    "The selected saved repository is unavailable.",
+                )
+            })?;
+    let repository_path: String = repository_row.try_get("path").map_err(|_| {
+        apply_patch_error(
+            "repository_unavailable",
+            "The selected saved repository is unavailable.",
+        )
+    })?;
+    if repository_row
+        .try_get::<i64, _>("is_git_repository")
+        .unwrap_or(0)
+        != 1
+    {
+        return Err(apply_patch_error(
+            "repository_unavailable",
+            "Rollback requires a saved Git repository.",
+        ));
+    }
+    let (repository_root, canonical_repository_path) =
+        canonical_selected_git_root(&repository_path).map_err(|_| {
+            apply_patch_error(
+                "repository_unavailable",
+                "The saved repository root could not be verified.",
+            )
+        })?;
+
+    let proposal_row = sqlx::query(
+        "SELECT approval_request_id, repository_id, files_json, patch_artifacts_json FROM proposed_changes WHERE id = ? LIMIT 1",
+    )
+    .bind(&input.proposed_change_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "The persisted proposed change could not be verified.",
+        )
+    })?
+    .ok_or_else(|| {
+        apply_patch_error(
+            "proposal_not_found",
+            "The persisted proposed change is unavailable.",
+        )
+    })?;
+    let linked_approval_id: Option<String> =
+        proposal_row.try_get("approval_request_id").unwrap_or(None);
+    let proposal_repository_id: String = proposal_row.try_get("repository_id").unwrap_or_default();
+    let files_json: String = proposal_row.try_get("files_json").unwrap_or_default();
+    let patch_artifacts_json: String = proposal_row
+        .try_get("patch_artifacts_json")
+        .unwrap_or_default();
+    if proposal_repository_id != input.repository_id {
+        return Err(apply_patch_error(
+            "link_mismatch",
+            "The repository and proposal records are not durably linked.",
+        ));
+    }
+
+    let files: Value = serde_json::from_str(&files_json).map_err(|_| {
+        apply_patch_error(
+            "invalid_persisted_record",
+            "The proposed file records are invalid.",
+        )
+    })?;
+    let mut artifacts: Value = serde_json::from_str(&patch_artifacts_json).map_err(|_| {
+        apply_patch_error(
+            "invalid_persisted_record",
+            "The persisted patch artifact records are invalid.",
+        )
+    })?;
+    let artifact = artifacts
+        .as_array()
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item.get("id").and_then(Value::as_str) == Some(input.patch_artifact_id.as_str())
+            })
+        })
+        .cloned()
+        .ok_or_else(|| {
+            apply_patch_error(
+                "artifact_not_found",
+                "The persisted patch artifact is unavailable.",
+            )
+        })?;
+    if artifact.get("proposedChangeId").and_then(Value::as_str)
+        != Some(input.proposed_change_id.as_str())
+    {
+        return Err(apply_patch_error(
+            "link_mismatch",
+            "The patch artifact is not linked to the proposed change.",
+        ));
+    }
+
+    // `applied_verified` is the only state where expected == observed and exactly
+    // one path is known to have changed. Everything else is refused, including
+    // `quarantine_required`: a quarantined apply wrote paths we cannot account
+    // for and have no backup for, so restoring the declared target would undo the
+    // accountable half and leave the rest — a partial undo reported as a rollback
+    // is the false account this product exists to prevent. `rolled_back` is
+    // refused here too, which is the first of two independent bars on a second
+    // rollback.
+    let apply_status = artifact
+        .get("applyStatus")
+        .and_then(Value::as_str)
+        .unwrap_or("not_applied");
+    if apply_status != "applied_verified" {
+        return Err(apply_patch_error(
+            "not_applied_verified",
+            "Only a patch whose application was verified against its exact approved path can be rolled back.",
+        ));
+    }
+
+    let file_path = artifact
+        .get("filePath")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            apply_patch_error(
+                "invalid_persisted_record",
+                "The persisted artifact path is unavailable.",
+            )
+        })?
+        .to_string();
+    validate_apply_target_boundary(&repository_root, &file_path)?;
+    let artifact_digest = artifact
+        .get("artifactDigest")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let operation = files
+        .as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| item.get("path").and_then(Value::as_str) == Some(file_path.as_str()))
+        })
+        .and_then(|file| file.get("operation").and_then(Value::as_str))
+        .ok_or_else(|| {
+            apply_patch_error(
+                "file_link_missing",
+                "The patch artifact is not linked to a proposed file.",
+            )
+        })?
+        .to_string();
+
+    // The baseline: what the target looked like immediately after apply.
+    //
+    // Apply captures this best-effort — the snapshot is `.ok()` and the persist
+    // is fire-and-forget — so an artifact can be `applied_verified` with no
+    // baseline at all. That is not an edge case to paper over: with no record of
+    // what apply left behind, no drift check is possible, and rollback's entire
+    // safety rule is "do not overwrite user edits made after apply". Refuse.
+    let attempt_rows = sqlx::query(
+        "SELECT id, backup_id, post_apply_evidence_json FROM patch_apply_attempts WHERE repository_id = ? AND proposed_change_id = ? AND patch_artifact_id = ? AND status = 'applied_verified'",
+    )
+    .bind(&input.repository_id)
+    .bind(&input.proposed_change_id)
+    .bind(&input.patch_artifact_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "The verified apply attempt could not be loaded.",
+        )
+    })?;
+    if attempt_rows.len() != 1 {
+        return Err(apply_patch_error(
+            "baseline_unavailable",
+            "Exactly one verified application attempt is required to roll back, and it is unavailable. This patch cannot be rolled back.",
+        ));
+    }
+    let apply_attempt_row = &attempt_rows[0];
+    let apply_backup_id: String = apply_attempt_row
+        .try_get::<Option<String>, _>("backup_id")
+        .unwrap_or(None)
+        .ok_or_else(|| {
+            apply_patch_error(
+                "backup_unavailable",
+                "The pre-apply backup reference is unavailable. This patch cannot be rolled back.",
+            )
+        })?;
+    let baseline_snapshot = apply_attempt_row
+        .try_get::<Option<String>, _>("post_apply_evidence_json")
+        .unwrap_or(None)
+        .and_then(|value| serde_json::from_str::<PatchApplyEvidence>(&value).ok())
+        .and_then(|evidence| evidence.repository_snapshot)
+        .ok_or_else(|| {
+            apply_patch_error(
+                "baseline_unavailable",
+                "No post-apply baseline was recorded for this patch, so drift since the apply cannot be ruled out. This patch cannot be rolled back.",
+            )
+        })?;
+    let baseline_branch = baseline_snapshot
+        .branch
+        .as_deref()
+        .filter(|branch| !branch.is_empty())
+        .ok_or_else(|| {
+            apply_patch_error(
+                "baseline_unavailable",
+                "The post-apply baseline has no recorded branch. This patch cannot be rolled back.",
+            )
+        })?
+        .to_string();
+    let baseline_head_sha = baseline_snapshot
+        .head_sha
+        .as_deref()
+        .filter(|head| !head.is_empty())
+        .ok_or_else(|| {
+            apply_patch_error(
+                "baseline_unavailable",
+                "The post-apply baseline has no recorded HEAD. This patch cannot be rolled back.",
+            )
+        })?
+        .to_string();
+    // Only a `captured` fingerprint carries a content hash. A target that was
+    // already oversized or non-UTF-8 when apply finished has no baseline hash,
+    // which resolves here rather than at the backup: no baseline, no rollback.
+    let baseline_target_sha256 = baseline_snapshot
+        .target_file_fingerprints
+        .iter()
+        .find(|fingerprint| fingerprint.path == file_path)
+        .filter(|fingerprint| fingerprint.status == "captured")
+        .and_then(|fingerprint| fingerprint.content_sha256.clone())
+        .ok_or_else(|| {
+            apply_patch_error(
+                "baseline_unavailable",
+                "The post-apply baseline has no content hash for the target file, so drift since the apply cannot be ruled out. This patch cannot be rolled back.",
+            )
+        })?;
+
+    // The pre-apply backup: the bytes rollback restores *from*. Verified, not
+    // trusted — a corrupt backup must never be written over a real file.
+    let backup_row = sqlx::query("SELECT files_json FROM patch_apply_backups WHERE id = ? LIMIT 1")
+        .bind(&apply_backup_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|_| {
+            apply_patch_error(
+                "storage_unavailable",
+                "The pre-apply backup could not be loaded.",
+            )
+        })?
+        .ok_or_else(|| {
+            apply_patch_error(
+                "backup_unavailable",
+                "The pre-apply backup record is unavailable. This patch cannot be rolled back.",
+            )
+        })?;
+    let backup_files: Vec<ApplyPatchBackupFile> = serde_json::from_str(
+        &backup_row
+            .try_get::<String, _>("files_json")
+            .unwrap_or_default(),
+    )
+    .map_err(|_| {
+        apply_patch_error(
+            "backup_corrupt",
+            "The pre-apply backup record is unreadable. This patch cannot be rolled back.",
+        )
+    })?;
+    let backup_file = backup_files
+        .into_iter()
+        .find(|file| file.path == file_path)
+        .ok_or_else(|| {
+            apply_patch_error(
+                "backup_unavailable",
+                "The pre-apply backup does not cover the target file. This patch cannot be rolled back.",
+            )
+        })?;
+    let expected_existed_before_apply = operation != "create";
+    if backup_file.existed_before_apply != expected_existed_before_apply {
+        return Err(apply_patch_error(
+            "backup_corrupt",
+            "The pre-apply backup disagrees with the recorded operation. This patch cannot be rolled back.",
+        ));
+    }
+    let restored_content_sha256 = if backup_file.existed_before_apply {
+        let content = backup_file.content.as_deref().ok_or_else(|| {
+            apply_patch_error(
+                "backup_corrupt",
+                "The pre-apply backup stored no content for an existing file. This patch cannot be rolled back.",
+            )
+        })?;
+        let stored_hash = backup_file.content_sha256.as_deref().ok_or_else(|| {
+            apply_patch_error(
+                "backup_corrupt",
+                "The pre-apply backup stored no content hash. This patch cannot be rolled back.",
+            )
+        })?;
+        if sha256_hex(content.as_bytes()) != stored_hash {
+            return Err(apply_patch_error(
+                "backup_corrupt",
+                "The pre-apply backup failed its integrity check. It will not be written over the current file.",
+            ));
+        }
+        Some(stored_hash.to_string())
+    } else {
+        if backup_file.content.is_some() || backup_file.content_sha256.is_some() {
+            return Err(apply_patch_error(
+                "backup_corrupt",
+                "The pre-apply backup records content for a file that did not exist. This patch cannot be rolled back.",
+            ));
+        }
+        None
+    };
+
+    let pre_restore_git_status = load_git_status_summary(
+        input.repository_id.clone(),
+        canonical_repository_path.clone(),
+    );
+    if !pre_restore_git_status.is_git_repository {
+        return Err(apply_patch_error(
+            "repository_unavailable",
+            "The repository Git state could not be read. Nothing was rolled back.",
+        ));
+    }
+    // A dropped status line means the observed path set is incomplete, and an
+    // incomplete set cannot prove anything after the write either.
+    if pre_restore_git_status.changed_file_count != pre_restore_git_status.files.len() {
+        return Err(apply_patch_error(
+            "repository_state_unverifiable",
+            "The current Git status could not be read as a complete set of paths. Nothing was rolled back.",
+        ));
+    }
+    let Some((pre_restore_changed_paths, pre_restore_staged_paths)) =
+        rollback_status_path_sets(&pre_restore_git_status)
+    else {
+        return Err(apply_patch_error(
+            "repository_state_unverifiable",
+            "The current Git status contains a path that cannot be safely compared. Nothing was rolled back.",
+        ));
+    };
+
+    // If the user committed the applied change, the apply is now history and
+    // writing pre-apply bytes is not an undo — it is a new modification, and the
+    // post-restore expectation collapses: the restored file would differ from the
+    // new HEAD rather than match it.
+    if pre_restore_git_status.head_sha.as_deref() != Some(baseline_head_sha.as_str()) {
+        return Err(apply_patch_error(
+            "head_changed",
+            "The repository HEAD moved after this patch was applied. Rollback would be a new modification rather than an undo.",
+        ));
+    }
+    if pre_restore_git_status.branch.as_deref() != Some(baseline_branch.as_str()) {
+        return Err(apply_patch_error(
+            "branch_changed",
+            "The branch changed after this patch was applied. Nothing was rolled back.",
+        ));
+    }
+    // Staging does not alter content, so the drift check would pass — but we never
+    // touch the index, and restoring under a staged entry would leave the index
+    // and working tree disagreeing. This falls out of the existing rule rather
+    // than being a new policy.
+    if pre_restore_git_status.files.iter().any(|file| {
+        (file.path == file_path || file.old_path.as_deref() == Some(file_path.as_str()))
+            && (file.stage == "staged" || file.stage == "both")
+    }) {
+        return Err(apply_patch_error(
+            "target_staged",
+            "The target file is staged. Unstage it before rolling back; rollback never touches the Git index.",
+        ));
+    }
+
+    // Drift. This read is also the pre-rollback backup's content, and it happens
+    // immediately before the write to narrow — not close — the window recorded
+    // under roadmap #12.
+    //
+    // A target deleted since the apply needs no branch of its own: the capture
+    // refuses `target_missing`, and refusing is right on the merits. A deletion
+    // *is* a user edit, restoring resurrects a file they deliberately removed,
+    // and we cannot distinguish "the user deleted it" from "something else did".
+    let target_capture = capture_rollback_target(&repository_root, &file_path)?;
+    if target_capture.content_sha256 != baseline_target_sha256 {
+        return Err(apply_patch_error(
+            "target_drifted",
+            "The target file changed after this patch was applied. Rollback will not overwrite work done since the apply.",
+        ));
+    }
+
+    let started_at = now_unix_seconds();
+    let unique_suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let rollback_attempt_id = format!("rollback-{}-{unique_suffix}", input.patch_artifact_id);
+    let rollback_backup_id = format!(
+        "rollback-backup-{}-{unique_suffix}",
+        input.patch_artifact_id
+    );
+    let pre_restore_evidence = patch_apply_evidence(
+        &artifact_digest,
+        Some(baseline_snapshot.clone()),
+        Some(&pre_restore_git_status),
+    );
+    let pre_restore_evidence_json = serde_json::to_string(&pre_restore_evidence).ok();
+    let approval_request_id = linked_approval_id.unwrap_or_default();
+
+    // Write ordering INVERTS apply's, deliberately.
+    //
+    //   apply:    backup insert -> attempt row -> write
+    //   rollback: attempt row (rolling_back) -> backup insert -> write
+    //
+    // Apply can insert its backup first because that backup is the pre-image it
+    // restores from: an orphaned apply-backup row is inert. Rollback's backup
+    // records the bytes it is about to *destroy*, so the "we started" marker must
+    // land first. Were the backup inserted first and the process died, there
+    // would be a backup row with no attempt — invisible to reconciliation, with a
+    // write about to begin and no durable record that it started.
+    //
+    // Accepted consequence: a kill between these two inserts reconciles to
+    // `quarantine_required` even though nothing was written. Over-quarantining
+    // there is correct; the alternative is a write with no record that it began.
+    //
+    // This reads as an inconsistency with apply. It is not. Do not "fix" it.
+    sqlx::query(
+        "INSERT INTO patch_apply_attempts (id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, backup_id, rollback_backup_id, started_at, pre_apply_evidence_json) VALUES (?, ?, ?, ?, ?, 'rolling_back', ?, ?, ?, ?)",
+    )
+    .bind(&rollback_attempt_id)
+    .bind(&input.proposed_change_id)
+    .bind(&input.patch_artifact_id)
+    .bind(&approval_request_id)
+    .bind(&input.repository_id)
+    .bind(&apply_backup_id)
+    .bind(&rollback_backup_id)
+    .bind(&started_at)
+    .bind(pre_restore_evidence_json)
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "The native rollback attempt could not be recorded. Nothing was rolled back.",
+        )
+    })?;
+    set_artifact_rollback_metadata(
+        &mut artifacts,
+        &input.patch_artifact_id,
+        "rolling_back",
+        Some(&rollback_backup_id),
+        None,
+        None,
+        None,
+        None,
+    )?;
+    let rolling_back_artifacts_json = serde_json::to_string(&artifacts).map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "The rollback state could not be persisted. Nothing was rolled back.",
+        )
+    })?;
+    sqlx::query(
+        "UPDATE proposed_changes SET patch_artifacts_json = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(rolling_back_artifacts_json)
+    .bind(&started_at)
+    .bind(&input.proposed_change_id)
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "storage_unavailable",
+            "The rollback state could not be persisted. Nothing was rolled back.",
+        )
+    })?;
+
+    let rollback_backup_files_json = serde_json::to_string(&vec![ApplyPatchBackupFile {
+        path: file_path.clone(),
+        existed_before_apply: true,
+        content_sha256: Some(target_capture.content_sha256.clone()),
+        content: Some(target_capture.content.clone()),
+    }])
+    .map_err(|_| {
+        apply_patch_error(
+            "rollback_backup_unavailable",
+            "The pre-rollback backup could not be serialized. Nothing was rolled back.",
+        )
+    })?;
+    sqlx::query(
+        "INSERT INTO patch_rollback_backups (id, rollback_attempt_id, proposed_change_id, patch_artifact_id, repository_id, files_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&rollback_backup_id)
+    .bind(&rollback_attempt_id)
+    .bind(&input.proposed_change_id)
+    .bind(&input.patch_artifact_id)
+    .bind(&input.repository_id)
+    .bind(rollback_backup_files_json)
+    .bind(&started_at)
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "rollback_backup_unavailable",
+            "The pre-rollback backup could not be persisted. Nothing was rolled back.",
+        )
+    })?;
+
+    // The write. Its result is deliberately not branched on: verification below is
+    // authoritative, because the rule is "verify what was restored, do not trust
+    // that the copy succeeded". A failed write and a silently-wrong write must
+    // reach the same place.
+    let target_path = repository_root.join(&file_path);
+    let _write_outcome = if operation == "create" {
+        fs::remove_file(&target_path)
+    } else {
+        fs::write(
+            &target_path,
+            backup_file.content.as_deref().unwrap_or_default(),
+        )
+    };
+
+    let rolled_back_at = now_unix_seconds();
+    let post_rollback_git_status = load_git_status_summary(
+        input.repository_id.clone(),
+        canonical_repository_path.clone(),
+    );
+    let verification = verify_post_rollback_state(
+        &file_path,
+        &operation,
+        &repository_root,
+        restored_content_sha256.as_deref(),
+        &pre_restore_changed_paths,
+        &pre_restore_staged_paths,
+        Some(baseline_head_sha.as_str()),
+        &post_rollback_git_status,
+    );
+    let is_rolled_back = verification.status == "rolled_back";
+    let final_status = if is_rolled_back {
+        "rolled_back"
+    } else {
+        "quarantine_required"
+    };
+    let rollback_error = (!is_rolled_back).then_some(verification.message.as_str());
+
+    set_artifact_rollback_metadata(
+        &mut artifacts,
+        &input.patch_artifact_id,
+        final_status,
+        Some(&rollback_backup_id),
+        Some(&rolled_back_at),
+        rollback_error,
+        Some(&verification),
+        Some(&post_rollback_git_status),
+    )?;
+    let final_artifacts_json = serde_json::to_string(&artifacts).map_err(|_| {
+        apply_patch_error(
+            "rollback_state_persistence_failed",
+            "The rollback ran, but its final local state could not be serialized. Review Changes immediately.",
+        )
+    })?;
+    // The proposal moves too. Leaving it `applied` after its only artifact was
+    // rolled back would render a lie on the product's most honest surface.
+    let persisted = sqlx::query(
+        "UPDATE proposed_changes SET status = ?, patch_artifacts_json = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(final_status)
+    .bind(final_artifacts_json)
+    .bind(&rolled_back_at)
+    .bind(&input.proposed_change_id)
+    .execute(pool)
+    .await
+    .map_err(|_| {
+        apply_patch_error(
+            "rollback_state_persistence_failed",
+            "The rollback ran, but its final local state could not be saved. Review Changes immediately.",
+        )
+    })?;
+    if persisted.rows_affected() != 1 {
+        return Err(apply_patch_error(
+            "rollback_state_persistence_failed",
+            "The rollback ran, but its final local state could not be saved. Review Changes immediately.",
+        ));
+    }
+    let post_rollback_status_json =
+        serde_json::to_string(&git_status_summary_json(&post_rollback_git_status)).ok();
+    let post_rollback_evidence_json = serde_json::to_string(&patch_apply_evidence(
+        &artifact_digest,
+        None,
+        Some(&post_rollback_git_status),
+    ))
+    .ok();
+    let verification_json = serde_json::to_string(&verification).ok();
+    let _ = sqlx::query(
+        "UPDATE patch_apply_attempts SET status = ?, error_code = ?, sanitized_error = ?, completed_at = ?, post_apply_evidence_json = ?, post_apply_git_status_json = ?, post_rollback_verification_json = ? WHERE id = ?",
+    )
+    .bind(final_status)
+    .bind((!is_rolled_back).then_some("unexpected_post_rollback_state"))
+    .bind(rollback_error)
+    .bind(&rolled_back_at)
+    .bind(post_rollback_evidence_json)
+    .bind(post_rollback_status_json)
+    .bind(verification_json)
+    .bind(&rollback_attempt_id)
+    .execute(pool)
+    .await;
+
+    Ok(RollbackAppliedPatchArtifactResult {
+        status: final_status.to_string(),
+        rollback_attempt_id,
+        proposed_change_id: input.proposed_change_id,
+        patch_artifact_id: input.patch_artifact_id,
+        rollback_backup_id,
+        rolled_back_at,
+        post_rollback_git_status,
+        message: verification.message.clone(),
+        post_rollback_verification: verification,
+    })
+}
+
 fn apply_attempt_message(status: &str) -> String {
     match status {
         "applied" => "Reconciliation found clear evidence that the expected patch was applied. No patch was re-applied.".to_string(),
         "applied_verified" => "Authoritative post-apply verification confirmed that only the approved artifact path changed.".to_string(),
+        "rolling_back" => "A rollback of this patch is in progress. No further patch operation can run for this repository until it resolves.".to_string(),
+        "rolled_back" => "The applied patch was rolled back from its app-local pre-apply backup, and post-restore verification confirmed the result. Git history was not touched.".to_string(),
         "quarantine_required" => "Post-apply verification found unexpected, missing, or inconsistent changed-path evidence. Manual inspection is required.".to_string(),
         "failed" => "The interrupted attempt did not change the working tree and was not retried.".to_string(),
         "interrupted" => "The apply process stopped before complete recovery evidence was available. Manual inspection is required.".to_string(),
@@ -3855,6 +4906,42 @@ async fn classify_unfinished_apply_attempt(
     let repository_id: String = row.try_get("repository_id").unwrap_or_default();
     let backup_id: Option<String> = row.try_get("backup_id").unwrap_or(None);
     let pre_evidence_json: Option<String> = row.try_get("pre_apply_evidence_json").unwrap_or(None);
+    let attempt_status: String = row.try_get("status").unwrap_or_default();
+
+    // An interrupted rollback is undeterminable by definition, so it reconciles
+    // straight to quarantine with no probe, no retry, and no re-restore.
+    //
+    // The probes below cannot help here: forward and reverse `git apply --check`
+    // speak about the patch, and say nothing about whether a *file restore*
+    // completed. Nothing distinguishes "backup written, restore not started" from
+    // "restore half-written". Rather than invent a probe whose evidence cannot be
+    // justified, this fails closed.
+    //
+    // The exit already exists: `INSPECTED` clears the repository-wide block while
+    // the artifact stays permanently ineligible.
+    if attempt_status == "rolling_back" {
+        let message = "A rollback stopped before it could prove what it wrote. The target file's contents cannot be determined from the available evidence. Manual inspection is required; nothing was retried or restored.";
+        persist_reconciled_attempt(
+            pool,
+            &attempt_id,
+            "quarantine_required",
+            Some(message),
+            None,
+            None,
+        )
+        .await?;
+        persist_reconciled_artifact(
+            pool,
+            &proposal_id,
+            &artifact_id,
+            "quarantine_required",
+            backup_id.as_deref(),
+            Some(message),
+            None,
+        )
+        .await?;
+        return Ok(());
+    }
 
     let proposal_row = sqlx::query(
         "SELECT files_json, patch_artifacts_json FROM proposed_changes WHERE id = ? LIMIT 1",
@@ -4261,7 +5348,7 @@ async fn load_patch_apply_attempt_records(
     pool: &SqlitePool,
 ) -> Result<Vec<PatchApplyAttemptRecord>, ApplyPatchError> {
     let rows = sqlx::query(
-        "SELECT id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, sanitized_error, backup_id, started_at, completed_at, pre_apply_evidence_json, post_apply_evidence_json, post_apply_verification_json FROM patch_apply_attempts ORDER BY started_at DESC LIMIT 100",
+        "SELECT id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, sanitized_error, backup_id, rollback_backup_id, started_at, completed_at, pre_apply_evidence_json, post_apply_evidence_json, post_apply_verification_json, post_rollback_verification_json FROM patch_apply_attempts ORDER BY started_at DESC LIMIT 100",
     )
     .fetch_all(pool)
     .await
@@ -4288,6 +5375,10 @@ async fn load_patch_apply_attempt_records(
                 .try_get::<Option<String>, _>("post_apply_verification_json")
                 .unwrap_or(None)
                 .and_then(|value| serde_json::from_str(&value).ok());
+            let post_rollback_verification: Option<PostRollbackVerification> = row
+                .try_get::<Option<String>, _>("post_rollback_verification_json")
+                .unwrap_or(None)
+                .and_then(|value| serde_json::from_str(&value).ok());
             let current_git_status_changed = match (&pre_apply_evidence, &post_apply_evidence) {
                 (Some(pre), Some(post)) => post.git_status.as_ref().and_then(|current| {
                     pre.git_status
@@ -4303,6 +5394,7 @@ async fn load_patch_apply_attempt_records(
                 approval_request_id: row.try_get("approval_request_id").unwrap_or_default(),
                 patch_artifact_id: row.try_get("patch_artifact_id").unwrap_or_default(),
                 backup_id: row.try_get("backup_id").unwrap_or(None),
+                rollback_backup_id: row.try_get("rollback_backup_id").unwrap_or(None),
                 status: status.clone(),
                 started_at: row.try_get("started_at").unwrap_or_default(),
                 completed_at: row.try_get("completed_at").unwrap_or(None),
@@ -4310,6 +5402,7 @@ async fn load_patch_apply_attempt_records(
                 pre_apply_evidence,
                 post_apply_evidence,
                 post_apply_verification,
+                post_rollback_verification,
                 current_git_status_changed,
                 message: apply_attempt_message(&status),
             }
@@ -4341,8 +5434,12 @@ async fn reconcile_interrupted_patch_apply_attempts_with_pool(
         };
         mark_abandoned_apply_locks_stale(pool, &repository_id).await?;
     }
+    // `rolling_back` joins this list because a state the reconciler cannot see is
+    // strictly worse than a state with no exit: it would be an attempt stuck
+    // mid-write, the target in an unknown state, and the repository still
+    // accepting applies as though nothing were pending.
     let unfinished_rows = sqlx::query(
-        "SELECT id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, backup_id, pre_apply_evidence_json FROM patch_apply_attempts WHERE status IN ('pending', 'applying') ORDER BY started_at ASC",
+        "SELECT id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, backup_id, pre_apply_evidence_json FROM patch_apply_attempts WHERE status IN ('pending', 'applying', 'rolling_back') ORDER BY started_at ASC",
     )
     .fetch_all(pool)
     .await
@@ -4384,6 +5481,28 @@ async fn apply_approved_patch_artifact(
 
     let lock_directory = apply_lock_directory(&app_handle)?;
     apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input).await
+}
+
+#[tauri::command]
+async fn rollback_applied_patch_artifact(
+    app_handle: tauri::AppHandle,
+    database_instances: tauri::State<'_, DbInstances>,
+    input: RollbackAppliedPatchArtifactInput,
+) -> Result<RollbackAppliedPatchArtifactResult, ApplyPatchError> {
+    let instances = database_instances.0.read().await;
+    let pool = match instances.get(WORKSPACE_DATABASE_URL) {
+        Some(DbPool::Sqlite(pool)) => pool.clone(),
+        _ => {
+            return Err(apply_patch_error(
+                "storage_unavailable",
+                "Native workspace storage is unavailable. Nothing was rolled back.",
+            ));
+        }
+    };
+    drop(instances);
+
+    let lock_directory = apply_lock_directory(&app_handle)?;
+    rollback_applied_patch_artifact_with_pool(&pool, &lock_directory, input).await
 }
 
 #[tauri::command]
@@ -4975,6 +6094,101 @@ mod tests {
             patch_artifact_id: artifact_id.to_string(),
             confirmation_phrase: APPLY_CONFIRMATION_PHRASE.to_string(),
         }
+    }
+
+    // A spaced filename throughout: git quotes it in `status --porcelain=v1`
+    // output, so every rollback path that reads status depends on the porcelain
+    // parser landed in #3. An unquoted spaced path in the diff headers is what
+    // `git apply` accepts and what `parsed_unified_diff_paths` strips `a/` from.
+    const ROLLBACK_TARGET: &str = "My Notes.md";
+    const ROLLBACK_PRE_APPLY_CONTENT: &str = "original line\n";
+    const ROLLBACK_POST_APPLY_CONTENT: &str = "patched line\n";
+    const ROLLBACK_MODIFY_DIFF: &str = "diff --git a/My Notes.md b/My Notes.md\n--- a/My Notes.md\n+++ b/My Notes.md\n@@ -1 +1 @@\n-original line\n+patched line\n";
+
+    fn test_rollback_input(confirmation_phrase: &str) -> RollbackAppliedPatchArtifactInput {
+        RollbackAppliedPatchArtifactInput {
+            repository_id: "repo-apply".to_string(),
+            proposed_change_id: "proposal-apply".to_string(),
+            patch_artifact_id: "artifact-apply".to_string(),
+            confirmation_phrase: confirmation_phrase.to_string(),
+        }
+    }
+
+    fn git_in(repository_path: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(repository_path)
+            .output()
+            .expect("run git fixture command");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// Applies a real modify patch and returns its verified result.
+    ///
+    /// Rollback's preconditions are derived from records only apply writes, so
+    /// the fixture applies for real rather than hand-forging `applied_verified`.
+    async fn seed_and_apply_modify(
+        pool: &SqlitePool,
+        repository_path: &Path,
+    ) -> ApplyApprovedPatchArtifactResult {
+        commit_test_file(repository_path, ROLLBACK_TARGET, ROLLBACK_PRE_APPLY_CONTENT);
+        let input = seed_apply_test_records_for(
+            pool,
+            repository_path,
+            "approved",
+            ROLLBACK_TARGET,
+            "modify",
+            ROLLBACK_MODIFY_DIFF,
+        )
+        .await;
+        let lock_directory = test_apply_lock_directory(repository_path);
+        let result = apply_approved_patch_artifact_with_pool(pool, &lock_directory, input)
+            .await
+            .expect("apply the modify fixture");
+        assert_eq!(result.status, "applied_verified");
+        result
+    }
+
+    async fn seed_and_apply_create(
+        pool: &SqlitePool,
+        repository_path: &Path,
+    ) -> ApplyApprovedPatchArtifactResult {
+        commit_test_file(repository_path, "README.md", "fixture\n");
+        let input = seed_apply_test_records(pool, repository_path, "approved").await;
+        let lock_directory = test_apply_lock_directory(repository_path);
+        let result = apply_approved_patch_artifact_with_pool(pool, &lock_directory, input)
+            .await
+            .expect("apply the create fixture");
+        assert_eq!(result.status, "applied_verified");
+        result
+    }
+
+    async fn artifact_apply_status(pool: &SqlitePool) -> String {
+        let row = sqlx::query(
+            "SELECT patch_artifacts_json FROM proposed_changes WHERE id = 'proposal-apply'",
+        )
+        .fetch_one(pool)
+        .await
+        .expect("load artifact state");
+        let artifacts: Value =
+            serde_json::from_str(&row.try_get::<String, _>("patch_artifacts_json").unwrap())
+                .unwrap();
+        artifacts[0]["applyStatus"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    }
+
+    async fn proposal_status(pool: &SqlitePool) -> String {
+        let row = sqlx::query("SELECT status FROM proposed_changes WHERE id = 'proposal-apply'")
+            .fetch_one(pool)
+            .await
+            .expect("load proposal status");
+        row.try_get::<String, _>("status").unwrap()
     }
 
     async fn mutate_apply_artifact(pool: &SqlitePool, mutation: impl FnOnce(&mut Value)) {
@@ -5665,6 +6879,7 @@ mod tests {
                 &lock_directory,
                 "repo-lock-test",
                 "artifact-first",
+                "apply_patch",
             )
             .await
             .expect("acquire first repository lock");
@@ -5673,6 +6888,7 @@ mod tests {
                 &lock_directory,
                 "repo-lock-test",
                 "artifact-second",
+                "apply_patch",
             )
             .await
             .unwrap_err();
@@ -5687,6 +6903,7 @@ mod tests {
                 &lock_directory,
                 "repo-lock-test",
                 "artifact-second",
+                "apply_patch",
             )
             .await
             .expect("acquire repository lock after release");
@@ -5741,6 +6958,7 @@ mod tests {
                 &lock_directory,
                 "repo-lock-test",
                 "artifact-new",
+                "apply_patch",
             )
             .await
             .expect("recover abandoned durable lock");
@@ -5760,6 +6978,7 @@ mod tests {
                 &lock_directory,
                 "repo-lock-test",
                 "artifact-next",
+                "apply_patch",
             )
             .await
             .unwrap_err();
@@ -6225,6 +7444,7 @@ mod tests {
                 &lock_directory,
                 "repo-apply",
                 "artifact-apply",
+                "apply_patch",
             )
             .await
             .unwrap_err();
@@ -7006,6 +8226,720 @@ Binary files a/image.png and b/image.png differ";
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0].r#type, "metadata");
     }
+
+    /// End-to-end rollback of a modify patch, through a spaced filename.
+    ///
+    /// The spaced path is the point: git reports it quoted in porcelain output,
+    /// so this exercises the #3 parser on every status read rollback performs.
+    #[test]
+    fn rollback_restores_the_pre_apply_contents_of_a_spaced_path() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("rollback-modify-spaced");
+            init_git_repo(&repository_path);
+            let pool = create_apply_test_pool().await;
+            seed_and_apply_modify(&pool, &repository_path).await;
+            assert_eq!(
+                fs::read_to_string(repository_path.join(ROLLBACK_TARGET)).unwrap(),
+                ROLLBACK_POST_APPLY_CONTENT
+            );
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let result = rollback_applied_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                test_rollback_input(ROLLBACK_CONFIRMATION_PHRASE),
+            )
+            .await
+            .expect("roll back the verified apply");
+
+            assert_eq!(result.status, "rolled_back");
+            assert_eq!(
+                fs::read_to_string(repository_path.join(ROLLBACK_TARGET)).unwrap(),
+                ROLLBACK_PRE_APPLY_CONTENT,
+                "the target must hold exactly its pre-apply bytes"
+            );
+            // Apply required a clean tree, so the pre-apply content was HEAD's
+            // content: restoring it returns the path to clean and it leaves
+            // `git status` entirely.
+            assert!(result.post_rollback_git_status.is_clean);
+            assert!(result
+                .post_rollback_verification
+                .observed_changed_paths
+                .is_empty());
+            assert_eq!(artifact_apply_status(&pool).await, "rolled_back");
+            assert_eq!(proposal_status(&pool).await, "rolled_back");
+
+            // The destroyed bytes are retained in their own table, never in
+            // `patch_apply_backups`.
+            let backup_row =
+                sqlx::query("SELECT files_json FROM patch_rollback_backups WHERE id = ?")
+                    .bind(&result.rollback_backup_id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("load the pre-rollback backup");
+            let stored: String = backup_row.try_get("files_json").unwrap();
+            assert!(
+                stored.contains("patched line"),
+                "the pre-rollback backup must retain the bytes rollback destroyed"
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// Rolling back a create deletes the file: it did not exist before the apply,
+    /// so there are no previous contents to restore.
+    #[test]
+    fn rollback_of_a_create_operation_deletes_the_file() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("rollback-create");
+            init_git_repo(&repository_path);
+            let pool = create_apply_test_pool().await;
+            seed_and_apply_create(&pool, &repository_path).await;
+            assert!(repository_path.join("generated.txt").exists());
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let result = rollback_applied_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                test_rollback_input(ROLLBACK_CONFIRMATION_PHRASE),
+            )
+            .await
+            .expect("roll back the created file");
+
+            assert_eq!(result.status, "rolled_back");
+            assert!(
+                !repository_path.join("generated.txt").exists(),
+                "a create rollback must delete the file it created"
+            );
+            assert!(result.post_rollback_git_status.is_clean);
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// The load-bearing safety rule: rollback must not overwrite user edits made
+    /// after the apply.
+    #[test]
+    fn rollback_refuses_a_target_edited_after_apply() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("rollback-drift");
+            init_git_repo(&repository_path);
+            let pool = create_apply_test_pool().await;
+            seed_and_apply_modify(&pool, &repository_path).await;
+            fs::write(
+                repository_path.join(ROLLBACK_TARGET),
+                "the user edited this after the apply\n",
+            )
+            .expect("simulate a user edit after apply");
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let error = rollback_applied_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                test_rollback_input(ROLLBACK_CONFIRMATION_PHRASE),
+            )
+            .await
+            .expect_err("a drifted target must never be overwritten");
+
+            assert_eq!(error.code, "target_drifted");
+            assert_eq!(
+                fs::read_to_string(repository_path.join(ROLLBACK_TARGET)).unwrap(),
+                "the user edited this after the apply\n",
+                "the refused rollback must not have touched the user's edit"
+            );
+            assert_eq!(artifact_apply_status(&pool).await, "applied_verified");
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// A deletion is a user edit. Restoring would resurrect a file they removed,
+    /// and we cannot tell "the user deleted it" from "something else did".
+    #[test]
+    fn rollback_refuses_a_target_deleted_after_apply() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("rollback-deleted");
+            init_git_repo(&repository_path);
+            let pool = create_apply_test_pool().await;
+            seed_and_apply_modify(&pool, &repository_path).await;
+            fs::remove_file(repository_path.join(ROLLBACK_TARGET)).expect("delete the target");
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let error = rollback_applied_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                test_rollback_input(ROLLBACK_CONFIRMATION_PHRASE),
+            )
+            .await
+            .expect_err("a deleted target must not be resurrected");
+
+            assert_eq!(error.code, "target_missing");
+            assert!(!repository_path.join(ROLLBACK_TARGET).exists());
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// Apply persists its baseline best-effort, so an artifact can be
+    /// `applied_verified` with nothing to compare against. With no baseline no
+    /// drift check is possible, and rollback's whole safety rule depends on one.
+    #[test]
+    fn rollback_refuses_an_artifact_with_no_post_apply_baseline() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("rollback-no-baseline");
+            init_git_repo(&repository_path);
+            let pool = create_apply_test_pool().await;
+            let applied = seed_and_apply_modify(&pool, &repository_path).await;
+            sqlx::query(
+                "UPDATE patch_apply_attempts SET post_apply_evidence_json = NULL WHERE id = ?",
+            )
+            .bind(&applied.apply_attempt_id)
+            .execute(&pool)
+            .await
+            .expect("simulate apply's fire-and-forget baseline persist failing");
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let error = rollback_applied_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                test_rollback_input(ROLLBACK_CONFIRMATION_PHRASE),
+            )
+            .await
+            .expect_err("no baseline means no rollback");
+
+            assert_eq!(error.code, "baseline_unavailable");
+            assert_eq!(
+                fs::read_to_string(repository_path.join(ROLLBACK_TARGET)).unwrap(),
+                ROLLBACK_POST_APPLY_CONTENT
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// Staging does not alter content, so the drift check passes — but we never
+    /// touch the index, and restoring under a staged entry would leave the index
+    /// and working tree disagreeing.
+    #[test]
+    fn rollback_refuses_a_staged_target() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("rollback-staged-target");
+            init_git_repo(&repository_path);
+            let pool = create_apply_test_pool().await;
+            seed_and_apply_modify(&pool, &repository_path).await;
+            git_in(&repository_path, &["add", "--", ROLLBACK_TARGET]);
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let error = rollback_applied_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                test_rollback_input(ROLLBACK_CONFIRMATION_PHRASE),
+            )
+            .await
+            .expect_err("a staged target must be refused");
+
+            assert_eq!(error.code, "target_staged");
+            assert_eq!(
+                fs::read_to_string(repository_path.join(ROLLBACK_TARGET)).unwrap(),
+                ROLLBACK_POST_APPLY_CONTENT
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// If the user committed the applied change, the apply is now history and
+    /// writing pre-apply bytes is a new modification rather than an undo.
+    #[test]
+    fn rollback_refuses_after_head_moved() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("rollback-head-moved");
+            init_git_repo(&repository_path);
+            let pool = create_apply_test_pool().await;
+            seed_and_apply_modify(&pool, &repository_path).await;
+            git_in(&repository_path, &["add", "--", ROLLBACK_TARGET]);
+            git_in(
+                &repository_path,
+                &[
+                    "-c",
+                    "user.name=AI Workspace Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "commit",
+                    "-m",
+                    "user committed the applied patch",
+                ],
+            );
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let error = rollback_applied_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                test_rollback_input(ROLLBACK_CONFIRMATION_PHRASE),
+            )
+            .await
+            .expect_err("a moved HEAD must be refused");
+
+            assert_eq!(error.code, "head_changed");
+            assert_eq!(
+                fs::read_to_string(repository_path.join(ROLLBACK_TARGET)).unwrap(),
+                ROLLBACK_POST_APPLY_CONTENT
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    #[test]
+    fn rollback_refuses_after_the_branch_changed() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("rollback-branch-changed");
+            init_git_repo(&repository_path);
+            let pool = create_apply_test_pool().await;
+            seed_and_apply_modify(&pool, &repository_path).await;
+            // Leaves HEAD and the working tree alone, so only the branch differs.
+            git_in(
+                &repository_path,
+                &["checkout", "-q", "-b", "another-branch"],
+            );
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let error = rollback_applied_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                test_rollback_input(ROLLBACK_CONFIRMATION_PHRASE),
+            )
+            .await
+            .expect_err("a changed branch must be refused");
+
+            assert_eq!(error.code, "branch_changed");
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// A corrupt backup must never be written over a real file.
+    #[test]
+    fn rollback_refuses_a_pre_apply_backup_that_fails_its_integrity_check() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("rollback-corrupt-backup");
+            init_git_repo(&repository_path);
+            let pool = create_apply_test_pool().await;
+            let applied = seed_and_apply_modify(&pool, &repository_path).await;
+            let tampered = json!([{
+                "path": ROLLBACK_TARGET,
+                "existedBeforeApply": true,
+                "contentSha256": sha256_hex(ROLLBACK_PRE_APPLY_CONTENT.as_bytes()),
+                "content": "silently corrupted backup bytes\n",
+            }]);
+            sqlx::query("UPDATE patch_apply_backups SET files_json = ? WHERE id = ?")
+                .bind(tampered.to_string())
+                .bind(&applied.backup_id)
+                .execute(&pool)
+                .await
+                .expect("corrupt the stored backup content");
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let error = rollback_applied_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                test_rollback_input(ROLLBACK_CONFIRMATION_PHRASE),
+            )
+            .await
+            .expect_err("a corrupt backup must never be restored");
+
+            assert_eq!(error.code, "backup_corrupt");
+            assert_eq!(
+                fs::read_to_string(repository_path.join(ROLLBACK_TARGET)).unwrap(),
+                ROLLBACK_POST_APPLY_CONTENT,
+                "the refused rollback must not have written corrupt bytes"
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// A second rollback is blocked twice over. This proves the first bar: the
+    /// artifact status. The drift check independently refuses too, because after
+    /// a rollback the file matches the pre-apply content, not the baseline.
+    #[test]
+    fn rollback_refuses_a_second_rollback() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("rollback-double");
+            init_git_repo(&repository_path);
+            let pool = create_apply_test_pool().await;
+            seed_and_apply_modify(&pool, &repository_path).await;
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            rollback_applied_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                test_rollback_input(ROLLBACK_CONFIRMATION_PHRASE),
+            )
+            .await
+            .expect("first rollback");
+
+            let error = rollback_applied_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                test_rollback_input(ROLLBACK_CONFIRMATION_PHRASE),
+            )
+            .await
+            .expect_err("a rolled-back artifact must never be rolled back again");
+
+            assert_eq!(error.code, "not_applied_verified");
+            assert_eq!(
+                fs::read_to_string(repository_path.join(ROLLBACK_TARGET)).unwrap(),
+                ROLLBACK_PRE_APPLY_CONTENT
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    #[test]
+    fn rollback_refuses_an_artifact_that_was_never_applied() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("rollback-never-applied");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let pool = create_apply_test_pool().await;
+            seed_apply_test_records(&pool, &repository_path, "approved").await;
+            ensure_patch_apply_tables(&pool)
+                .await
+                .expect("apply tables");
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let error = rollback_applied_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                test_rollback_input(ROLLBACK_CONFIRMATION_PHRASE),
+            )
+            .await
+            .expect_err("only a verified apply can be rolled back");
+
+            assert_eq!(error.code, "not_applied_verified");
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// A quarantined apply wrote paths we cannot account for and have no backup
+    /// for. Restoring only the declared target would be a partial undo reported
+    /// as a rollback — the false account this product exists to prevent.
+    #[test]
+    fn rollback_refuses_a_quarantined_apply() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("rollback-quarantined");
+            init_git_repo(&repository_path);
+            let pool = create_apply_test_pool().await;
+            seed_and_apply_modify(&pool, &repository_path).await;
+            mutate_apply_artifact(&pool, |artifacts| {
+                artifacts[0]["applyStatus"] = json!("quarantine_required");
+            })
+            .await;
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let error = rollback_applied_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                test_rollback_input(ROLLBACK_CONFIRMATION_PHRASE),
+            )
+            .await
+            .expect_err("a quarantined apply must never be rolled back");
+
+            assert_eq!(error.code, "not_applied_verified");
+            assert_eq!(
+                fs::read_to_string(repository_path.join(ROLLBACK_TARGET)).unwrap(),
+                ROLLBACK_POST_APPLY_CONTENT
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    #[test]
+    fn rollback_requires_the_exact_confirmation_phrase() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("rollback-confirmation");
+            init_git_repo(&repository_path);
+            let pool = create_apply_test_pool().await;
+            seed_and_apply_modify(&pool, &repository_path).await;
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            for phrase in ["roll back", "ROLL  BACK", "ROLLBACK", ""] {
+                let error = rollback_applied_patch_artifact_with_pool(
+                    &pool,
+                    &lock_directory,
+                    test_rollback_input(phrase),
+                )
+                .await
+                .expect_err("only the exact phrase may confirm a rollback");
+                assert_eq!(error.code, "confirmation_required");
+            }
+            assert_eq!(
+                fs::read_to_string(repository_path.join(ROLLBACK_TARGET)).unwrap(),
+                ROLLBACK_POST_APPLY_CONTENT
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    #[test]
+    fn rollback_refuses_while_the_repository_lock_is_held() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("rollback-lock-contention");
+            init_git_repo(&repository_path);
+            let pool = create_apply_test_pool().await;
+            seed_and_apply_modify(&pool, &repository_path).await;
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let _held = try_repository_file_lock(&lock_directory, "repo-apply")
+                .expect("take the repository lock")
+                .expect("repository lock available");
+
+            let error = rollback_applied_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                test_rollback_input(ROLLBACK_CONFIRMATION_PHRASE),
+            )
+            .await
+            .expect_err("a held repository lock must block rollback");
+
+            assert_eq!(error.code, "apply_locked");
+            assert_eq!(
+                fs::read_to_string(repository_path.join(ROLLBACK_TARGET)).unwrap(),
+                ROLLBACK_POST_APPLY_CONTENT
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// An interrupted rollback is undeterminable by definition, so it reconciles
+    /// straight to quarantine — no probe, no retry, no re-restore.
+    #[test]
+    fn interrupted_rollback_reconciles_to_quarantine_required() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("rollback-interrupted");
+            init_git_repo(&repository_path);
+            let pool = create_apply_test_pool().await;
+            seed_and_apply_modify(&pool, &repository_path).await;
+            mutate_apply_artifact(&pool, |artifacts| {
+                artifacts[0]["applyStatus"] = json!("rolling_back");
+            })
+            .await;
+            sqlx::query(
+                "INSERT INTO patch_apply_attempts (id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, started_at) VALUES ('rollback-dead', 'proposal-apply', 'artifact-apply', 'approval-apply', 'repo-apply', 'rolling_back', '1783532400')",
+            )
+            .execute(&pool)
+            .await
+            .expect("seed an abandoned rollback attempt");
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let attempts =
+                reconcile_interrupted_patch_apply_attempts_with_pool(&pool, &lock_directory)
+                    .await
+                    .expect("reconcile the abandoned rollback");
+
+            let reconciled = attempts
+                .iter()
+                .find(|attempt| attempt.apply_attempt_id == "rollback-dead")
+                .expect("the abandoned rollback must be seen by reconciliation");
+            assert_eq!(reconciled.status, "quarantine_required");
+            assert_eq!(artifact_apply_status(&pool).await, "quarantine_required");
+
+            // And it blocks: an abandoned rollback stops every later operation
+            // for the repository until a human clears it with INSPECTED.
+            let blocked = apply_approved_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                ApplyApprovedPatchArtifactInput {
+                    repository_id: "repo-apply".to_string(),
+                    proposed_change_id: "proposal-apply".to_string(),
+                    approval_request_id: "approval-apply".to_string(),
+                    patch_artifact_id: "artifact-apply".to_string(),
+                    confirmation_phrase: APPLY_CONFIRMATION_PHRASE.to_string(),
+                },
+            )
+            .await
+            .expect_err("an unresolved rollback must block the repository");
+            assert_eq!(blocked.code, "unresolved_apply_attempt");
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// A `rolling_back` row blocks before reconciliation ever runs.
+    ///
+    /// Distinct from the reconciliation test: this proves the *gate* entry, not
+    /// the classifier. Without `rolling_back` in the unresolved-attempt list, a
+    /// dead rollback would be a state with no exit and no door — an attempt stuck
+    /// mid-write, the target unknown, and the repository still accepting applies
+    /// as though nothing were pending.
+    #[test]
+    fn an_unreconciled_rollback_attempt_blocks_the_repository() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("rollback-gate-blocks");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+            ensure_patch_apply_tables(&pool)
+                .await
+                .expect("apply tables");
+            sqlx::query(
+                "INSERT INTO patch_apply_attempts (id, proposed_change_id, patch_artifact_id, approval_request_id, repository_id, status, started_at) VALUES ('rollback-live', 'proposal-apply', 'artifact-apply', 'approval-apply', 'repo-apply', 'rolling_back', '1783532400')",
+            )
+            .execute(&pool)
+            .await
+            .expect("seed an in-flight rollback attempt");
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let error = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
+                .await
+                .expect_err("an in-flight rollback must block the repository");
+
+            assert_eq!(error.code, "unresolved_apply_attempt");
+            assert!(!repository_path.join("generated.txt").exists());
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// An observed path we cannot represent fails the whole comparison closed.
+    ///
+    /// A path we cannot compare is not a path we may ignore: silently dropping it
+    /// would let an unaccountable write pass verification.
+    #[test]
+    fn rollback_path_sets_fail_closed_on_an_unrepresentable_path() {
+        let mut status = post_apply_status(&[("safe.txt", "unstaged")], 0);
+        assert!(rollback_status_path_sets(&status).is_some());
+
+        status.files.push(GitChangedFile {
+            path: "../escaped.txt".to_string(),
+            old_path: None,
+            kind: "modified".to_string(),
+            stage: "unstaged".to_string(),
+            status_code: " M".to_string(),
+        });
+
+        assert!(
+            rollback_status_path_sets(&status).is_none(),
+            "an unsafe observed path must fail the comparison closed"
+        );
+    }
+
+    /// Unrelated dirty and staged files must not turn a correct rollback into a
+    /// quarantine.
+    ///
+    /// The user may dirty or stage files of their own after the apply. Refusing
+    /// on those would quarantine a repository where nothing went wrong, and a
+    /// false quarantine is a false account — the failure class #3 removed. So the
+    /// post-restore expectation is a delta, not "the tree is clean" and not
+    /// "nothing is staged": the target leaves the changed set, and the staged set
+    /// is untouched.
+    #[test]
+    fn rollback_tolerates_unrelated_dirty_and_staged_files() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("rollback-unrelated-dirt");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "other.txt", "tracked\n");
+            let pool = create_apply_test_pool().await;
+            seed_and_apply_modify(&pool, &repository_path).await;
+
+            // The user's own work, after the apply and nothing to do with it.
+            fs::write(repository_path.join("other.txt"), "user edited this\n")
+                .expect("dirty an unrelated tracked file");
+            fs::write(repository_path.join("unrelated.txt"), "user staged this\n")
+                .expect("create an unrelated file");
+            git_in(&repository_path, &["add", "--", "unrelated.txt"]);
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let result = rollback_applied_patch_artifact_with_pool(
+                &pool,
+                &lock_directory,
+                test_rollback_input(ROLLBACK_CONFIRMATION_PHRASE),
+            )
+            .await
+            .expect("unrelated user work must not block a provable rollback");
+
+            assert_eq!(
+                result.status, "rolled_back",
+                "a correct rollback must not be quarantined by the user's unrelated staged work"
+            );
+            assert_eq!(
+                fs::read_to_string(repository_path.join(ROLLBACK_TARGET)).unwrap(),
+                ROLLBACK_PRE_APPLY_CONTENT
+            );
+            // The user's work is untouched.
+            assert_eq!(
+                fs::read_to_string(repository_path.join("other.txt")).unwrap(),
+                "user edited this\n"
+            );
+            assert_eq!(
+                fs::read_to_string(repository_path.join("unrelated.txt")).unwrap(),
+                "user staged this\n"
+            );
+            assert_eq!(
+                result.post_rollback_verification.observed_staged_paths,
+                vec!["unrelated.txt".to_string()],
+                "the user's staged file must still be staged: rollback never touches the index"
+            );
+            assert_eq!(
+                result.post_rollback_verification.observed_changed_paths,
+                vec!["other.txt".to_string(), "unrelated.txt".to_string()]
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// A rolled-back artifact must be refused by the native apply guard, not
+    /// merely rendered differently.
+    ///
+    /// This is F7's shape. Rollback adds a new terminal state, and the existing
+    /// guard enumerates statuses rather than allow-listing them: it blocks
+    /// `applying`/`applied`/`applied_verified` and the unresolved trio. A status
+    /// it has never heard of falls through every arm and reaches the write. The
+    /// UI is not what stops the second application; this guard is.
+    #[test]
+    fn safe_apply_refuses_an_artifact_that_was_rolled_back() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("safe-apply-rolled-back-artifact");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+            mutate_apply_artifact(&pool, |artifacts| {
+                artifacts[0]["applyStatus"] = json!("rolled_back");
+            })
+            .await;
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let error = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
+                .await
+                .expect_err("a rolled-back artifact must never be applied again");
+
+            assert_eq!(error.code, "already_rolled_back");
+            assert!(
+                !repository_path.join("generated.txt").exists(),
+                "the refused apply must not have written the working tree"
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// An in-flight rollback must also refuse a concurrent apply of its artifact.
+    #[test]
+    fn safe_apply_refuses_an_artifact_with_a_rollback_in_flight() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("safe-apply-rolling-back-artifact");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+            mutate_apply_artifact(&pool, |artifacts| {
+                artifacts[0]["applyStatus"] = json!("rolling_back");
+            })
+            .await;
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let error = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
+                .await
+                .expect_err("an artifact being rolled back must never be applied");
+
+            assert_eq!(error.code, "rollback_in_progress");
+            assert!(
+                !repository_path.join("generated.txt").exists(),
+                "the refused apply must not have written the working tree"
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -7018,6 +8952,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             acknowledge_patch_apply_attempt,
             apply_approved_patch_artifact,
+            rollback_applied_patch_artifact,
             create_openai_plan,
             get_openai_provider_configuration,
             load_git_file_diff,
