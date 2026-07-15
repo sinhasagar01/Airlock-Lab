@@ -104,13 +104,20 @@ backups — no `reset`, `checkout`, `clean`, `add`, or `commit` appears in the
 path, and Git history is never touched.
 
 Native reloads every durable record and re-derives every precondition: the
-artifact must be `applied_verified`, the apply must have persisted a post-apply
-baseline with a content hash for the target, the current file must still match
-that baseline, HEAD and the branch must be unchanged, the target must be
-unstaged, and the pre-apply backup must pass a SHA-256 integrity check before a
-byte is written. Anything absent or undeterminable refuses. Ineligibility and its
-reason are shown where the artifact is displayed, before any action, so an
-artifact with no baseline is never offered a button that could only refuse.
+artifact must be `applied_verified`, the apply must have positively asserted a
+rollback baseline (`recorded`, with the target's post-apply content hash plus
+branch and HEAD, written by a checked update from ingredients that involve no
+git subprocess), the current file must still match that baseline, HEAD and the
+branch must be unchanged, the target must be unstaged, and the pre-apply backup
+must pass a SHA-256 integrity check before a byte is written. Anything that is
+not an explicit `recorded` refuses with its reason: a file that outgrew the
+256 KiB rollback backup bound, an apply whose outcome was reconciled after a
+crash (its snapshot is reconciliation-time, so crash-window edits cannot be
+ruled out), or a legacy row with nothing usable. Ineligibility and its reason
+are shown where the artifact is displayed, before any action, so an artifact
+that can never be rolled back is never offered a button that could only refuse
+— and for a modify, the copy states that the pre-apply contents are exactly
+what was committed at apply time.
 
 Write ordering deliberately inverts apply's: the `rolling_back` attempt row lands
 *before* the pre-rollback backup, because that backup records bytes about to be

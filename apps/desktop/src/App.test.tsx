@@ -2694,7 +2694,7 @@ describe("rollback surface", () => {
     );
   }
 
-  /** The attempt carrying the post-apply baseline rollback depends on. */
+  /** The attempt carrying the rollback baseline assertion. */
   function verifiedAttempt(withBaseline: boolean) {
     return [
       {
@@ -2706,26 +2706,16 @@ describe("rollback surface", () => {
         backupId: "backup-1",
         status: "applied_verified" as const,
         startedAt: "1783532400",
-        postApplyEvidence: withBaseline
+        // The baseline is a positive assertion from native; without one, the
+        // surface must refuse permanently rather than reconstruct eligibility.
+        rollbackBaseline: withBaseline
           ? {
-              artifactDigest: "a".repeat(64),
-              repositorySnapshot: {
-                repositoryId: "repo-workspace",
-                branch: "main",
-                headSha: "abc1234",
-                isClean: false,
-                changedFileCount: 1,
-                relevantFilePaths: [AI_PATH],
-                targetFileFingerprints: [
-                  {
-                    path: AI_PATH,
-                    exists: true,
-                    status: "captured" as const,
-                    contentSha256: "f".repeat(64),
-                  },
-                ],
-                capturedAt: "1783532400",
-              },
+              status: "recorded" as const,
+              source: "apply",
+              targetPath: AI_PATH,
+              contentSha256: "f".repeat(64),
+              branch: "main",
+              headSha: "abc1234",
               capturedAt: "1783532400",
             }
           : undefined,

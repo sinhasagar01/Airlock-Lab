@@ -83,99 +83,61 @@ it did. Items are ordered by how much they protect or clarify that claim.
   It also exposed an F7-shaped hole the design did not anticipate: the native
   apply guard enumerates blocked statuses rather than allow-listing eligible
   ones, so `rolled_back` **fell through every arm and re-applied successfully**.
-  Proven by test, then fixed. The enumerate-don't-allow-list shape survives and
-  should probably invert the next time a status is added.
+  Proven by test, then fixed. The enumerate-don't-allow-list shape was
+  subsequently inverted (see the allow-list entry below); the attempt-level
+  gates that share it remain recorded under #12.
+
+- **Apply artifact guard inverted to an allow-list.** The guard enumerated
+  blocked statuses, making its default *apply*: a status no arm named reached
+  the write. It fixed no reachable bug --- every current refusal was already an
+  explicit arm --- but the default was the defect: `blocked` and
+  `not_applicable`, declared and never written, applied successfully, and the
+  shape had already produced two findings (`interrupted`/`needs_inspection`
+  before #1; `rolled_back` during #4, which wrote a file). Eligible now:
+  no `applyStatus`, and `apply_failed` (retry is re-gated in-request; pinned by
+  test before the inversion). `ready_to_apply` is deliberately refused ---
+  nothing writes it, and allow-listing an unreachable status by its name grants
+  permission speculatively. The frontend readiness gate mirrors it from one
+  list exported by `packages/ai`, kept in step by a test and a comment, stated
+  plainly as not compile-enforceable.
+
+- **#4c Rollback misdiagnosed an oversized post-apply target.** Proven by the
+  constructed test its entry demanded: an ordinary apply growing a 256,000-byte
+  file to 268,800 bytes succeeded and verified, the baseline persisted a
+  truthful `too_large` fingerprint with no hash, and rollback refused it as
+  `baseline_unavailable` --- "no content hash was recorded" --- when nothing had
+  failed and a record was kept. The frontend went further and said no record
+  existed. Both now refuse for the true reason: the pre-rollback backup cannot
+  store a file past the 256 KiB bound, which would be true with a perfect
+  baseline. `MAX_FINGERPRINT_BYTES` untouched --- it feeds the apply gate.
+
+- **#4a The rollback baseline is now a positive assertion.** Retitled from
+  "apply must not report success without persisting a baseline", whose premise
+  was falsified by probe: `git status` survives `index.lock` (exit 0, correct
+  output), and both writes around the fire-and-forget UPDATE were checked and
+  proven working microseconds on either side --- a capability gap, not a safety
+  one. What actually shipped: apply writes `rollback_baseline_json`
+  (`recorded` with hash/branch/HEAD, or `unavailable` with a reason) from
+  ingredients that cannot involve a git subprocess; the finalize UPDATE is
+  checked; rollback and the surfaces consult only the assertion; legacy rows
+  are backfilled by copying --- never deriving --- recorded evidence, with
+  anything unusable becoming an explicit `unavailable/not_recorded`.
+
+  **Implementing it exposed a live hazard, proven end-to-end by test before the
+  fix:** reconciliation can classify a crashed apply `applied_verified` with an
+  evidence snapshot captured at reconciliation time; an edit made in the crash
+  window (kept reverse-applicable by landing outside the patched region) was
+  inside that hash, invisible to the drift check, and rollback restored
+  pre-apply bytes over the user's edit and verified the destruction. Only an
+  apply-time observation may say `recorded`: reconciliation now asserts
+  `unavailable/reconciled_outcome`, with an interior fail-closed guard in
+  `persist_reconciled_attempt` behind it. Rollback capability for reconciled
+  outcomes is deliberately gone; it was never safe to have. Stated bound:
+  legacy reconciled rows are indistinguishable from apply-finalized ones, so
+  their backfilled baselines preserve exactly today's behaviour for exactly
+  those rows.
 
 ## Next
-
-### #4a Apply's rollback baseline is best-effort — a capability gap, not a safety one
-
-Rollback's drift check compares the target against the post-apply fingerprint in
-`post_apply_evidence_json`. That record is best-effort: the snapshot capture is
-`.ok()` and the persisting `UPDATE` is fire-and-forget, so an artifact can be
-`applied_verified` with no baseline and therefore be permanently
-un-rollbackable.
-
-**Correction to this entry's earlier framing, which said "'safe' currently
-depends on evidence apply does not guarantee." That is withdrawn — it was
-wrong.** Safety does not depend on this record. When the baseline is absent
-rollback refuses (`baseline_unavailable`) and the surface says so permanently
-before the user clicks. The behaviour is already fail-closed. What a missing
-baseline costs is the **capability** to roll back, not a safety property. The
-earlier framing implied a live hazard and there is none; a roadmap that
-misstates a hazard is the same dishonesty this document exists to remove.
-
-**It also barely fires, which was established by probe rather than argument:**
-
-- Of `capture_repository_validation_snapshot`'s failure branches, only the
-  `git status` read is reachable here. The digest is freshly computed so it is
-  always valid, and the path count/length/safety checks were already passed by
-  the same function twice earlier in the same request.
-- `git status --porcelain=v1` **does not fail while `index.lock` is held** —
-  measured: exit 0, correct output, git simply declines to write the refreshed
-  index. It fails only at 128 on genuine repository damage (unreadable `.git`,
-  corrupt `HEAD`), or on the 15-second timeout.
-- On the `applied_verified` path that read is *proven working microseconds
-  earlier*: `load_git_status_summary` already read the same status, and had it
-  failed, post-apply verification would have quarantined rather than reaching
-  `applied_verified`.
-- The fire-and-forget `UPDATE` is equally improbable: a **checked** `UPDATE` to
-  the same row (`status = 'applying'`, `rows_affected` asserted) succeeded before
-  the write, and a checked `UPDATE` to `proposed_changes` succeeded immediately
-  before it.
-
-**The useful finding is an ordering one.** `post_apply_evidence.repository_snapshot`
-has exactly two consumers, both rollback, and rollback needs three scalars from
-it: the target's content hash, `branch`, and `head_sha`. `branch` and `head_sha`
-are already known **before** the write (they are in `final_snapshot`, gated
-unchanged, and `git apply` cannot move HEAD). Only the content hash is inherently
-post-write, and it is a pure filesystem read. So today a whole `git status`
-subprocess is run to obtain data that does not need it — the one fragile
-ingredient is the one rollback does not use.
-
-**The honest terminal state, when it does fire:** keep `applied_verified` and
-record the unavailability **explicitly**. Two independent claims are being
-conflated — "the working tree changed exactly as approved" (true, proven) and
-"we recorded how to undo it" (false). Quarantine would be a false account:
-nothing unaccountable happened. But today un-rollbackability is inferred from an
-*absence*, which cannot distinguish "not recorded" from "failed to load" or "old
-row" — absence-as-signal is the fail-open shape. A positive assertion
-(`rollbackBaseline: recorded | unavailable`, with a reason) is the real fix, and
-is most of this item's remaining value. It must **not** become a new
-`applyStatus`: that enum answers "what happened to the working tree", the answer
-really is `applied_verified`, and a new variant would ripple into every gate that
-matches on it.
-
-Legacy artifacts with no baseline stay permanently un-rollbackable. A hash
-*could* be derived by re-applying the stored patch to the stored backup in a
-scratch directory, but that substitutes a derived model for a recorded
-observation inside a destructive path, which is precisely what #3 and post-apply
-verification exist to prevent. The population is bounded, local, and shrinking,
-and the surface already refuses with a specific reason.
-
-### #4c Rollback misdiagnoses an oversized post-apply target — UNPROVEN
-
-**Recorded as unproven: argued from the constants and the code path, not yet
-demonstrated by a constructed test. It becomes a task when a test proves it.**
-
-`fingerprint_target_file` never returns an error — it returns typed statuses, and
-only `captured` carries a content hash. Post-apply content is pre-apply plus the
-patch: the pre-apply target may be up to `MAX_FINGERPRINT_BYTES` (256 KiB) and
-the patch up to `MAX_GENERATED_PATCH_BYTES` (64 KiB). So an ordinary apply that
-grows a 250 KiB file by 10 KiB should persist a `too_large` fingerprint carrying
-no hash. Nothing fails: the capture succeeds, the `UPDATE` succeeds, the baseline
-is written — and rollback then refuses `baseline_unavailable`.
-
-The refusal is safe but **misdiagnosed**. We would tell the user "no record of
-this file's contents was kept" when a record *was* kept and truthfully says
-`too_large`. And the baseline is not the real obstacle: a target above 256 KiB
-can never be rolled back regardless, because the pre-rollback backup cannot store
-the bytes it would destroy. The honest message is "this file is too large for
-rollback to safely back up before overwriting."
-
-Note the constraint on any fix: raising `MAX_FINGERPRINT_BYTES` is **forbidden**
-— it feeds the validation snapshot digest and therefore the apply gate. A larger
-or streaming baseline hash must be additive and separate.
 
 ### #4d No gate enforces refreshed validation before retrying a failed apply
 

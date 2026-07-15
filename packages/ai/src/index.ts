@@ -333,6 +333,31 @@ export type PostRollbackVerification = {
   message: string;
 };
 
+/**
+ * The rollback baseline, asserted positively by native.
+ *
+ * `status: "recorded"` means apply itself observed the target immediately after
+ * the write and kept the hash, branch, and HEAD rollback needs. `"unavailable"`
+ * carries why: `target_too_large` (the file exceeds the 256 KiB rollback backup
+ * bound), `reconciled_outcome` (the apply crashed and was classified later, so
+ * apply-time contents were never observed), `target_fingerprint_unavailable`,
+ * or `not_recorded` (legacy row with nothing usable).
+ *
+ * An attempt without this field is a legacy row the backfill could not fill.
+ * Surfaces must treat that as unavailable — never reconstruct eligibility from
+ * evidence blobs, which is the absence-as-signal hole this assertion removes.
+ */
+export type RollbackBaseline = {
+  status: "recorded" | "unavailable";
+  reason?: string;
+  source: string;
+  targetPath: string;
+  contentSha256?: string;
+  branch?: string;
+  headSha?: string;
+  capturedAt: string;
+};
+
 export type PatchApplyAttempt = {
   applyAttemptId: string;
   repositoryId: string;
@@ -349,6 +374,7 @@ export type PatchApplyAttempt = {
   postApplyEvidence?: PatchApplyEvidence;
   postApplyVerification?: PostApplyPathVerification;
   postRollbackVerification?: PostRollbackVerification;
+  rollbackBaseline?: RollbackBaseline;
   currentGitStatusChanged?: boolean;
   message: string;
 };
@@ -407,6 +433,8 @@ export type ProposedPatchArtifact = {
   rolledBackAt?: string;
   rolledBackBy?: "local_user";
   postRollbackVerification?: PostRollbackVerification;
+  // The claim and its reason only; the attempt row carries the full record.
+  rollbackBaseline?: Pick<RollbackBaseline, "status" | "reason">;
 };
 
 export type ProviderPatchArtifact = {

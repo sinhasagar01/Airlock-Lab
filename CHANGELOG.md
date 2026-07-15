@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Fixed rollback destroying an edit made between a crashed apply and its
+  reconciliation. A crashed apply that reconciliation classified as verified
+  got its undo baseline from a snapshot taken at reconciliation time, so an
+  edit made in the crash window was inside the baseline's hash, invisible to
+  the drift check — rollback restored the pre-apply bytes over the edit and
+  reported a verified undo. Proven end-to-end by test before the fix. Only an
+  apply-time observation may now claim a baseline; reconciled outcomes are
+  permanently un-rollbackable and the surface says why.
+- The rollback baseline is now asserted positively rather than inferred from
+  absence. Apply records what it observed (or why it could not) in a checked
+  write, built from ingredients that cannot involve a git subprocess; rollback
+  and the review surfaces consult only that assertion. Rows from before this
+  change are filled once by copying their recorded evidence — never by
+  deriving — and anything unusable becomes an explicit "not recorded".
+- Fixed rollback misdiagnosing a file that grew past 256 KiB during an apply.
+  It refused with "no content hash was recorded", implying a recording failure
+  when nothing failed, and the surface claimed no record was kept when one was.
+  Both now state the true obstacle: rollback must back up a file before
+  overwriting it and cannot store one past the 256 KiB bound.
+
 - Added rollback for an applied patch. A pre-apply backup nobody can restore is
   a receipt, not a safety net. A dedicated native command now restores one
   `applied_verified` artifact from its app-local pre-apply backup behind the

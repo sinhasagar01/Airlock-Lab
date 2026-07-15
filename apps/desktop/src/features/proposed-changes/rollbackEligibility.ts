@@ -134,34 +134,67 @@ export function evaluateRollbackEligibility(
   // the apply cannot be ruled out, and rollback's entire safety rule is "do not
   // overwrite user edits made after apply". This is permanent: the moment to
   // record the baseline has passed.
-  const baseline = context.attempt?.postApplyEvidence?.repositorySnapshot;
-  const baselineFingerprint = baseline?.targetFileFingerprints?.find(
-    (fingerprint) => fingerprint.path === artifact.filePath,
-  );
-  const hasBaseline = Boolean(
-    baseline?.branch &&
-    baseline.headSha &&
-    baselineFingerprint?.status === "captured" &&
-    baselineFingerprint.contentSha256,
-  );
+  // The baseline is native's positive assertion, and this surface consults
+  // nothing else. Evidence blobs are deliberately not read: reconstructing
+  // eligibility from evidence is the absence-as-signal hole the assertion
+  // removes, and it is how a reconciliation-time snapshot once let rollback
+  // destroy a crash-window edit and verify the destruction.
+  //
+  // Apply required a clean tree, so for a modify the pre-apply contents are
+  // exactly what was committed at apply time — the permanent refusals say so
+  // rather than gesturing at "your own backups".
+  const manualRecoveryHint =
+    operation === "modify"
+      ? " Apply required a clean working tree, so the file's pre-apply contents are exactly what was committed as of the apply — Git history can restore them manually."
+      : " The file did not exist before the apply, so deleting it restores the pre-apply state manually.";
+  const baseline = context.attempt?.rollbackBaseline;
 
-  // An oversized target is refused for its true reason (proven, roadmap #4c).
-  // The baseline truthfully recorded `too_large`, so "no record was kept" would
-  // be false — and the real obstacle is the pre-rollback backup, which cannot
-  // store a file past the 256 KiB bound even with a perfect baseline.
-  if (baselineFingerprint?.status === "too_large") {
+  if (!baseline) {
     return block(
-      "target_too_large",
-      "This file exceeded the 256 KiB rollback backup limit when the patch was applied. Rollback must back up a file before overwriting it and cannot store this one, so this patch can never be rolled back from here.",
+      "baseline_unavailable",
+      `This patch was applied before undo baselines were recorded, and nothing usable was kept. It can never be rolled back from here.${manualRecoveryHint}`,
       operation,
       true,
     );
   }
 
-  if (!hasBaseline) {
+  if (baseline.status !== "recorded") {
+    // An oversized target is refused for its true reason (proven, roadmap
+    // #4c): the pre-rollback backup cannot store a file past the 256 KiB
+    // bound, which would be true even with a perfect baseline.
+    if (baseline.reason === "target_too_large") {
+      return block(
+        "target_too_large",
+        "This file exceeded the 256 KiB rollback backup limit when the patch was applied. Rollback must back up a file before overwriting it and cannot store this one, so this patch can never be rolled back from here.",
+        operation,
+        true,
+      );
+    }
+
+    // A reconciled outcome's snapshot is reconciliation-time, not apply-time:
+    // an edit made in the crash window would be inside its hash, invisible to
+    // the drift check.
+    if (baseline.reason === "reconciled_outcome") {
+      return block(
+        "baseline_unavailable",
+        `This apply was interrupted and its outcome was reconciled later, so the file's contents immediately after the apply were never recorded. Edits made before reconciliation cannot be ruled out, and this patch can never be rolled back from here.${manualRecoveryHint}`,
+        operation,
+        true,
+      );
+    }
+
     return block(
       "baseline_unavailable",
-      "No record of this file's contents immediately after the apply was kept, so edits made since then cannot be ruled out. This patch can never be rolled back from here; restore it manually from your own backups or Git history.",
+      `No record of this file's contents immediately after the apply was kept, so edits made since then cannot be ruled out. This patch can never be rolled back from here.${manualRecoveryHint}`,
+      operation,
+      true,
+    );
+  }
+
+  if (!baseline.contentSha256 || !baseline.branch || !baseline.headSha) {
+    return block(
+      "baseline_unavailable",
+      `The recorded undo baseline is incomplete, so edits made since the apply cannot be ruled out. This patch can never be rolled back from here.${manualRecoveryHint}`,
       operation,
       true,
     );

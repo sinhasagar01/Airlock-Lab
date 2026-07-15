@@ -77,6 +77,43 @@ persisting a baseline. Fixing it inside v1 would change the apply path while
 adding the first consumer that depends on it — two risks at once, on the
 highest-risk task.
 
+### Landed After v1: The Baseline Is Now A Positive Assertion
+
+The follow-up above landed, with a corrected premise: probing showed the
+best-effort hole essentially never fires (`git status` survives `index.lock`;
+the reads and writes around the fire-and-forget UPDATE are checked and proven
+working microseconds on either side), so this was a **capability** fix, not a
+safety one. What it replaced was the *shape*: un-rollbackability was inferred
+from an absence, and absence cannot distinguish "not recorded" from "failed to
+load" or "old row".
+
+Apply now writes `rollback_baseline_json` on the attempt row — `recorded` with
+the hash, branch, and HEAD rollback needs, or `unavailable` with the reason
+(`target_too_large`, `target_fingerprint_unavailable`, `reconciled_outcome`,
+`not_recorded`). Branch and HEAD come from the pre-write snapshot (gated
+unchanged in the same request; `git apply` cannot move HEAD) and the hash from
+one post-write filesystem read — **no git subprocess in the baseline path**; the
+evidence path's one fragile ingredient was the one rollback never needed. The
+finalize UPDATE is checked. Rollback and the surfaces consult only the
+assertion; legacy rows are backfilled once by **copying** (never deriving)
+recorded evidence, and anything unusable becomes an explicit
+`unavailable/not_recorded`.
+
+**Implementing this exposed a hazard worse than the one being fixed, proven
+end-to-end by test before the fix.** Reconciliation can classify a crashed
+apply `applied_verified`, and its evidence snapshot is captured at
+*reconciliation* time. An edit made in the crash-to-reconciliation window —
+kept reverse-applicable by landing outside the patched region — is inside that
+snapshot's hash, invisible to the drift check: rollback restored the pre-apply
+bytes over the user's edit **and verified the destruction**. Only an apply-time
+observation may say `recorded`. Reconciliation now asserts
+`unavailable/reconciled_outcome`, `persist_reconciled_attempt` fails closed if
+any future caller classifies verified without saying so, and rollback
+capability for reconciled outcomes is deliberately gone — it was never safe to
+have. Stated bound: *legacy* rows that reconciliation classified verified are
+indistinguishable from apply-finalized ones, so their backfilled baselines
+preserve exactly today's behaviour for exactly those rows.
+
 ## Eligibility
 
 | Outcome                   | Eligible | Why                                                                                     |
