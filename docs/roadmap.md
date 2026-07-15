@@ -37,7 +37,7 @@ Pre-apply backups are persisted and complete, and nothing can restore them. A
 backup nobody can restore is a receipt, not a safety net. Rollback is also the
 natural exit from quarantine.
 
-Highest-risk item in the product: it is a *second* destructive operation, and
+Highest-risk item in the product: it is a _second_ destructive operation, and
 `docs/security/patch-application-safety.md` warns that automatic rollback can
 overwrite concurrent user work. It should land after #2, not before — a restore
 whose outcome the UI cannot describe honestly is worse than no restore.
@@ -77,7 +77,7 @@ Only approval durability remains.
 
 - **F4 — vacuous post-apply consistency check.** `verify_post_apply_changed_paths`
   asserts `changed_file_count == files.len()`, but `changed_file_count` is
-  *defined* as `files.len()`, so the check is always true. Its evident intent is
+  _defined_ as `files.len()`, so the check is always true. Its evident intent is
   to detect porcelain lines that `filter_map(parse_porcelain_line)` silently
   dropped. To be real it must compare against the raw status line count.
 - **F5 — dead `stale_after`.** `APPLY_LOCK_STALE_AFTER_SECONDS` is computed and
