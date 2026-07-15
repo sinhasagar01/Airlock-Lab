@@ -710,8 +710,13 @@ fn capture_repository_validation_snapshot(
     let branch = git_output(canonical_repository_path, &["branch", "--show-current"])
         .filter(|value| !value.is_empty())
         .or_else(|| head_sha.as_ref().map(|commit| format!("detached {commit}")));
-    let status_output =
-        git_output(canonical_repository_path, &["status", "--porcelain=v1"]).unwrap_or_default();
+    // A failed `git status` must stay unknown. Defaulting to empty output would
+    // report zero changed files and a clean working tree, letting the clean-tree
+    // apply gate pass on evidence that was never actually read.
+    let Some(status_output) = git_output(canonical_repository_path, &["status", "--porcelain=v1"])
+    else {
+        return Err("The repository Git status could not be read.".to_string());
+    };
     let changed_file_count = status_output.lines().count();
     let mut relevant_file_paths = relevant_paths.to_vec();
     relevant_file_paths.sort();
@@ -4974,6 +4979,26 @@ mod tests {
         assert!(validate_generated_patch_structure(&binary_payload).is_err());
         assert!(validate_generated_patch_structure(&oversized).is_err());
         assert!(validate_generated_patch_structure(&too_many_lines).is_err());
+    }
+
+    #[test]
+    fn repository_snapshot_refuses_to_call_an_unknown_git_status_clean() {
+        let repository_path = create_temp_dir("snapshot-status-unavailable");
+        fs::write(repository_path.join("safe.txt"), "content\n").expect("write fixture");
+
+        // Not a Git repository, so `git status` exits non-zero exactly as it
+        // would if the index were locked by a concurrent process. An
+        // undeterminable working tree must never resolve to "clean".
+        let result = capture_repository_validation_snapshot(
+            "repo-snapshot",
+            &repository_path,
+            repository_path.to_str().expect("repository path"),
+            &"a".repeat(64),
+            &["safe.txt".to_string()],
+        );
+
+        assert!(result.is_err());
+        remove_temp_dir(&repository_path);
     }
 
     #[test]
