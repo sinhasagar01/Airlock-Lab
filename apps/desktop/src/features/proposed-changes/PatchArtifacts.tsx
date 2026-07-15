@@ -12,7 +12,10 @@ import {
   StatusPill,
 } from "@ai-dev/ui";
 import { patchArtifactTone } from "../../lib/uiState";
-import { APPLY_PATCH_CONFIRMATION } from "../../storage/patchApplication";
+import {
+  ACKNOWLEDGE_INSPECTION_CONFIRMATION,
+  APPLY_PATCH_CONFIRMATION,
+} from "../../storage/patchApplication";
 import {
   applyReadinessGateStatusLabel,
   evaluateApplyReadiness,
@@ -164,9 +167,15 @@ type PatchArtifactDetailProps = {
     status: "success" | "error";
     message: string;
   } | null;
+  acknowledgeFeedback?: {
+    status: "success" | "error";
+    message: string;
+  } | null;
   artifact: ProposedPatchArtifact | null;
+  isAcknowledging?: boolean;
   isApplying?: boolean;
   isValidating?: boolean;
+  onAcknowledge?: (confirmationPhrase: string) => void;
   onApply?: (confirmationPhrase: string) => void;
   onValidate?: () => void;
 };
@@ -205,14 +214,19 @@ export function PatchArtifactDetail({
   applyAttempt = null,
   applyReadinessContext,
   applyFeedback = null,
+  acknowledgeFeedback = null,
   artifact,
+  isAcknowledging = false,
   isApplying = false,
   isValidating = false,
+  onAcknowledge,
   onApply,
   onValidate,
 }: PatchArtifactDetailProps) {
   const [isConfirmingApply, setIsConfirmingApply] = useState(false);
   const [confirmationPhrase, setConfirmationPhrase] = useState("");
+  const [isConfirmingAcknowledge, setIsConfirmingAcknowledge] = useState(false);
+  const [acknowledgePhrase, setAcknowledgePhrase] = useState("");
   const validationStatus = artifact
     ? initialPatchValidationStatus(artifact)
     : "unavailable";
@@ -233,12 +247,21 @@ export function PatchArtifactDetail({
     applyAttempt?.status === "interrupted" ||
     applyAttempt?.status === "needs_inspection" ||
     applyAttempt?.status === "quarantine_required";
+  const inspectionRecorded = applyAttempt?.status === "inspected";
+  // An acknowledged attempt keeps its evidence on screen. Only an unresolved
+  // one can still be acknowledged.
+  const showsRecoveryPanel = requiresManualInspection || inspectionRecorded;
+  const isQuarantined = applyAttempt?.status === "quarantine_required";
   const postApplyVerification =
     applyAttempt?.postApplyVerification ?? artifact?.postApplyVerification;
+  const acknowledgePhraseMatches =
+    acknowledgePhrase === ACKNOWLEDGE_INSPECTION_CONFIRMATION;
 
   useEffect(() => {
     setIsConfirmingApply(false);
     setConfirmationPhrase("");
+    setIsConfirmingAcknowledge(false);
+    setAcknowledgePhrase("");
   }, [artifact?.id]);
 
   return (
@@ -315,23 +338,49 @@ export function PatchArtifactDetail({
         </div>
       ) : null}
 
-      {requiresManualInspection ? (
+      {showsRecoveryPanel && applyAttempt ? (
         <section
           aria-live="polite"
           className="patch-apply-recovery"
           role="status"
         >
           <div className="patch-apply-recovery__header">
-            <IconBadge icon="changes" tone="warning" size="md" />
+            <IconBadge
+              icon="changes"
+              tone={
+                inspectionRecorded
+                  ? "neutral"
+                  : isQuarantined
+                    ? "danger"
+                    : "warning"
+              }
+              size="md"
+            />
             <div>
               <p className="card-eyebrow">
-                {applyAttempt.status === "quarantine_required"
-                  ? "Post-Apply Quarantine"
-                  : "Interrupted Apply"}
+                {inspectionRecorded
+                  ? "Inspection Recorded"
+                  : isQuarantined
+                    ? "Post-Apply Quarantine"
+                    : "Interrupted Apply"}
               </p>
-              <h4>Manual inspection required</h4>
+              <h4>
+                {inspectionRecorded
+                  ? "Inspection recorded"
+                  : "Manual inspection required"}
+              </h4>
             </div>
-            <StatusPill tone="warning" size="sm" showDot={false}>
+            <StatusPill
+              tone={
+                inspectionRecorded
+                  ? "neutral"
+                  : isQuarantined
+                    ? "danger"
+                    : "warning"
+              }
+              size="sm"
+              showDot={false}
+            >
               {applyAttempt.status.replaceAll("_", " ")}
             </StatusPill>
           </div>
@@ -389,6 +438,55 @@ export function PatchArtifactDetail({
             No patch was retried or rolled back. Inspect the working tree and
             backup evidence before taking any manual action.
           </p>
+
+          {requiresManualInspection && onAcknowledge ? (
+            isConfirmingAcknowledge ? (
+              <div className="patch-apply-confirm">
+                <p>
+                  Recording an inspection lets other patches be applied to this
+                  repository again. It does not apply, retry, or roll back
+                  anything, and this artifact stays permanently ineligible.
+                </p>
+                <label htmlFor="acknowledge-confirmation">
+                  Type INSPECTED to confirm you reviewed this outcome
+                </label>
+                <input
+                  id="acknowledge-confirmation"
+                  autoComplete="off"
+                  onChange={(event) => setAcknowledgePhrase(event.target.value)}
+                  value={acknowledgePhrase}
+                />
+                <div className="patch-apply-confirm__actions">
+                  <SecondaryButton
+                    onClick={() => {
+                      setIsConfirmingAcknowledge(false);
+                      setAcknowledgePhrase("");
+                    }}
+                  >
+                    Cancel
+                  </SecondaryButton>
+                  <PrimaryButton
+                    disabled={!acknowledgePhraseMatches || isAcknowledging}
+                    onClick={() => onAcknowledge(acknowledgePhrase)}
+                  >
+                    {isAcknowledging ? "Recording..." : "Confirm inspection"}
+                  </PrimaryButton>
+                </div>
+              </div>
+            ) : (
+              <SecondaryButton onClick={() => setIsConfirmingAcknowledge(true)}>
+                Record inspection
+              </SecondaryButton>
+            )
+          ) : null}
+
+          {acknowledgeFeedback ? (
+            <p
+              className={`patch-apply-feedback patch-apply-feedback--${acknowledgeFeedback.status}`}
+            >
+              {acknowledgeFeedback.message}
+            </p>
+          ) : null}
         </section>
       ) : null}
 
@@ -509,17 +607,15 @@ export function PatchArtifactDetail({
           {applicationVerified ? (
             <p className="apply-feedback apply-feedback--success" role="status">
               The approved patch was applied and authoritative verification
-              confirmed only the expected path changed. No files were staged
-              or committed. Applied at{" "}
-              {artifact.appliedAt ?? "an unknown time"}.
+              confirmed only the expected path changed. No files were staged or
+              committed. Applied at {artifact.appliedAt ?? "an unknown time"}.
               {artifact.backupId
                 ? ` Pre-apply backup: ${artifact.backupId}.`
                 : " Backup reference unavailable."}
             </p>
           ) : null}
           {applyFeedback &&
-          (applyFeedback.status === "error" ||
-            !applicationVerified) ? (
+          (applyFeedback.status === "error" || !applicationVerified) ? (
             <p
               className={`apply-feedback apply-feedback--${applyFeedback.status}`}
               role={applyFeedback.status === "error" ? "alert" : "status"}

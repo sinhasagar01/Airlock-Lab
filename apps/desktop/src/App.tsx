@@ -103,6 +103,7 @@ import { loadRepositoriesGitMetadata } from "./storage/gitMetadata";
 import {
   applyApprovedPatchArtifact,
   PatchApplicationError,
+  acknowledgePatchApplyAttempt,
   reconcileInterruptedPatchApplyAttempts,
 } from "./storage/patchApplication";
 import { dryRunGeneratedPatch } from "./storage/patchValidation";
@@ -235,6 +236,13 @@ export function App() {
     string | null
   >(null);
   const [patchApplyFeedback, setPatchApplyFeedback] = useState<{
+    artifactId: string;
+    status: "success" | "error";
+    message: string;
+  } | null>(null);
+  const [acknowledgingApplyAttemptId, setAcknowledgingApplyAttemptId] =
+    useState<string | null>(null);
+  const [acknowledgeFeedback, setAcknowledgeFeedback] = useState<{
     artifactId: string;
     status: "success" | "error";
     message: string;
@@ -926,6 +934,55 @@ export function App() {
       });
     } finally {
       setApplyingPatchArtifactId(null);
+    }
+  }
+
+  /**
+   * Records that a human inspected an unresolved apply attempt. React sends the
+   * durable attempt ID and the exact phrase only; native code re-checks both and
+   * remains the authority. This never applies, retries, or rolls anything back,
+   * and the artifact stays permanently ineligible for application.
+   */
+  async function acknowledgeApplyAttempt(
+    attempt: PatchApplyAttempt,
+    confirmationPhrase: string,
+  ) {
+    if (acknowledgingApplyAttemptId) {
+      return;
+    }
+
+    setAcknowledgingApplyAttemptId(attempt.applyAttemptId);
+    setAcknowledgeFeedback(null);
+
+    try {
+      const result = await acknowledgePatchApplyAttempt(
+        attempt.applyAttemptId,
+        confirmationPhrase,
+      );
+
+      setAcknowledgeFeedback({
+        artifactId: attempt.patchArtifactId,
+        status: "success",
+        message: result.message,
+      });
+
+      try {
+        const attempts = await reconcileInterruptedPatchApplyAttempts();
+        setPatchApplyAttempts(attempts);
+      } catch {
+        // The native result stays visible even if the follow-up reload fails.
+      }
+    } catch (error) {
+      setAcknowledgeFeedback({
+        artifactId: attempt.patchArtifactId,
+        status: "error",
+        message:
+          error instanceof PatchApplicationError
+            ? error.message
+            : "The inspection could not be recorded. No patch state changed.",
+      });
+    } finally {
+      setAcknowledgingApplyAttemptId(null);
     }
   }
 
@@ -2656,9 +2713,29 @@ export function App() {
                         ? patchApplyFeedback
                         : null
                     }
+                    acknowledgeFeedback={
+                      acknowledgeFeedback?.artifactId ===
+                      selectedAgentPatchArtifact?.id
+                        ? acknowledgeFeedback
+                        : null
+                    }
                     artifact={selectedAgentPatchArtifact}
+                    isAcknowledging={
+                      selectedAgentPatchApplyAttempt?.applyAttemptId ===
+                      acknowledgingApplyAttemptId
+                    }
                     isApplying={
                       selectedAgentPatchArtifact?.id === applyingPatchArtifactId
+                    }
+                    onAcknowledge={
+                      selectedAgentPatchApplyAttempt
+                        ? (confirmationPhrase) => {
+                            void acknowledgeApplyAttempt(
+                              selectedAgentPatchApplyAttempt,
+                              confirmationPhrase,
+                            );
+                          }
+                        : undefined
                     }
                     isValidating={
                       selectedAgentPatchArtifact?.id ===
@@ -3272,10 +3349,30 @@ export function App() {
                       ? patchApplyFeedback
                       : null
                   }
+                  acknowledgeFeedback={
+                    acknowledgeFeedback?.artifactId ===
+                    selectedApprovalPatchArtifact?.id
+                      ? acknowledgeFeedback
+                      : null
+                  }
                   artifact={selectedApprovalPatchArtifact}
+                  isAcknowledging={
+                    selectedApprovalPatchApplyAttempt?.applyAttemptId ===
+                    acknowledgingApplyAttemptId
+                  }
                   isApplying={
                     selectedApprovalPatchArtifact?.id ===
                     applyingPatchArtifactId
+                  }
+                  onAcknowledge={
+                    selectedApprovalPatchApplyAttempt
+                      ? (confirmationPhrase) => {
+                          void acknowledgeApplyAttempt(
+                            selectedApprovalPatchApplyAttempt,
+                            confirmationPhrase,
+                          );
+                        }
+                      : undefined
                   }
                   isValidating={
                     selectedApprovalPatchArtifact?.id ===

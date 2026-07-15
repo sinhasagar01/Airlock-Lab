@@ -15,6 +15,7 @@ import { scanRepositoryFileTree } from "./storage/fileTreeScanner";
 import { loadGitFileDiff, loadGitStatusSummary } from "./storage/gitChanges";
 import { dryRunGeneratedPatch } from "./storage/patchValidation";
 import {
+  acknowledgePatchApplyAttempt,
   applyApprovedPatchArtifact,
   reconcileInterruptedPatchApplyAttempts,
 } from "./storage/patchApplication";
@@ -462,6 +463,7 @@ vi.mock("./storage/patchApplication", async (importOriginal) => {
   return {
     ...actual,
     applyApprovedPatchArtifact: vi.fn(),
+    acknowledgePatchApplyAttempt: vi.fn(),
     reconcileInterruptedPatchApplyAttempts: vi.fn(async () => []),
   };
 });
@@ -584,6 +586,7 @@ beforeEach(() => {
   vi.mocked(isTauriRuntime).mockReturnValue(true);
   vi.mocked(pickRepositoryDirectories).mockResolvedValue(null);
   vi.mocked(applyApprovedPatchArtifact).mockReset();
+  vi.mocked(acknowledgePatchApplyAttempt).mockReset();
   vi.mocked(reconcileInterruptedPatchApplyAttempts).mockReset();
   vi.mocked(reconcileInterruptedPatchApplyAttempts).mockResolvedValue([]);
   vi.mocked(saveRepositories).mockResolvedValue(undefined);
@@ -1411,6 +1414,47 @@ describe("App smoke tests", () => {
     ).toBeDisabled();
   });
 
+  const quarantinedProposedChanges = defaultProposedChanges.map((change) =>
+    change.id === "proposal-mvp-shell"
+      ? {
+          ...change,
+          status: "quarantine_required" as const,
+          patchArtifacts: change.patchArtifacts.map((artifact) =>
+            artifact.id === "proposal-file-ai-patch-artifact"
+              ? { ...artifact, applyStatus: "quarantine_required" as const }
+              : artifact,
+          ),
+        }
+      : change,
+  );
+
+  const quarantinedApplyAttempt = {
+    applyAttemptId: "apply-quarantine-1",
+    repositoryId: "repo-workspace",
+    proposedChangeId: "proposal-mvp-shell",
+    approvalRequestId: "approval-provider-rfc",
+    patchArtifactId: "proposal-file-ai-patch-artifact",
+    backupId: "backup-quarantine-1",
+    status: "quarantine_required" as const,
+    startedAt: "1783532400",
+    completedAt: "1783532500",
+    sanitizedError: "Post-apply verification found an unexpected changed path.",
+    currentGitStatusChanged: true,
+    postApplyVerification: {
+      status: "quarantine_required" as const,
+      expectedPaths: ["packages/ai/src/index.ts"],
+      observedChangedPaths: [
+        "packages/ai/src/index.ts",
+        "packages/core/src/unexpected.ts",
+      ],
+      unexpectedPaths: ["packages/core/src/unexpected.ts"],
+      missingExpectedPaths: [],
+      verifiedAt: "1783532500",
+      message: "Quarantined for manual inspection.",
+    },
+    message: "Quarantined for manual inspection.",
+  };
+
   it("shows reconciled interrupted attempts and keeps apply unavailable", async () => {
     const interruptedChanges = defaultProposedChanges.map((change) =>
       change.id === "proposal-mvp-shell"
@@ -1537,6 +1581,87 @@ describe("App smoke tests", () => {
     expect(
       screen.getByText("packages/core/src/unexpected.ts"),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Apply unavailable" }),
+    ).toBeDisabled();
+  });
+
+  it("records an inspection only after exact typed confirmation and keeps apply disabled", async () => {
+    vi.mocked(reconcileInterruptedPatchApplyAttempts).mockResolvedValue([
+      quarantinedApplyAttempt,
+    ]);
+    vi.mocked(acknowledgePatchApplyAttempt).mockResolvedValue({
+      applyAttemptId: "apply-quarantine-1",
+      status: "inspected",
+      acknowledgedFromStatus: "quarantine_required",
+      acknowledgedAt: "1783532600",
+      message: "The attempt was recorded as manually inspected.",
+    });
+    const { user } = renderApp({ proposedChanges: quarantinedProposedChanges });
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(
+      screen.getByRole("button", {
+        name: /generated packages\/ai\/src\/index\.ts/,
+      }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Record inspection" }),
+    );
+
+    const confirmButton = screen.getByRole("button", {
+      name: "Confirm inspection",
+    });
+    const phraseInput = screen.getByLabelText(/Type INSPECTED to confirm/i);
+
+    expect(confirmButton).toBeDisabled();
+    await user.type(phraseInput, "inspected");
+    expect(confirmButton).toBeDisabled();
+    expect(acknowledgePatchApplyAttempt).not.toHaveBeenCalled();
+
+    await user.clear(phraseInput);
+    await user.type(phraseInput, "INSPECTED");
+    expect(confirmButton).toBeEnabled();
+    await user.click(confirmButton);
+
+    await waitFor(() =>
+      expect(acknowledgePatchApplyAttempt).toHaveBeenCalledWith(
+        "apply-quarantine-1",
+        "INSPECTED",
+      ),
+    );
+    expect(
+      screen.getByRole("button", { name: "Apply unavailable" }),
+    ).toBeDisabled();
+  });
+
+  it("shows an acknowledged attempt as recorded and never offers apply again", async () => {
+    vi.mocked(reconcileInterruptedPatchApplyAttempts).mockResolvedValue([
+      {
+        ...quarantinedApplyAttempt,
+        status: "inspected",
+        message:
+          "The attempt was recorded as manually inspected. Its artifact remains permanently ineligible for application, and no patch was retried or rolled back.",
+      },
+    ]);
+    const { user } = renderApp({ proposedChanges: quarantinedProposedChanges });
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(
+      screen.getByRole("button", {
+        name: /generated packages\/ai\/src\/index\.ts/,
+      }),
+    );
+
+    expect(await screen.findByText("Inspection Recorded")).toBeInTheDocument();
+    // The evidence must survive acknowledgement rather than disappear.
+    expect(
+      screen.getByText("packages/core/src/unexpected.ts"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("backup-quarantine-1")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Record inspection" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Apply unavailable" }),
     ).toBeDisabled();
