@@ -1937,8 +1937,36 @@ async fn acquire_repository_apply_lock(
     })?;
 
     mark_abandoned_apply_locks_stale(pool, repository_id).await?;
+    // An attempt leaves the repository free only if it is *resolved*, and the
+    // default for a status this gate has never heard of is therefore to block.
+    //
+    // This enumerated the blocking statuses instead, which made its default
+    // *don't block*: a repository with an attempt in an unrecognised status kept
+    // accepting applies as though nothing were pending. That is quieter than the
+    // artifact guard's version of the same shape — no wrong file gets written,
+    // the app simply stops noticing — and it is the "no exit and no door" the
+    // rollback design named, one layer up.
+    //
+    // Resolved means no human need act:
+    //
+    //   * `applied_verified` / `rolled_back` — proven outcomes.
+    //   * `failed` — git rejected the patch and the tree never changed.
+    //   * `inspected` — a human already cleared it.
+    //   * `applied` — a legacy verdict. No current code writes it (production
+    //     only INSERTs `pending` and `rolling_back`), but an earlier version
+    //     did, per `patch-application-safety.md`, and `apply_attempt_message`
+    //     still carries its arm. Blocking it would strand a legacy row behind a
+    //     gate `acknowledge` does not accept — a state with no exit, created by
+    //     the very fix meant to prevent those. It means resolved; it does not
+    //     block. Its replay is barred by the artifact guard and the proposal's
+    //     own state, both verified by test.
+    //
+    // Everything else blocks, including any status added later. The door is
+    // reconciliation: it gives an unrecognised status a verdict, and `INSPECTED`
+    // clears the verdict. That door is why this default is safe to invert, and
+    // it is why this and the reconciliation query had to land together.
     let unresolved_attempt = sqlx::query(
-        "SELECT id FROM patch_apply_attempts WHERE repository_id = ? AND status IN ('pending', 'applying', 'rolling_back', 'interrupted', 'needs_inspection', 'quarantine_required') LIMIT 1",
+        "SELECT id FROM patch_apply_attempts WHERE repository_id = ? AND status NOT IN ('applied', 'applied_verified', 'failed', 'rolled_back', 'inspected') LIMIT 1",
     )
     .bind(repository_id)
     .fetch_optional(pool)
@@ -9764,6 +9792,106 @@ Binary files a/image.png and b/image.png differ";
                 );
                 remove_temp_dir(&repository_path);
             }
+        });
+    }
+
+    /// An unrecognised attempt status blocks the repository. (A2's shape.)
+    ///
+    /// The gate enumerated the statuses that block, so its default was *don't
+    /// block*: an attempt in a status it had never heard of left the repository
+    /// accepting applies as though nothing were pending. Nothing can be added to
+    /// the list to make this pass; only the inversion can.
+    #[test]
+    fn an_unrecognized_attempt_status_blocks_the_repository() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("a2-unknown-blocks");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+            ensure_patch_apply_tables(&pool)
+                .await
+                .expect("apply tables");
+            seed_attempt_with_status(&pool, "attempt-future", "some_future_status").await;
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let error = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
+                .await
+                .expect_err("an unrecognised attempt status must block the repository");
+
+            assert_eq!(error.code, "unresolved_apply_attempt");
+            assert!(
+                !repository_path.join("generated.txt").exists(),
+                "an unrecognised attempt state must never leave the repository writable"
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
+    /// The exit exists: an unknown status blocks, reconciliation gives it a
+    /// verdict, and INSPECTED clears the repository.
+    ///
+    /// Without this chain, A2's inversion would be F7's shape — a state that
+    /// blocks with no door. `acknowledge` does not accept an unrecognised
+    /// status directly; the verdict is what makes it acknowledgeable.
+    #[test]
+    fn an_unrecognized_attempt_status_can_be_reconciled_and_acknowledged() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("a2-unknown-exit");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let pool = create_apply_test_pool().await;
+            seed_apply_test_records(&pool, &repository_path, "approved").await;
+            ensure_patch_apply_tables(&pool)
+                .await
+                .expect("apply tables");
+            seed_attempt_with_status(&pool, "attempt-future", "some_future_status").await;
+            let lock_directory = test_apply_lock_directory(&repository_path);
+
+            // Blocked, and not directly acknowledgeable.
+            let direct = acknowledge_patch_apply_attempt_with_pool(
+                &pool,
+                AcknowledgeApplyAttemptInput {
+                    apply_attempt_id: "attempt-future".to_string(),
+                    confirmation_phrase: ACKNOWLEDGE_CONFIRMATION_PHRASE.to_string(),
+                },
+            )
+            .await
+            .expect_err("an unclassified status is not acknowledgeable");
+            assert_eq!(direct.code, "attempt_not_inspectable");
+
+            // Reconciliation is the door: it gives the state a verdict.
+            reconcile_interrupted_patch_apply_attempts_with_pool(&pool, &lock_directory)
+                .await
+                .expect("reconcile");
+            assert_eq!(
+                attempt_status(&pool, "attempt-future").await,
+                "needs_inspection"
+            );
+
+            // And the verdict is acknowledgeable, which unblocks the repository.
+            acknowledge_patch_apply_attempt_with_pool(
+                &pool,
+                AcknowledgeApplyAttemptInput {
+                    apply_attempt_id: "attempt-future".to_string(),
+                    confirmation_phrase: ACKNOWLEDGE_CONFIRMATION_PHRASE.to_string(),
+                },
+            )
+            .await
+            .expect("a classified attempt must be acknowledgeable");
+            assert_eq!(attempt_status(&pool, "attempt-future").await, "inspected");
+
+            let lock = acquire_repository_apply_lock(
+                &pool,
+                &lock_directory,
+                "repo-apply",
+                "artifact-apply",
+                "apply_patch",
+            )
+            .await
+            .expect("the repository must be free once the attempt is acknowledged");
+            let _ = release_repository_apply_lock(&pool, &lock).await;
+            remove_temp_dir(&repository_path);
         });
     }
 
