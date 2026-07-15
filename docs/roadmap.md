@@ -31,56 +31,30 @@ it did. Items are ordered by how much they protect or clarify that claim.
   ships a fake activity feed, a fake tier, or a fabricated index time. Overview
   and Changes now agree about the working tree.
 
+- **#3 Fix `parse_porcelain_line` for quoted paths.** git quotes and C-escapes
+  any path containing a space, a non-ASCII byte, a quote, or a backslash, and the
+  parser took the quoted form literally. A patch for `My Notes.md` applied
+  correctly and was then reported as an unaccountable write: the file on disk was
+  right and the app quarantined it anyway. Three consumers were affected, not the
+  one originally recorded here — post-apply verification produced the false
+  quarantine, reconciliation's `target_changed` never matched (so a genuinely
+  applied patch stuck at `needs_inspection`), and per-file diff loading returned
+  `unavailable`, meaning Changes could not show a diff for such a path at all.
+  Fixed by C-style unquoting with strict UTF-8 decoding. `core.quotepath=false`
+  was verified **not** to be a fix: it stops the octal escaping and still quotes
+  the space case. Renames were verified to parse correctly and were not a defect.
+  Shipped with a raw status line count (see #12's F4, now landed) because
+  rejecting a line is fail-open until dropped lines are visible, and with
+  control-character rejection in `is_safe_relative_path`.
+
+  Correction to this document's earlier framing: it said "a path that arrives
+  quoted should never pass a safety check." **That is withdrawn.** A file may
+  legitimately be named `say "hi".txt`, and at the check site an unparsed
+  `"foo.txt"` and a file literally named `"foo.txt"` are the same string. The
+  ambiguity is only resolvable at the parse boundary, which is where the fix now
+  lives. Quotes are deliberately not rejected; control characters are.
+
 ## Next
-
-### #3 Fix `parse_porcelain_line` for quoted paths
-
-**This is the highest-value correctness bug open, and it is ahead of rollback
-deliberately.**
-
-`git status --porcelain=v1` quotes and C-escapes any path containing a space,
-non-ASCII byte, `"`, or `\`. The parser takes the quoted form literally:
-
-```text
-?? plain.txt               ->  plain.txt              matches
-?? "with space.txt"        ->  "with space.txt"       does not match
-?? "caf\303\251.txt"       ->  "caf\303\251.txt"      does not match
-```
-
-`is_safe_relative_path` accepts the quoted string — it only rejects empty, null,
-absolute, and traversal paths — so it is not even caught as unsafe. It lands in
-`observed_paths` looking legitimate and simply fails to equal `expected_paths`,
-producing unexpected **and** missing paths, which quarantines the attempt.
-
-**What actually happens: the patch applies correctly. The file on disk is
-right. Then the app falsely accuses itself of an unaccountable write.** Post-#1
-the user acknowledges an incident that never occurred, and the artifact is
-permanently ineligible afterwards. This inverts the one signal the whole
-architecture exists to make trustworthy — it is worse than a crash, because the
-product's own account of what it did is wrong in the direction of alarm.
-
-**Blast radius:** any target filename containing a space, a non-ASCII character,
-`"`, or `\`. `My Notes.md` is enough; no attacker and no unusual repository are
-involved. Bounded by the clean-tree gate to the target path only: the tree must
-be fully clean before apply (untracked files count), so the target is the only
-post-apply changed path. It does not trigger merely because some unrelated file
-in the repository has an accented name.
-
-**`core.quotepath` is not the fix.** It defaults to `true` and we never set it.
-Setting it `false` stops the octal escaping, but git still quotes the space
-case — verified. It is a partial mitigation that leaves the more common failure
-intact. The fix is C-style unquoting in the parser.
-
-**Related, for the same task to consider:** `is_safe_relative_path` accepts a
-path containing literal quote characters. Unquoting fixes the symptom, but a
-path that arrives quoted should never pass a safety check in the first place.
-
-**Renames are not affected.** `R  old -> new` parses correctly via
-`split_once(" -> ")` when `index_status` is `R` or `C`. Verified; no defect
-recorded.
-
-Secondary, same root cause: Changes renders the quoted form as the filename, and
-per-file diff loading for such a path fails its own path check.
 
 ### #4 Rollback v1
 
@@ -92,11 +66,39 @@ Highest-risk item in the product: it is a _second_ destructive operation, and
 `docs/security/patch-application-safety.md` warns that automatic rollback can
 overwrite concurrent user work.
 
-**It sits behind #3 because it depends on it.** A restore must verify what it
-restored, and it will read `git status` through the same parser. Building the
-second destructive operation on a parser that misreports paths makes the
-restore's own verification unreliable exactly when it matters most. This is a
-dependency, not a sequencing preference.
+**It sat behind #3 because it depended on it.** A restore must verify what it
+restored, and it reads `git status` through the same parser. #3 has landed, so
+this is unblocked.
+
+**The design is settled and written down:**
+[`docs/security/rollback-v1-design.md`](./security/rollback-v1-design.md). It is
+an implementation brief carrying the reasoning, not only the conclusions --- the
+reasoning is what stops a later reader from "simplifying" a decision that looks
+arbitrary in the code. Notably it records why rollback's write ordering inverts
+apply's, which reads as an inconsistency until you know why.
+
+Remaining prerequisite: bound `git_output` (#4b).
+
+### #4a Apply must not report success without persisting a baseline
+
+Rollback's drift check compares the target against the post-apply fingerprint in
+`post_apply_evidence_json`. That record is best-effort: the snapshot capture is
+`.ok()` and the persisting `UPDATE` is fire-and-forget, so an artifact can be
+`applied_verified` with no baseline and therefore be permanently
+un-rollbackable.
+
+Rollback v1 handles this by refusing, and by showing the ineligibility with its
+reason before the user clicks. But "safe" currently depends on evidence apply
+does not guarantee. Deliberately not fixed inside v1: it would change the apply
+path while adding the first consumer that depends on it --- two risks at once, on
+the highest-risk task.
+
+### #4b Bound `git_output`
+
+Only `run_fixed_git_apply_command` has a deadline. `git_output` and
+`git_output_raw` spawn git with no timeout at all, so any status or diff read can
+hang indefinitely. Rollback must read `git status` to verify what it restored,
+which makes this a prerequisite rather than a nice-to-have.
 
 ### #5 `GitStatusSummary` needs an `unknown` state
 
@@ -186,13 +188,11 @@ file-tree summary with extension counts.
 
 ### #12 Native hardening
 
-- **F4 — vacuous post-apply consistency check.** `verify_post_apply_changed_paths`
-  asserts `changed_file_count == files.len()`, but `changed_file_count` is
-  _defined_ as `files.len()`, so the check is always true. Its evident intent is
-  to detect porcelain lines that `filter_map(parse_porcelain_line)` silently
-  dropped. To be real it must compare against the raw status line count. Related
-  to #3: both are consequences of the status parser never being exercised on
-  real-world path shapes.
+- ~~F4 — vacuous post-apply consistency check~~ — landed with #3.
+  `changed_file_count` now comes from the raw status line count rather than
+  `files.len()`, so a dropped status line produces a mismatch and quarantines
+  instead of comparing the result to itself. It was pulled into #3 because
+  rejecting an unrepresentable path is fail-open until dropped lines are visible.
 - **F5 — dead `stale_after`.** `APPLY_LOCK_STALE_AFTER_SECONDS` is computed and
   persisted but never read. `mark_abandoned_apply_locks_stale` marks every
   active row stale regardless of age. Safe today only because callers hold the
@@ -204,6 +204,13 @@ file-tree summary with extension counts.
   returns `apply_locked` with a message claiming a lock on "this repository".
   The `#[cfg(test)]` variant serializes instead of rejecting, so no test can
   observe it.
+- **Rollback TOCTOU window (stated, not closed).** Rollback's drift check reads
+  and hashes the target, then writes. A concurrent editor can change the file in
+  between: the repository-scoped app lock excludes our own processes, not the
+  user's editor. v1 narrows the window by hashing immediately before the write
+  and **detects** a concurrent edit afterwards, quarantining it — but does not
+  **prevent** it, and the edit can still be lost. Same class as the fingerprint
+  window below. Recorded as a known bound rather than an assumption.
 - **Fingerprint TOCTOU and timestamp granularity.** `fingerprint_target_file`
   does `symlink_metadata` → `canonicalize` → read as three steps. A swap to a
   symlink mid-window is caught by the canonical-root check, and a swap to a
@@ -221,10 +228,19 @@ file-tree summary with extension counts.
 ~4,000 lines, roughly 35 `useState` hooks, one component, six tabs inline.
 Every confirmed frontend defect in the review lived here, and the Overview /
 Changes disagreement fixed in #2 was a direct symptom: two surfaces derived the
-same fact independently. This should land before more feature work, and
-specifically before #4 — rollback adds a second destructive action to a component
-that could not previously keep two tabs agreeing on whether the tree was clean.
-The existing frontend suite is the safety net for the split.
+same fact independently. The existing frontend suite is the safety net for the split.
+
+**Reversal, recorded with its reasoning rather than only its conclusion.** This
+item previously argued it should land _before_ #4: "rollback adds a second
+destructive action to a component that cannot keep two tabs agreeing on clean."
+**#2 falsified that premise.** The single source of truth already existed
+(`effectiveChangedFileCount`, `isWorkingDirectoryClean`); Overview simply was not
+referencing it, and now does. The tabs agree. Rollback's safety authority is
+native, so a ~4,000-line frontend refactor does not reduce rollback's risk --- it
+adds refactor risk ahead of the highest-risk native work.
+
+The real cost of deferring is that rollback's UI state lands in `App.tsx` and the
+eventual split grows. That is a cost, not a safety risk.
 
 ### #14 Dev loop: DMG bundling
 
@@ -265,6 +281,14 @@ Surfaced during investigation; recorded so they are not rediscovered.
   applied artifact's backup linkage. It is a hazard rather than a task because no
   code path can currently reach it; it becomes a task the moment anything edits
   `files` after artifacts exist.
+- **Backups and attempts are retained forever.** Nothing prunes
+  `patch_apply_backups`, `patch_apply_attempts`, or (once rollback lands)
+  `patch_rollback_backups`. The only `DELETE` against a backup table today is in
+  a test fixture. Every applied patch permanently stores up to 256 KiB of file
+  content in `workspace.db`, and rollback doubles the rate by backing up the
+  bytes it overwrites. Retention needs a policy — these are audit records, so
+  "delete the old ones" is a decision about how long the audit trail lives, not
+  just housekeeping.
 - **No foreign keys.** `patch_apply_attempts` and `patch_apply_backups` store
   `proposed_change_id` as plain `TEXT`. Nothing at the schema level prevents
   orphaned audit rows.
