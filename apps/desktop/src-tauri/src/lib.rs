@@ -2091,6 +2091,27 @@ fn is_conflicted_status(index_status: char, worktree_status: char) -> bool {
     )
 }
 
+/// Parses porcelain v1 output into changed files, and reports how many status
+/// lines git actually emitted.
+///
+/// The two numbers can differ: a line whose path cannot be represented safely is
+/// rejected and dropped. The raw count is what makes that drop visible --
+/// counting `files` instead would compare the result to itself and let an
+/// unrepresentable changed path pass verification unnoticed.
+fn parse_git_status_lines(status_output: &str) -> (Vec<GitChangedFile>, usize) {
+    let lines: Vec<&str> = status_output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let files: Vec<GitChangedFile> = lines
+        .iter()
+        .copied()
+        .filter_map(parse_porcelain_line)
+        .collect();
+
+    (files, lines.len())
+}
+
 fn parse_porcelain_line(line: &str) -> Option<GitChangedFile> {
     if line.len() < 4 {
         return None;
@@ -2486,10 +2507,7 @@ fn load_git_status_summary(repository_id: String, repository_path: String) -> Gi
         .or_else(|| head_sha.as_ref().map(|commit| format!("detached {commit}")));
     let status_output =
         git_output(&canonical_repository_path, &["status", "--porcelain=v1"]).unwrap_or_default();
-    let files: Vec<GitChangedFile> = status_output
-        .lines()
-        .filter_map(parse_porcelain_line)
-        .collect();
+    let (files, status_line_count) = parse_git_status_lines(&status_output);
     let staged_count = files
         .iter()
         .filter(|file| file.stage == "staged" || file.stage == "both")
@@ -2513,8 +2531,11 @@ fn load_git_status_summary(repository_id: String, repository_path: String) -> Gi
         branch,
         head_sha,
         is_git_repository,
-        is_clean: files.is_empty(),
-        changed_file_count: files.len(),
+        is_clean: status_line_count == 0,
+        // Counted from git's own output, not from `files`: a rejected line is
+        // dropped from `files`, and counting `files` would compare the result to
+        // itself and hide it.
+        changed_file_count: status_line_count,
         staged_count,
         unstaged_count,
         untracked_count,
@@ -6471,6 +6492,43 @@ mod tests {
         assert!(unsafe_old_path_diff.raw_diff.is_none());
 
         remove_temp_dir(&repository);
+    }
+
+    #[test]
+    fn post_apply_verification_quarantines_when_a_status_line_was_dropped() {
+        let status = GitStatusSummary {
+            repository_id: "repo".to_string(),
+            repository_path: "/tmp/repo".to_string(),
+            branch: Some("main".to_string()),
+            head_sha: Some("abc1234".to_string()),
+            is_git_repository: true,
+            is_clean: false,
+            // Two status lines, one of which could not be parsed.
+            changed_file_count: 2,
+            staged_count: 0,
+            unstaged_count: 1,
+            untracked_count: 0,
+            conflicted_count: 0,
+            files: vec![GitChangedFile {
+                path: "safe.txt".to_string(),
+                old_path: None,
+                kind: "modified".to_string(),
+                stage: "unstaged".to_string(),
+                status_code: " M".to_string(),
+            }],
+            refreshed_at: "1783532400".to_string(),
+        };
+
+        let verification = verify_post_apply_changed_paths(
+            "safe.txt",
+            "safe.txt",
+            &BTreeSet::from(["safe.txt".to_string()]),
+            "safe.txt",
+            "safe.txt",
+            &status,
+        );
+
+        assert_eq!(verification.status, "quarantine_required");
     }
 
     #[test]
