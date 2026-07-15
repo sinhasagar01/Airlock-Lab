@@ -509,7 +509,12 @@ fn is_safe_relative_git_path(file_path: &str) -> bool {
 }
 
 fn is_safe_relative_path(file_path: &str) -> bool {
-    if file_path.trim().is_empty() || file_path.contains('\0') {
+    // Control characters (including NUL) are rejected: git always quotes them,
+    // they cannot round-trip safely through the UI or audit records, and a path
+    // that needs them is pathological. Rejection reaches quarantine through the
+    // same mechanism as every other rejected line -- the raw status line count
+    // makes the drop visible.
+    if file_path.trim().is_empty() || file_path.chars().any(char::is_control) {
         return false;
     }
 
@@ -6737,6 +6742,15 @@ mod tests {
     }
 
     #[test]
+    fn porcelain_rejects_a_path_with_control_characters() {
+        // Unquoting a \t yields a real control character, which the path check
+        // rejects. The line is dropped, and the raw status line count turns that
+        // drop into a quarantine rather than an invisible omission -- the same
+        // mechanism every other rejection uses.
+        assert!(parse_porcelain_line(" M \"tab\\there.txt\"").is_none());
+    }
+
+    #[test]
     fn porcelain_unquoted_paths_are_unchanged() {
         let plain = parse_porcelain_line(" M plain.txt").unwrap();
         assert_eq!(plain.path, "plain.txt");
@@ -6766,6 +6780,26 @@ mod tests {
     fn porcelain_rejects_malformed_escapes() {
         assert!(parse_porcelain_line("?? \"trailing\\\"").is_none());
         assert!(parse_porcelain_line("?? \"bad\\9.txt\"").is_none());
+    }
+
+    #[test]
+    fn git_status_reports_a_dropped_line_through_the_changed_file_count() {
+        let repository_path = create_temp_dir("git-status-dropped-line");
+        init_git_repo(&repository_path);
+        // A tab is legal in a POSIX filename. git reports it quoted as "\t",
+        // unquoting yields a real control character, and the path check rejects
+        // it -- so the line is dropped from `files`. The count must still see it.
+        fs::write(repository_path.join("tab\there.txt"), "x\n").expect("write tabbed file");
+
+        let summary = load_git_status_summary(
+            "repo-dropped".to_string(),
+            repository_path.to_string_lossy().to_string(),
+        );
+
+        assert_eq!(summary.files.len(), 0);
+        assert_eq!(summary.changed_file_count, 1);
+        assert!(!summary.is_clean);
+        remove_temp_dir(&repository_path);
     }
 
     #[test]
@@ -6814,6 +6848,17 @@ mod tests {
         );
 
         assert_eq!(verification.status, "quarantine_required");
+    }
+
+    #[test]
+    fn safe_relative_path_rejects_control_characters() {
+        assert!(!is_safe_relative_path("bad\nname.txt"));
+        assert!(!is_safe_relative_path("bad\tname.txt"));
+        assert!(!is_safe_relative_path("bad\u{7f}name.txt"));
+        // A quote is legal in a filename and must still pass: the quoted-vs-real
+        // ambiguity is only resolvable at the parse boundary, not here.
+        assert!(is_safe_relative_path("say \"hi\".txt"));
+        assert!(is_safe_relative_path("My Notes.md"));
     }
 
     #[test]
