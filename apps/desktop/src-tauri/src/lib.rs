@@ -366,7 +366,14 @@ fn git_output(repository_path: &str, args: &[&str]) -> Option<String> {
         return None;
     }
 
-    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    // Only trailing whitespace is safe to strip. Porcelain v1 encodes an
+    // unstaged change as a leading space in `XY PATH`, and trimming the start
+    // shifts every path slice on the first status line by one byte.
+    Some(
+        String::from_utf8_lossy(&output.stdout)
+            .trim_end()
+            .to_string(),
+    )
 }
 
 fn git_output_raw(repository_path: &str, args: &[&str]) -> Option<Vec<u8>> {
@@ -4597,13 +4604,30 @@ mod tests {
         repository_path: &Path,
         approval_status: &str,
     ) -> ApplyApprovedPatchArtifactInput {
+        seed_apply_test_records_for(
+            pool,
+            repository_path,
+            approval_status,
+            "generated.txt",
+            "create",
+            "diff --git a/generated.txt b/generated.txt\nnew file mode 100644\n--- /dev/null\n+++ b/generated.txt\n@@ -0,0 +1 @@\n+safe generated content\n",
+        )
+        .await
+    }
+
+    async fn seed_apply_test_records_for(
+        pool: &SqlitePool,
+        repository_path: &Path,
+        approval_status: &str,
+        file_path: &str,
+        operation: &str,
+        raw_diff: &str,
+    ) -> ApplyApprovedPatchArtifactInput {
         let repository_id = "repo-apply";
         let proposal_id = "proposal-apply";
         let approval_id = "approval-apply";
         let artifact_id = "artifact-apply";
         let run_id = "run-apply";
-        let file_path = "generated.txt";
-        let raw_diff = "diff --git a/generated.txt b/generated.txt\nnew file mode 100644\n--- /dev/null\n+++ b/generated.txt\n@@ -0,0 +1 @@\n+safe generated content\n";
         let normalized_patch = normalized_patch_text(raw_diff);
         let artifact_digest = sha256_hex(normalized_patch.as_bytes());
         let (repository_root, canonical_repository_path) =
@@ -4620,7 +4644,7 @@ mod tests {
         let files = json!([{
             "id": "file-apply",
             "path": file_path,
-            "operation": "create",
+            "operation": operation,
             "reason": "Native safe apply test fixture.",
             "riskLevel": "low",
             "patchArtifactStatus": "generated"
@@ -4992,6 +5016,27 @@ mod tests {
         );
 
         assert!(validate_generated_patch_structure(&content_like_headers).is_ok());
+    }
+
+    #[test]
+    fn git_status_summary_preserves_the_path_of_an_unstaged_modification() {
+        let repository_path = create_temp_dir("git-status-modify-path");
+        init_git_repo(&repository_path);
+        commit_test_file(&repository_path, "safe.txt", "old\n");
+        fs::write(repository_path.join("safe.txt"), "new\n").expect("modify committed file");
+
+        let summary = load_git_status_summary(
+            "repo-status".to_string(),
+            repository_path.to_string_lossy().to_string(),
+        );
+
+        assert_eq!(summary.files.len(), 1);
+        // Porcelain v1 reports an unstaged modification as " M safe.txt" with a
+        // leading space. Trimming it shifts the path slice by one byte.
+        assert_eq!(summary.files[0].path, "safe.txt");
+        assert_eq!(summary.files[0].stage, "unstaged");
+        assert_eq!(summary.staged_count, 0);
+        remove_temp_dir(&repository_path);
     }
 
     #[test]
@@ -5445,6 +5490,70 @@ mod tests {
         assert_eq!(missing_result.unwrap_err().code, "parent_unavailable");
         remove_temp_dir(&repository_path);
         remove_temp_dir(&outside_path);
+    }
+
+    #[test]
+    fn safe_apply_verifies_a_modify_patch_against_a_tracked_file() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("safe-apply-modify");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "safe.txt", "old\n");
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let head_before = git_output(repository_path.to_str().unwrap(), &["rev-parse", "HEAD"]);
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records_for(
+                &pool,
+                &repository_path,
+                "approved",
+                "safe.txt",
+                "modify",
+                "diff --git a/safe.txt b/safe.txt\n--- a/safe.txt\n+++ b/safe.txt\n@@ -1 +1 @@\n-old\n+new\n",
+            )
+            .await;
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let result = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
+                .await
+                .expect("apply approved modify patch");
+
+            assert_eq!(
+                fs::read_to_string(repository_path.join("safe.txt")).unwrap(),
+                "new\n"
+            );
+            assert_eq!(
+                fs::read_to_string(repository_path.join("README.md")).unwrap(),
+                "fixture\n"
+            );
+            // An unstaged modification is the one status shape that carries a
+            // leading space in porcelain v1, so the observed path must survive
+            // parsing intact rather than arriving truncated.
+            assert_eq!(result.status, "applied_verified");
+            assert_eq!(result.post_apply_verification.status, "applied_verified");
+            assert_eq!(
+                result.post_apply_verification.observed_changed_paths,
+                vec!["safe.txt"]
+            );
+            assert!(result.post_apply_verification.unexpected_paths.is_empty());
+            assert!(result
+                .post_apply_verification
+                .missing_expected_paths
+                .is_empty());
+            assert_eq!(result.post_apply_git_status.staged_count, 0);
+            assert_eq!(result.post_apply_git_status.unstaged_count, 1);
+            assert_eq!(
+                git_output(
+                    repository_path.to_str().unwrap(),
+                    &["diff", "--cached", "--name-only"],
+                )
+                .unwrap_or_default(),
+                ""
+            );
+            assert_eq!(
+                git_output(repository_path.to_str().unwrap(), &["rev-parse", "HEAD"]),
+                head_before
+            );
+            remove_temp_dir(&repository_path);
+        });
     }
 
     #[test]
