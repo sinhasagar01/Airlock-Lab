@@ -277,18 +277,3 @@ export function summarizeScanTarget(target: ScanTarget): ScanTargetSummary {
     includes,
   };
 }
-
-export function createMockRepositories(): RepositorySummary[] {
-  return [
-    {
-      id: "repo-workspace",
-      name: "AI-Developer-Workspace",
-      path: "/Users/sagarakspuchu/Documents/AI Developer Workspace",
-      isGitRepository: true,
-      branch: "main",
-      status: "indexed",
-      openChanges: 0,
-      lastIndexedAt: "Today, 10:24",
-    },
-  ];
-}

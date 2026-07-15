@@ -63,7 +63,6 @@ import {
   emptyRepository,
   mockApprovalRequests,
   mockProposedChanges,
-  mockRepositories,
   proposedChangePlans as mockProposedChangePlans,
   provider,
   quickStartItems,
@@ -168,8 +167,14 @@ function formatProviderCheckTime(checkedAt: string) {
 export function App() {
   const [activeSection, setActiveSection] =
     useState<NavigationSection>("overview");
-  const [repositories, setRepositories] =
-    useState<RepositorySummary[]>(mockRepositories);
+  // Empty, not a fixture. Hydration's `catch` never calls `setRepositories`, so
+  // whatever starts here survives a storage failure for the entire session --
+  // and what used to start here was a fabricated repository with a real
+  // absolute home path baked in. A failed hydrate left it active, named, and
+  // branded as indexed, and every repository-scoped surface described it as
+  // though a human had chosen it. Nothing is a repository until someone picks
+  // one; `activeRepository` falls back to `emptyRepository` and says so.
+  const [repositories, setRepositories] = useState<RepositorySummary[]>([]);
   const [repositoryPickerError, setRepositoryPickerError] = useState<
     string | null
   >(null);

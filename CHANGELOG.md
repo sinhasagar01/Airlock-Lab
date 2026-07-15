@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Airlock no longer invents a repository. It shipped with a fixture repository —
+  a real absolute home directory from a developer's machine, presented as saved,
+  indexed, and on branch `main`. It was the app's starting state, and because a
+  failed local-storage read leaves the starting state alone, a storage failure
+  left that fabricated repository active for the whole session: named, branded
+  as indexed, and described by every surface as though someone had chosen it.
+  The demo records linked to it correctly, so they read as real work on a real
+  repository. Nothing is a repository now until you pick one, and until then the
+  app says "No repository selected" and offers you the picker.
+- **The browser preview (`npm run dev:web`) no longer shows a workspace, and
+  this is deliberate.** It could only ever render one by using the fabricated
+  repository above, and it cannot reach the native folder picker to choose a
+  real one, so it was already fictional past the first screen. It now renders an
+  honest empty app. Use the packaged build to see Airlock work.
 - The product is now called Airlock.
 - **The bundle identifier changed, which orphans any existing local database.**
   Local storage is addressed by the bundle identifier, so an install that had

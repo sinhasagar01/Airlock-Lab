@@ -10,15 +10,11 @@ import {
   type DomainStatus,
   type NavigationSection,
 } from "@ai-dev/core";
-import {
-  createMockRepositories,
-  type RepositorySummary,
-} from "@ai-dev/indexing";
+import type { RepositorySummary } from "@ai-dev/indexing";
 import type { IconName } from "@ai-dev/ui";
 
 export const workspace = createMockWorkspaceSnapshot();
 export const provider = createMockProvider();
-export const mockRepositories = createMockRepositories();
 export const emptyRepository: RepositorySummary = {
   id: "no-repository",
   name: "No repository selected",

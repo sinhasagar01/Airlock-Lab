@@ -89,7 +89,9 @@ Sidebar must be fixed and full height.
 Header must include:
 
 - eyebrow label: WORKSPACE OVERVIEW or relevant tab label
-- title: Airlock
+- title: Airlock (the reference PNG beside this spec predates the rename and
+  still shows "AI Developer Workspace"; the name is the only difference, and the
+  spec is authoritative for it)
 - subtitle
 - provider status pill
 - pending approvals pill

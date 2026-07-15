@@ -42,10 +42,11 @@ export function resolveApprovalRepositoryId(
  * links can dangle. It goes to `unlinked` and is labelled on screen.
  *
  * Resolution is uniform: no record is special-cased by id. The shipped demo
- * records name `repo-workspace`, which no real `repo-${path}` can match -- but
- * `createMockRepositories()` returns exactly that id, and it is the repository
- * list's initial value, so before hydration (and permanently if storage fails)
- * a demo record resolves to the fixture repository it genuinely belongs to.
+ * records name `repo-workspace`, which no real `repo-${path}` can match, so they
+ * group as unlinked -- and now do so on every path, because the fixture
+ * repository that once carried exactly that id has been retired. Nothing is a
+ * repository until a human picks one, which is what makes the rule "no saved
+ * repository has this id" mean what it says.
  */
 export function scopeRecordsToRepository<T>({
   records,

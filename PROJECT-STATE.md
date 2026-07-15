@@ -275,6 +275,19 @@ source of truth.
 
 ## Repository Selection
 
+There is no repository until a human picks one. The app shipped with a fixture
+repository as its initial state — a hardcoded absolute home directory presented
+as saved and indexed — and hydration's failure path never calls
+`setRepositories`, so a storage failure left that fabrication active for the
+whole session with every surface describing it as chosen. The fixture is retired
+rather than re-pathed: re-pathing hardcodes a new home directory, which is the
+same hazard with a fresh string. `activeRepository` falls back to
+`emptyRepository`, which says "No repository selected", and the agent-run
+composer names the obstacle ("repository required") instead of a repository and
+does not offer the control that would act. The browser preview renders an empty
+app as a result, deliberately: it could only ever show a workspace by using the
+fixture, and it cannot reach the native picker.
+
 The saved repository list is selectable, and the selection drives every
 repository-scoped surface: Overview, Repositories, Changes, indexed files and
 previews, and the apply/rollback readiness gates. Selecting a repository clears

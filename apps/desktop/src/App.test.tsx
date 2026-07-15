@@ -1551,7 +1551,12 @@ describe("App smoke tests", () => {
     // changed files. Clean-tree state is an apply gate; the two must not
     // disagree.
     const overview = await screen.findByLabelText("Active work");
-    expect(overview.textContent).toContain("3");
+    // The `await` above synchronises with nothing: "Active work" renders on the
+    // first frame regardless of Git. This assertion used to be read straight
+    // off it, and passed only because a fixture repository existed before
+    // hydration, so live Git happened to arrive first. Wait for the Git-derived
+    // number itself, not for a container that was always there.
+    await waitFor(() => expect(overview.textContent).toContain("3"));
     expect(overview.textContent).not.toContain("✓");
     expect(overview.textContent).toContain("No");
   });
@@ -2300,7 +2305,18 @@ describe("App smoke tests", () => {
     expect(saveApprovalRequest).not.toHaveBeenCalled();
   });
 
-  it("keeps a mock run in session without invoking persistence in the web fallback", async () => {
+  it("refuses to start a run when storage failed and no repository was ever chosen", async () => {
+    // This asserted that a mock run *was created* here, and it could only do
+    // that because a fabricated repository outlived the failed hydrate: the run
+    // was attributed to it, and the proposal it wrote carried
+    // `repositoryId: "repo-workspace"` -- provenance naming a repository nobody
+    // had chosen and that did not exist. The premise died with the fixture, so
+    // the assertion changed rather than being re-pointed at something that
+    // still passed. With nothing to attribute a run to, and no way to reach the
+    // native picker from the web preview, refusing is the honest answer.
+    //
+    // The persistence assertions are unchanged and are the reason this test
+    // still exists: a storage failure must never be met with a write.
     vi.mocked(loadSavedRepositories).mockRejectedValueOnce(
       new Error("native storage unavailable"),
     );
@@ -2311,13 +2327,19 @@ describe("App smoke tests", () => {
       screen.getByRole("textbox", { name: "Agent task request" }),
       "Document the repository entry points",
     );
-    await user.click(screen.getByRole("button", { name: "Run mock agent" }));
+
+    // The composer already degraded honestly on its own -- the fixture was the
+    // only reason this state was never seen. It names the obstacle rather than
+    // a repository, and the control that would act is not offered.
+    expect(await screen.findByText("repository required")).toBeInTheDocument();
+    const runButton = screen.getByRole("button", { name: "Run mock agent" });
+    expect(runButton).toBeDisabled();
+
+    await user.click(runButton);
 
     expect(
-      await screen.findByText(
-        "Mock run created for this session. Native persistence is unavailable in the web preview.",
-      ),
-    ).toBeInTheDocument();
+      screen.queryByText(/Mock run created for this session/),
+    ).not.toBeInTheDocument();
     expect(saveAgentRunRecord).not.toHaveBeenCalled();
     expect(saveProposedChange).not.toHaveBeenCalled();
     expect(saveApprovalRequest).not.toHaveBeenCalled();
@@ -3482,5 +3504,59 @@ describe("repository-scoped agent runs and approvals", () => {
     expect(
       screen.queryByRole("heading", { name: "2 pending approvals" }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("no fabricated repository", () => {
+  /**
+   * Hydration's `catch` never calls `setRepositories`, so whatever the initial
+   * state is survives a storage failure for the whole session. While that
+   * initial state was `createMockRepositories()`, a failed hydrate left a
+   * *fabricated* repository active -- named, branched, and indexed -- and the
+   * app went on describing it as though a human had chosen it.
+   */
+  function failStorage() {
+    vi.mocked(loadSavedRepositories).mockRejectedValueOnce(
+      new Error("native storage unavailable"),
+    );
+  }
+
+  it("does not invent a repository when local storage is unavailable", async () => {
+    failStorage();
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Repositories" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "No repository selected" }),
+    ).toBeInTheDocument();
+    // `queryAllByText`, not `queryByText`: the latter throws on multiple
+    // matches, which fails the test for the wrong reason and hides what broke.
+    expect(screen.queryAllByText("AI-Developer-Workspace")).toHaveLength(0);
+    expect(
+      screen.queryAllByText(/Documents\/AI Developer Workspace/),
+    ).toHaveLength(0);
+  });
+
+  it("groups the demo records as unlinked when local storage is unavailable", async () => {
+    // The roadmap claimed demo records "can never match a real repo-${path}, so
+    // they land in that group permanently". That was false while a fixture
+    // repository carrying the id `repo-workspace` outlived a failed hydrate:
+    // the demo records linked to it correctly and read as real work. With no
+    // fixture there is nothing for them to link to, and the claim is finally
+    // true on this path too.
+    failStorage();
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+
+    const unlinkedGroup = await screen.findByRole("group", {
+      name: "Not linked to a saved repository",
+    });
+    expect(
+      within(unlinkedGroup).getByRole("button", {
+        name: /Open agent run Draft app shell implementation plan/,
+      }),
+    ).toBeInTheDocument();
   });
 });

@@ -225,12 +225,20 @@ it did. Items are ordered by how much they protect or clarify that claim.
   true; **"permanently" is withdrawn.** `createMockRepositories()` returns
   exactly one repository whose id *is* `repo-workspace`, and it is the
   repository list's initial value — so the demo records resolve to it before
-  hydration, permanently whenever storage fails (see the hazard below), and
-  throughout the test suite, whose saved-repository fixture is also
-  `repo-workspace`. Only once hydration installs a real `repo-${path}` do they
-  land unlinked. Resolution is uniform and no record is special-cased by id:
-  the fixture run genuinely belongs to the fixture repository, so resolving it
-  there is accurate rather than a lie.
+  hydration, permanently whenever storage fails, and throughout the test suite,
+  whose saved-repository fixture is also `repo-workspace`. Only once hydration
+  installs a real `repo-${path}` do they land unlinked. Resolution is uniform
+  and no record is special-cased by id: the fixture run genuinely belongs to the
+  fixture repository, so resolving it there is accurate rather than a lie.
+
+  **Superseded by #11 slice 2, which retired the fixture.** No repository with
+  the id `repo-workspace` exists on any path now, so this entry's *original*
+  claim — that the demo records land unlinked — is finally true without
+  qualification, and the app-side half of it is pinned by a test that fails a
+  storage hydrate and asserts the group. The correction is kept rather than
+  deleted because its reasoning outlives its subject: an id that exists is an id
+  that will link to something, which is the argument against the next fixture
+  anyone is tempted to reach for.
 
   That fixture collision is why the new tests use a real-shaped id. Against the
   default fixture a "demo records are unlinked" assertion is not merely vacuous,
@@ -358,6 +366,19 @@ is one request and one response, no loop and no tools. Review should be the fron
 door. Validation and dry-run are two words for one idea and should collapse into
 "Checks", with the eighteen readiness gates behind an advanced view rather than
 presented as workflow steps.
+
+**Slices landed so far.** 1: the product is Airlock, the bundle identifier moved
+once to `com.airlocklab.airlock` and is now pinned by a native test. 2: the mock
+repository fixture is retired — the last fabrication that could present itself as
+a saved repository. Remaining: 3 nav rename, 4 domain nouns, 5 the six
+distinctions, 6 demo-workflow copy. The bound throughout is user-visible copy
+only: types, tables, columns, and serde names keep their identifiers, because
+renaming those is a migration wearing a rename's clothes.
+
+Slice 2 cost the browser preview (`npm run dev:web`) its usefulness, knowingly.
+It could only render a workspace by fabricating a repository, and it can never
+reach the native picker to choose a real one, so it was already fake past the
+first screen. Packaged QA replaces its purpose.
 
 The demo-workflow story gets rethought here, including whether the shipped demo
 fixtures should exist at all. #2 deliberately scoped that out: a card labelled
@@ -504,6 +525,21 @@ to be genuinely safe (literal arrays, post-`length` checks) and the flag to
 produce a long tail of noise around a few real findings. That ratio is the
 argument for doing it deliberately rather than in passing.
 
+**Slice 2 measured one corner of it, and #17 was not what fired.** Retiring the
+mock repository fixture was expected to make `repositories[0]` live for the first
+time and to own the crash that followed. It did neither, and the expectation was
+a premise taken from this document rather than from the code. Empty
+`repositories` was *already* reachable — hydration calls `setRepositories([])` on
+the no-saved-repositories path, which is every fresh install — already guarded
+(`?? repositories[0] ?? emptyRepository` resolves correctly at runtime precisely
+because the index really is `undefined`), and already covered by three tests, one
+asserting the heading "No repository selected". Measured rather than argued: with
+the fixture emptied, **146 of 148 tests passed and nothing crashed**; both
+failures were unrelated to nullability. The lie in `repositories[0]` is real and
+the flag would still name that line — it simply was not load-bearing, because a
+runtime fallback already stood behind it. Evidence for the noise-to-findings
+ratio above, and against assuming any particular `[0]` is a bug.
+
 **It is a compiler flag, not a refactor.** One line in `tsconfig.base.json`,
 then however many sites it names. That is what makes it schedulable and what
 makes it dangerous to enable casually: the flag is trivial, the fallout is not,
@@ -527,31 +563,10 @@ Surfaced during investigation; recorded so they are not rediscovered.
   UI guards this (`?? "No linked run"`) and #2 pinned that guard with a test.
   Demo fixtures keep their runs in memory, so the link resolves today; the hazard
   is that nothing enforces the reference.
-- **Hardcoded home path.** `createMockRepositories` embeds a real absolute home
-  directory as fixture data. Harmless locally, wrong to ship.
-- **A storage failure leaves the fabricated mock repository active,
-  permanently.** Hydration's `catch` sets `storageStatus` to `unavailable` and
-  never calls `setRepositories`, so `repositories` keeps its initial value —
-  the `createMockRepositories()` fixture, with the hardcoded home path above —
-  and the app presents it as a saved repository for the rest of the session.
-  Every repository-scoped surface then resolves against a repository that does
-  not exist. The demo records link to it *correctly* (its id is the
-  `repo-workspace` they name), so they render as ordinary work on an ordinary
-  repository, with a branch and an indexed-file count beside them.
-
-  **This is #2's fabrication problem in a different shape.** #2 removed the
-  writes that put fixtures into the same tables as real records where nothing
-  distinguished them; this is a fixture presented *as* a record with nothing
-  marking it — surfaced by #6, which made it visible by giving the fixture's id
-  a job to do. Observed, not argued: in the browser preview both demo runs render
-  in the main list under "AI-Developer-Workspace / main" with no group.
-
-  Recorded rather than fixed, deliberately. The honest fallback is "no
-  repository", but that is a decision about what the browser preview is *for* —
-  it currently depends on this fixture to render anything at all — and the fix
-  belongs with the `createMockRepositories` hardcoded home path, which rides
-  with the rename. Scoping it into #6 would have been a product-scope decision
-  smuggled into a display fix.
+- ~~Hardcoded home path~~ and ~~a storage failure leaves the fabricated mock
+  repository active, permanently~~ — both landed with #11 slice 2, which retired
+  `createMockRepositories` rather than re-pathing it. Re-pathing would have
+  hardcoded a fresh home directory: same hazard, new string.
 - **`ensureProposedPatchArtifacts` rebuilds artifacts from `files`.** Any stored
   artifact whose `filePath` is absent from `files` is silently dropped, and it
   runs over every saved change on hydrate. Not reachable today — every creation
