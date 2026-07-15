@@ -253,6 +253,33 @@ source of truth.
   workspace shows the `RESET WORKSPACE` confirmation guard but remains disabled
   until app-local delete boundaries exist.
 
+## Repository Selection
+
+The saved repository list is selectable, and the selection drives every
+repository-scoped surface: Overview, Repositories, Changes, indexed files and
+previews, and the apply/rollback readiness gates. Selecting a repository clears
+the previous one's files, diffs, previews, and fingerprint snapshot before the
+new repository's data loads, so no window renders one repository's contents
+under another's name.
+
+Live Git facts are only trusted for the repository they were read from: a
+summary whose repository id does not match the active repository is treated as
+absent, falling back to that repository's own saved record or to `unknown`
+rather than to another repository's numbers. This matters beyond the screen —
+those facts, and the indexed file list, are sent to the provider as context
+describing the active repository. Indexing progress is likewise scoped by
+repository id.
+
+Switching is blocked while an apply or rollback is in flight, with the reason
+shown, and the post-apply and post-rollback status writes are guarded by
+repository id so a late result cannot install itself as a different
+repository's live status. Native is unaffected either way: a destructive command
+targets the repository its proposal names and re-derives every check from
+durable records.
+
+The selection is in-memory; a restart falls back to the first saved repository.
+Agent Runs and Approvals are not yet scoped to the active repository.
+
 ## Active Safety Boundary
 
 Safe file preview remains local-first and path-bounded to the selected repository. Repository Intelligence prefers persisted/indexed facts over new filesystem reads. Git status, local diff preview, approval-attached matching local diffs, and patch dry-runs are read-only, use fixed native Git arguments, validate repository-relative paths, and do not expose arbitrary Git execution. File preview and Git diff paths reject traversal, absolute paths, empty paths, and null-byte paths before native reads or Git commands. Persisted proposed changes, generated patch artifacts, and validation results are durable review metadata only. Provider-backed runs persist review records only after validated plan and artifact output and never write or apply files, use tools, or mutate Git. OpenAI credentials remain in the native process and sensitive paths are excluded from its bounded planning context. Agent run and approval detail do not write files, execute patches, stage, reset, checkout, or commit. A dry-run pass does not approve or apply an artifact. The demo workflow is seeded review state plus real read-only repository state; it does not claim real agent execution happened. Generated artifact previews render stored `rawDiff` only and failed/unavailable/not-generated states do not fake diff content. Visual changes do not weaken size limits, binary handling, or outside-repository blocking.

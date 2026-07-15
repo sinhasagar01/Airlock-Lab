@@ -213,11 +213,70 @@ trusts this path (the validation snapshot fails closed), and post-apply
 verification fails closed, so this is display-only today. Reporting it honestly
 needs an explicit `unknown` state on the contract in `packages/core`.
 
-### #6 Repository switching
+### #6 Repository switching — partially landed
 
-`activeRepository = repositories[0]` is hardcoded. Repositories can be added and
-never switched to; the saved list is display-only. A broken promise in the UI
-rather than a safety issue.
+`activeRepository = repositories[0]` was hardcoded: repositories could be added
+and only the first ever used, and the saved list was display-only. The list is
+now selectable and every repository-scoped surface follows the selection.
+
+**The original framing said "a broken promise in the UI rather than a safety
+issue." That undersold it.** The app had never had to be honest about *which*
+repository a fact belonged to, because there was only ever one. Switching is
+what turns that into a lie, and the lie was not confined to the screen: the
+derived Git facts (branch, cleanliness, changed-file count) and the indexed file
+list are sent to the provider as context describing the active repository. A run
+created in the switch window shipped another repository's branch and **file
+paths** to OpenAI under this repository's id and name. Both proven by test
+before the fix; the second by a margin of fourteen files.
+
+**Landed:**
+
+- Derived Git facts fail closed on a repository-id mismatch — to `unknown`, or
+  to the active repository's own saved record, never to the other repository's
+  numbers.
+- `activeIndexingJob = indexingJobs[0]` — **a second hardcoded index this entry
+  never mentioned**, alongside `repositories[0]`. An indexing job carries the
+  repository it describes; taking the first rendered whichever repository
+  indexed most recently as though it were the active one. Scoped by id.
+- Selectable rows; every repository-scoped slot cleared before the new
+  repository's data arrives; indexed files reloaded (Git status already reloads
+  through the effect keyed on the active repository's id).
+- Switching blocked while an apply or rollback is in flight, with the reason
+  shown, and the post-apply/post-rollback status writes additionally guarded by
+  repository id.
+
+**Remaining:** Agent Runs and Approvals are still repository-blind. They render
+every repository's work in one list, and two sites print one repository's name
+directly above another's branch (`{activeAgentRun.repository}` beside
+`{activeRepository.branch}`, and the same shape in the approval detail). Latent
+before switching; **live now**. It is a display lie rather than a write hazard —
+readiness blocks apply on `repositoryMatches` — but it is the aggregate lie: each
+row individually accurate while the screen as a whole misleads.
+
+The fix is to filter both lists to the active repository, resolving each record's
+repository through its linked proposal (`proposal.runId` /
+`proposal.approvalRequestId` → `proposal.repositoryId`), because `AgentRun` and
+`ApprovalRequest` carry `repository` as a display *name*, not an id. Records
+whose link does not resolve must appear under an explicit "not linked to a saved
+repository" group rather than being dropped — see the Won't Do entry on plain
+filtering. Seeded demo records carry `repositoryId: "repo-workspace"`, which can
+never match a real `repo-${path}`, so they land in that group permanently. That
+is honest and consistent with their "Demo record" marking, but it should be
+verified on screen rather than assumed.
+
+### #6a Persist the active repository selection
+
+The selection is in-memory. A restart falls back to the first saved repository —
+exactly the pre-#6 behaviour, so no regression and one click to re-select, but it
+is a promise the UI half-makes.
+
+Split out of #6 deliberately rather than bundled: persisting it needs a
+key-value store this app does not have. Every storage module
+(`repositoryStore`, `indexedFileStore`, `indexingJobStore`, …) is a
+purpose-built table, so this is a new module plus a migration plus a test mock
+plus its own tests. Bundling it into the switching commit would have meant
+half-building two things, which is the failure mode; it does not block the
+packaged QA that #6 exists to unblock.
 
 ### #7 Frontend UI-truthfulness
 
@@ -304,11 +363,23 @@ file-tree summary with extension counts.
   OS file lock first, which is the real mutex — but a five-minute grace period
   that reads as an enforced control and is not one should either be enforced or
   removed.
-- **F6 — process-global apply mutex.** `PATCH_APPLY_LOCK` is process-global with
+- **F6 — process-global apply mutex. Single-user unreachable; recorded with its
+  gate rather than as a live hazard.** `PATCH_APPLY_LOCK` is process-global with
   `try_lock` in production, so applying to repository A while B is applying
-  returns `apply_locked` with a message claiming a lock on "this repository".
-  The `#[cfg(test)]` variant serializes instead of rejecting, so no test can
-  observe it.
+  would return `apply_locked` with a message claiming a lock on "this
+  repository". The `#[cfg(test)]` variant serializes instead of rejecting, so no
+  test can observe it.
+
+  **Repository switching does not make this reachable, and an earlier claim that
+  it did is withdrawn.** A second apply is gated by `applyingPatchArtifactId`,
+  which blocks regardless of which repository is active — so F6 was already
+  single-user-unreachable before switching and remains so. #6's in-flight switch
+  block is a second bar, not the first. The only single-user concurrent pair is
+  apply + rollback together (the two UI guards do not check each other), and that
+  hits the *process* lock, whose message says "in this app process" — accurate.
+  F6's complaint is specifically the repository-worded message on the file lock,
+  reachable only across processes, which is the case the OS advisory lock already
+  handles correctly.
 - **Rollback TOCTOU window (stated, not closed).** Rollback's drift check reads
   and hashes the target, then writes. A concurrent editor can change the file in
   between: the repository-scoped app lock excludes our own processes, not the
@@ -415,6 +486,18 @@ Surfaced during investigation; recorded so they are not rediscovered.
   inputs. New safety claims should arrive with a failing test first.
 
 ## Won't Do
+
+- **Filtering Agent Runs and Approvals by repository without a group for
+  unresolvable records.** Plain filtering — dropping any record whose repository
+  link does not resolve — was considered for #6 and rejected. Hiding a record is
+  its own dishonesty, and this document already records that those links can
+  dangle ("Dangling `agent_run_id`"), so plain filtering would silently
+  disappear real approvals. The rejected alternative of *not* filtering at all
+  was also considered and is worse: a list showing every repository's work under
+  a repository selector is the aggregate lie, where each row can be individually
+  accurate while the screen as a whole misleads. Filtering **with** an explicit
+  "not linked to a saved repository" group is the shape that keeps both
+  properties: nothing hidden, nothing mislabelled.
 
 Recorded with reasons so they are not re-proposed.
 

@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Saved repositories can now be selected. The list was display-only: you could
+  add repositories and only ever use the first. Selecting one switches every
+  repository-scoped surface to it, and switching is unavailable while an apply
+  or rollback is running, so an operation's result cannot land under a
+  repository you have moved away from.
+- Fixed one repository's state being reported as another's. Live Git facts —
+  branch, cleanliness, changed-file count — were read without checking which
+  repository they described, which was safe only while the app could never
+  change repository. They now fall back to the repository's own saved record, or
+  to "unknown", never to the other repository's numbers.
+- Fixed the wrong repository's file list and Git facts being sent to the
+  provider. Indexed files were loaded once at startup for the first repository
+  and never reloaded, and they are part of the context describing the active
+  repository: a run created after switching would have sent the previous
+  repository's file paths, branch, and changed-file count to OpenAI under this
+  repository's name.
+- Fixed another repository's indexing progress being shown as the active
+  repository's.
+
 - An apply attempt left in a state this version does not recognise now blocks
   the repository and is reconciled, rather than being silently ignored by both.
   The two gates enumerated the statuses they acted on, so an unrecognised one
