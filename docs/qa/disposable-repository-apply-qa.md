@@ -242,6 +242,16 @@ For a test database containing an unresolved attempt:
   displayed in recovery diagnostics.
 - There is no rollback, retry, stage, commit, reset, checkout, or clean action.
 
+## What This Protocol Does Not Prove
+
+The OpenAI task prompt for the apply pass dictates the diff verbatim, because the
+subject under test is the apply machinery and a self-authored diff makes failures
+ambiguous between provider and product. So this protocol proves the pipeline
+**accepts** a well-formed artifact; it does not prove a model can **author** one.
+OpenAI patch generation stays unproven after a green pass here — see evidence gap
+4 in `docs/qa/evidence/mvp-demo-v1-disposable-apply-qa.md`, and do not cite this
+protocol's screenshots as provider validation.
+
 ## Evidence To Retain
 
 - App build/commit identifier.

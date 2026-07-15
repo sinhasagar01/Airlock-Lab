@@ -459,10 +459,113 @@ forms. So a canonically-generated spaced-path diff is refused by Airlock and
 would have applied cleanly. It fails closed, so it is a capability gap rather
 than a safety hole, and the existing native test `ROLLBACK_MODIFY_DIFF` pins the
 unquoted form as the supported convention. It matters now because it makes a
-spaced-path OpenAI artifact a coin flip on how the model chooses to quote. Same
-shape as #3 one layer up: a quoting convention observed at the wrong boundary.
+spaced-path OpenAI artifact a coin flip on how the model chooses to quote.
+
+It is the third instance of one pattern, not a standalone quirk; **see #18**,
+which was opened because of it and which found a fourth instance by asking what
+the pattern predicts.
 
 ## Later
+
+### #18 Git's textual interface is modelled by assumption, in four places
+
+Three confirmed findings and one probe share a root cause, and the pattern is the
+finding: **this code repeatedly hardcodes a belief about git's text where the
+truth was one probe away.** Recorded as its own entry because three scattered
+instances read as three bugs, and the fourth was found by asking what the pattern
+predicts rather than by reading the code.
+
+| # | Site | Belief | Reality | Direction |
+| --- | --- | --- | --- | --- |
+| F1 | `validate_generated_patch_structure` | one `diff --git` per file | git *applies* traditional sections with no `diff --git` header | **fail-open** — `.env` smuggled after the first hunk |
+| #3 | `parse_porcelain_line` | git prints paths literally | git quotes and C-escapes spaces, non-ASCII, quotes, backslashes | fail-closed — false quarantine of a correct apply |
+| new | provider + native structure validation | header is `diff --git a/{p} b/{p}` | git's generator **quotes** spaced paths; `git apply --check` accepts both forms | fail-closed — refuses a valid patch |
+| probe | `parse_porcelain_line` rename split | ` -> ` separates old from new | a *filename* may contain ` -> `, and git quotes it | fail-closed — dropped status line |
+
+**Correction to the framing that prompted this entry.** It proposed one root
+cause: "the code assumes a form git does not actually produce." That is exact for
+#3 and the new finding — and **F1 is its mirror image.** F1's smuggled section is
+a form git does *not* produce; the validator's error was assuming `git apply`
+would therefore never *accept* it. The unifying statement is one level up:
+
+> **What git emits and what git accepts are different sets, and neither matches
+> the code's model of them.**
+
+The direction matters, which is why collapsing the three loses information.
+Modelling git's *generator* too narrowly fails **closed** — a false account, #3's
+failure class, expensive in trust. Modelling git's *consumer* too narrowly fails
+**open** — F1, a `.env` exfiltration. Same mistake, and only one of them writes a
+secret. A sweep that only looks for #3's shape will not find the next F1.
+
+#### The Fourth Instance, Probed Rather Than Reasoned About
+
+`parse_porcelain_line` splits a rename on the first ` -> ` **before** unquoting,
+so a filename containing that sequence splits inside its own quoted string.
+Verified against real git rather than argued:
+
+```text
+$ git mv "a -> b.txt" renamed.txt && git status --porcelain=v1
+R  "a -> b.txt" -> renamed.txt
+
+split_once(" -> ")  ->  old = "\"a"   new = "b.txt\" -> renamed.txt"
+```
+
+Both halves fail `unquote_porcelain_path`, the line is dropped, F4's raw
+line-count check sees the mismatch, and the repository quarantines or refuses
+with `repository_state_unverifiable`. **Fail-closed and exotic — the value is not
+the severity, it is that #3's own entry says "Renames were verified to parse
+correctly and were not a defect."** That verification was real and it was run
+against ordinary renames. Probing the common case and assuming the tail is the
+same move that produced every row in the table above, and it survived inside the
+commit that fixed the pattern's second instance.
+
+The fix is ordering — unquote first, then split — but it is not worth a commit on
+its own severity. It is worth one as the test case that pins the pattern.
+
+#### Where To Look Next
+
+Ordered by how confident the code sounds about git's text:
+
+1. **`git status --porcelain=v1` → `--porcelain=v1 -z`.** The structural fix, not
+   a patch: `-z` emits NUL-delimited **unquoted** paths, deleting the quoting
+   problem, the C-escape problem, and the rename-delimiter problem at the source
+   rather than parsing around them. Verified on the same tree that produces the
+   table's first two rows:
+
+   ```text
+   --porcelain=v1        M "release notes.md"
+                        R  "a -> b.txt" -> renamed.txt
+
+   --porcelain=v1 -z     M release notes.md<NUL>R  renamed.txt<NUL>a -> b.txt<NUL>
+   ```
+
+   This retires #3's parser rather than extending it, and it changes a path that
+   feeds the apply gate — which is why it is an entry, not a cleanup.
+
+   **It also carries the pattern's own trap, which is why it is listed with the
+   evidence rather than as an obvious win.** Under `-z` a rename emits **new path
+   first, then old** — the reverse of `--porcelain=v1`'s `old -> new`. A
+   migration that keeps the existing old-then-new assumption would silently swap
+   every rename's paths: no parse error, no dropped line, no F4 count mismatch,
+   just wrong evidence in a structure the apply gate trusts. That would be this
+   entry's first **fail-open** instance since F1, introduced by the fix for the
+   fail-closed ones. Whoever takes this must probe `-z`'s field order rather than
+   assume it mirrors the form they are replacing — which is, exactly, the mistake
+   this entry is about.
+2. **Diff-header parsing wherever a path is read back out of `diff --git`.** The
+   new finding is the *validation* half; anything that parses those headers
+   inherits the same quoting assumption.
+3. **`git rev-parse --short HEAD`** — already recorded under #12 as
+   abbreviation-length scaling. Same class: a textual git output whose form was
+   assumed stable and is not.
+4. **`core.quotepath`, and any config that changes git's output form.** #3
+   verified it is not a fix for the space case; the general hazard is that git's
+   textual output is *configurable*, so any parser has an implicit dependency on
+   the user's git config.
+
+The rule this entry exists to state: **anywhere the code names an exact git
+output string, there is an untested assumption until someone runs git and looks.**
+Every instance above was found by running git, and none by reading the code.
 
 ### #12 Native hardening
 

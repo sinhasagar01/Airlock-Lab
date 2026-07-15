@@ -222,12 +222,42 @@ The following items are not claimed as executed evidence:
    repository picker through confirmation and restart rendering.
 2. Screenshots of the packaged applied, quarantine, and interrupted states.
 3. A visibly concurrent two-window packaged-app lock reproduction.
+4. **OpenAI patch generation.** Not a gap this environment left open — a gap the
+   packaged click-through **cannot close by construction**, recorded here before
+   that pass runs so its evidence can never read as more than it is.
 
 The environment could launch the isolated packaged process but could not safely
 drive or capture its native window. Complete these three items on a recording
 host using a fresh disposable repository, then append operator name, timestamp,
 screenshots, attempt ID, and backup ID to this document. Do not reuse the
 temporary paths or hashes above for a later build.
+
+### Why Item 4 Survives A Successful Click-Through
+
+The Mock Provider cannot produce a patch artifact, so the packaged apply pass
+must run through OpenAI (see `docs/qa/disposable-repository-apply-qa.md`). The
+task prompt for that pass **dictates the diff verbatim**, because the subject
+under test is the apply machinery and a model authoring its own diff would make
+the run non-reproducible and its failures ambiguous between provider and product.
+
+The consequence must be stated rather than left for a reader to infer: the pass
+proves the pipeline **accepts a well-formed artifact**. It does not prove a model
+can **author** one unaided. Roadmap #11 records OpenAI patch generation as
+unproven; a green click-through leaves it exactly that unproven, and no
+combination of screenshots from that pass may be cited as provider validation.
+
+What a successful run 1 does prove, which is worth stating plainly because it is
+substantial and is the thing this project has never had: **the packaged app's
+apply, post-apply verification, and rollback machinery work end to end against a
+real repository, driven by a human.** That is the safety machinery — the 95% of
+the engineering — observed working outside a test fixture for the first time.
+It is product validation, not provider validation, and the two must not be
+conflated in either direction.
+
+Closing item 4 needs its own exercise: a prompt that states an intent and leaves
+the diff to the model, run enough times to characterise how often the result is
+applicable. That is provider evaluation, and it does not belong in a safety QA
+pass whose purpose is a deterministic result.
 
 ## Release Assessment
 
