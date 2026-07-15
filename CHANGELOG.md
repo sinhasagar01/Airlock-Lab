@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- An apply attempt left in a state this version does not recognise now blocks
+  the repository and is reconciled, rather than being silently ignored by both.
+  The two gates enumerated the statuses they acted on, so an unrecognised one
+  fell through: the repository kept accepting applies as though nothing were
+  pending, and the attempt was never seen, classified, or resolved. They now
+  allow-list the statuses that need no action — two different lists, because
+  "resolved" and "already classified" are different questions.
+- Reconciliation no longer judges an operation it cannot name. Its forward and
+  reverse patch checks are evidence about a patch; applying them to an unknown
+  operation could declare it a harmless no-op and free the repository. Such an
+  attempt is now classified as needing inspection, which blocks until a human
+  records one with `INSPECTED`.
+
 - Fixed rollback destroying an edit made between a crashed apply and its
   reconciliation. A crashed apply that reconciliation classified as verified
   got its undo baseline from a snapshot taken at reconciliation time, so an

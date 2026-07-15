@@ -101,6 +101,51 @@ it did. Items are ordered by how much they protect or clarify that claim.
   list exported by `packages/ai`, kept in step by a test and a comment, stated
   plainly as not compile-enforceable.
 
+- **Attempt-level gates inverted to allow-lists.** The unresolved-attempt gate
+  and the reconciliation query had the artifact guard's shape one layer up, on
+  `PatchApplyAttemptStatus`. Their failures were quieter than a wrong file: an
+  unrecognised status silently stopped blocking the repository, and was never
+  seen, classified, or resolved — "no exit and no door".
+
+  **Two lists, because two questions.** The gate asks *is this resolved — need a
+  human act?* (`applied`, `applied_verified`, `failed`, `rolled_back`,
+  `inspected`); the query asks *does this carry a verdict — can reconciliation
+  add anything?* (those five **plus** `interrupted`, `needs_inspection`,
+  `quarantine_required`). Those three disagree deliberately: classified, but not
+  resolved. One list cannot serve both, and assuming it could is where the bug
+  would have been.
+
+  Seeing an unknown status is only safe because the classifier now refuses to
+  judge it. Its forward/reverse `git apply --check` probes are evidence about a
+  patch; an operation it cannot name is not a patch. Demonstrated rather than
+  argued: without the classifier's allow-list, an unnameable operation with
+  complete apply evidence and a reverted tree is declared **`failed`** — a
+  verdict that does not block — freeing the repository on a model that does not
+  fit. It gets `needs_inspection` instead, which blocks, and `INSPECTED` clears.
+  That door is what makes the gate's default safe to invert, which is why the
+  two landed together.
+
+  **`applied` is on the non-blocking list on a documentary argument that cannot
+  be tested.** No current code writes it — production only ever `INSERT`s
+  `pending` and `rolling_back`, and the classifier's verdict is `failed` |
+  `applied_verified` | `quarantine_required` | `needs_inspection`. The evidence
+  it was once real: `patch-application-safety.md` documents it as a
+  reconciliation verdict ("durable state already says applied… Native repairs
+  only persisted status"), `apply_attempt_message` still carries its arm, and
+  the artifact guard blocks it as part of a legacy triple. **The limit: a legacy
+  database cannot be constructed here to confirm such rows exist.** The call
+  rests on that documentary evidence, not on proof. It is the conservative
+  direction — blocking it would strand a legacy row behind a gate `acknowledge`
+  does not accept, a state with no exit created by the fix meant to prevent
+  those — and its replay is barred twice over by tests: the artifact guard
+  (`already_applied`, no file written) and, with both bars forced down, the
+  proposal's own state (`proposal_not_approved`).
+
+  Contrast with `ready_to_apply`, refused during the artifact-guard inversion:
+  that status was never written by *any* version, so allow-listing it would have
+  granted permission on the strength of a name. The rule is "allow-list only
+  what you can justify", not "refuse everything unreachable".
+
 - **#4c Rollback misdiagnosed an oversized post-apply target.** Proven by the
   constructed test its entry demanded: an ordinary apply growing a 256,000-byte
   file to 268,800 bytes succeeded and verified, the baseline persisted a
@@ -280,29 +325,8 @@ file-tree summary with extension counts.
   wrong but harmless, and the alternative is not refusing — so it is out of
   rollback v1. Fixing it means storing the full OID in the snapshot, which
   changes the snapshot digest and therefore the apply path.
-- **The unresolved-attempt gate and the reconciliation query enumerate, one
-  layer up.** The artifact guard was inverted to an allow-list; these two were
-  not, and they have the identical shape on `PatchApplyAttemptStatus`.
-
-  `acquire_repository_apply_lock` blocks on
-  `status IN ('pending', 'applying', 'rolling_back', 'interrupted',
-  'needs_inspection', 'quarantine_required')`. **A future attempt status absent
-  from that list silently stops blocking the repository.** That is "no exit and
-  no door" — the exact hazard the rollback design named when it required
-  `rolling_back` to join the list — except here the failure is quieter: the
-  default is *don't block*, so a repository with an unresolved attempt would keep
-  accepting applies as though nothing were pending.
-
-  `reconcile_interrupted_patch_apply_attempts_with_pool` selects
-  `status IN ('pending', 'applying', 'rolling_back')`. A future in-flight status
-  absent from it is **never seen, never classified, never resolved**.
-
-  These are worse than the artifact guard was, in one respect: the artifact guard
-  produced a visible wrong outcome (a file was written), whereas these produce
-  silence. Inverting them means enumerating the statuses that *don't* block or
-  *aren't* in flight, which is a smaller list and a real design decision — an
-  attempt status is not obviously terminal or not. Out of scope for the artifact
-  guard inversion; worth its own change with its own proof.
+- ~~The unresolved-attempt gate and the reconciliation query enumerate, one
+  layer up~~ — landed. Both inverted to allow-lists; see the Done entry.
 - **Fingerprint TOCTOU and timestamp granularity.** `fingerprint_target_file`
   does `symlink_metadata` → `canonicalize` → read as three steps. A swap to a
   symlink mid-window is caught by the canonical-root check, and a swap to a

@@ -76,10 +76,16 @@ Before the write, native code persists a bounded backup and an `applying` audit
 record with pre-apply evidence. It then runs fixed
 `git apply --whitespace=nowarn -` with the persisted patch over stdin, reloads
 Git status, and persists verified, quarantined, or failed evidence. Startup and the Agent
-Runs/Approval Review surfaces reconcile attempts left in `pending` or
-`applying`: clearly applied state is repaired without reapplying, unchanged
+Runs/Approval Review surfaces reconcile every attempt that does not already
+carry a verdict: clearly applied state is repaired without reapplying, unchanged
 state becomes failed, incomplete evidence becomes interrupted, and ambiguity
-becomes needs inspection. Successful application leaves changes unstaged and
+becomes needs inspection. An attempt in a state this version does not recognise
+is reconciled to needs inspection without probing — the patch checks are
+evidence about a patch and say nothing about an operation the app cannot name —
+and it blocks the repository until a human records an inspection. The gate that
+blocks and the query that reconciles keep separate lists: an attempt can carry a
+verdict (so reconciliation has nothing to add) while still blocking because a
+human has not acted. Successful application leaves changes unstaged and
 uncommitted. Apply now holds a repository-scoped OS advisory lock under the
 app-local data directory and records its lock ID, process, operation, artifact,
 start time, and stale deadline in SQLite. Duplicate windows and processes fail

@@ -531,11 +531,24 @@ fixed forward and reverse `git apply --check` probes with persisted patch bytes
 over stdin. It never applies, retries, restores, stages, commits, resets,
 checks out, or cleans.
 
+Reconciliation sees every attempt that does not already carry a verdict; the
+default for a status it does not recognise is to reconcile it, not to skip it.
+The classifier will only judge the statuses its probes can speak about
+(`pending`, `applying`, and `rolling_back`'s unconditional branch): forward and
+reverse `git apply --check` are evidence about a patch, so an operation the
+classifier cannot name receives `needs_inspection` rather than a probed verdict.
+
 Classification is intentionally conservative:
 
-- `applied`: durable state already says applied, or target fingerprints changed,
-  the expected target is visible in Git status, forward check fails, and reverse
-  check passes. Native repairs only persisted status; it does not re-apply.
+- `applied`: **historical.** The current classifier does not produce this
+  verdict — it persists `applied_verified` through exact-path verification
+  instead. It is documented here because earlier versions did write it, so
+  legacy databases may hold `applied` attempt rows, and the unresolved-attempt
+  gate deliberately treats such a row as resolved rather than stranding it
+  behind a gate `INSPECTED` does not accept. Its original meaning: durable state
+  already says applied, or target fingerprints changed, the expected target is
+  visible in Git status, forward check fails, and reverse check passes. Native
+  repaired only persisted status; it did not re-apply.
 - `failed`: target fingerprints and complete Git evidence still match the clean
   pre-apply state, while the forward check still passes.
 - `interrupted`: required recovery evidence such as the backup or pre-apply
