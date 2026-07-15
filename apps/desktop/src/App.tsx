@@ -298,7 +298,13 @@ export function App() {
     includeGitState: true,
     includeDocumentation: true,
   });
-  const activeIndexingJob = indexingJobs[0];
+  // Scoped by id, not position. `indexingJobs[0]` was a second hardcoded index
+  // alongside `repositories[0]`: an indexing job carries the repository it
+  // describes, and taking the first one rendered whichever repository indexed
+  // most recently as though it were the active one.
+  const activeIndexingJob = indexingJobs.find(
+    (job) => job.repositoryId === activeRepository.id,
+  );
   const activeAgentRun =
     agentRuns.find((run) => run.id === selectedAgentRunId) ?? agentRuns[0];
   const activeProposedPlan =
@@ -375,33 +381,55 @@ export function App() {
     () => deriveRepositoryIntelligence(indexedFiles),
     [indexedFiles],
   );
+  // Live Git state is only evidence about the repository it was read from.
+  //
+  // Every derived value below used to read `gitStatusSummary` unconditionally,
+  // which was correct only because the active repository was pinned to
+  // `repositories[0]` and the summary could therefore only ever be its own.
+  // Once the active repository can change there is a window -- an async refresh,
+  // or an apply result arriving late -- where the summary in hand describes a
+  // different repository than the one being named. These facts are then not just
+  // rendered: they are sent to the provider as context describing the active
+  // repository.
+  //
+  // So a mismatched summary is treated as no summary at all. It falls back to
+  // the saved repository's own record, and the gates that cannot be answered
+  // without live Git fall back to `unknown` -- never to the other repository's
+  // numbers.
+  const activeGitStatusSummary =
+    gitStatusSummary?.repositoryId === activeRepository.id
+      ? gitStatusSummary
+      : null;
   const effectiveChangedFileCount =
-    gitStatusSummary?.changedFileCount ?? activeRepository.openChanges;
-  const effectiveBranch = gitStatusSummary?.branch ?? activeRepository.branch;
+    activeGitStatusSummary?.changedFileCount ?? activeRepository.openChanges;
+  const effectiveBranch =
+    activeGitStatusSummary?.branch ?? activeRepository.branch;
   const isWorkingDirectoryClean =
-    gitStatusSummary?.isClean ?? activeRepository.openChanges === 0;
+    activeGitStatusSummary?.isClean ?? activeRepository.openChanges === 0;
   const applyReadinessWorkingTreeState = !hasActiveRepository
     ? ("unknown" as const)
-    : gitStatusState === "ready" && gitStatusSummary
-      ? gitStatusSummary.isClean
+    : gitStatusState === "ready" && activeGitStatusSummary
+      ? activeGitStatusSummary.isClean
         ? ("clean" as const)
         : ("dirty" as const)
       : ("unknown" as const);
   const currentRepositoryValidationSnapshot: RepositoryValidationSnapshot | null =
-    gitStatusState === "ready" && gitStatusSummary
+    gitStatusState === "ready" && activeGitStatusSummary
       ? {
-          repositoryId: gitStatusSummary.repositoryId,
-          branch: gitStatusSummary.branch,
-          headSha: gitStatusSummary.headSha,
-          isClean: gitStatusSummary.isClean,
-          changedFileCount: gitStatusSummary.changedFileCount,
+          repositoryId: activeGitStatusSummary.repositoryId,
+          branch: activeGitStatusSummary.branch,
+          headSha: activeGitStatusSummary.headSha,
+          isClean: activeGitStatusSummary.isClean,
+          changedFileCount: activeGitStatusSummary.changedFileCount,
           relevantFilePaths: [],
-          capturedAt: gitStatusSummary.refreshedAt,
+          capturedAt: activeGitStatusSummary.refreshedAt,
         }
       : null;
   const selectedGitChangedFile =
-    gitStatusSummary?.files.find((file) => file.path === selectedGitFilePath) ??
-    gitStatusSummary?.files[0] ??
+    activeGitStatusSummary?.files.find(
+      (file) => file.path === selectedGitFilePath,
+    ) ??
+    activeGitStatusSummary?.files[0] ??
     null;
   const approvalAffectedFiles = useMemo(() => {
     if (selectedApprovalProposedChange?.files.length) {
@@ -443,11 +471,11 @@ export function App() {
       approvalAffectedFiles.map((file) => ({
         ...file,
         changedFile:
-          gitStatusSummary?.files.find(
+          activeGitStatusSummary?.files.find(
             (changedFile) => changedFile.path === file.path,
           ) ?? null,
       })),
-    [approvalAffectedFiles, gitStatusSummary],
+    [approvalAffectedFiles, activeGitStatusSummary],
   );
   const approvalLocalDiffCount = approvalDiffEntries.filter(
     (entry) => entry.changedFile,
@@ -514,7 +542,7 @@ export function App() {
     ).length ?? 0;
   const demoWorkflowLocalDiffCount =
     demoWorkflowProposal?.files.filter((file) =>
-      gitStatusSummary?.files.some(
+      activeGitStatusSummary?.files.some(
         (changedFile) => changedFile.path === file.path,
       ),
     ).length ?? 0;
@@ -637,7 +665,7 @@ export function App() {
             topExtensions: repositoryIntelligence.topExtensions,
             git: {
               isGitRepository:
-                gitStatusSummary?.isGitRepository ??
+                activeGitStatusSummary?.isGitRepository ??
                 activeRepository.isGitRepository,
               isClean: isWorkingDirectoryClean,
               changedFileCount: effectiveChangedFileCount,
@@ -1154,7 +1182,7 @@ export function App() {
 
   function openDemoChangeReview() {
     const firstMatchingFile = demoWorkflowProposal?.files.find((file) =>
-      gitStatusSummary?.files.some(
+      activeGitStatusSummary?.files.some(
         (changedFile) => changedFile.path === file.path,
       ),
     );
@@ -1215,19 +1243,19 @@ export function App() {
   }, [activeRepository.id, activeRepository.path, hasActiveRepository]);
 
   useEffect(() => {
-    if (!gitStatusSummary || gitStatusSummary.files.length === 0) {
+    if (!activeGitStatusSummary || activeGitStatusSummary.files.length === 0) {
       setSelectedGitFilePath(null);
       return;
     }
 
-    const selectedFileStillExists = gitStatusSummary.files.some(
+    const selectedFileStillExists = activeGitStatusSummary.files.some(
       (file) => file.path === selectedGitFilePath,
     );
 
     if (!selectedFileStillExists) {
-      setSelectedGitFilePath(gitStatusSummary.files[0].path);
+      setSelectedGitFilePath(activeGitStatusSummary.files[0].path);
     }
-  }, [gitStatusSummary, selectedGitFilePath]);
+  }, [activeGitStatusSummary, selectedGitFilePath]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1374,7 +1402,7 @@ export function App() {
     activeRepository.id,
     activeRepository.path,
     activeSection,
-    gitStatusSummary?.refreshedAt,
+    activeGitStatusSummary?.refreshedAt,
     hasActiveRepository,
     selectedReadinessArtifact?.artifactDigest,
     selectedReadinessArtifact?.id,
@@ -3876,14 +3904,16 @@ export function App() {
               <div>
                 <dt>Staged / Unstaged</dt>
                 <dd>
-                  {gitStatusSummary
-                    ? `${gitStatusSummary.stagedCount} / ${gitStatusSummary.unstagedCount}`
+                  {activeGitStatusSummary
+                    ? `${activeGitStatusSummary.stagedCount} / ${activeGitStatusSummary.unstagedCount}`
                     : "Not refreshed"}
                 </dd>
               </div>
               <div>
                 <dt>Last Refreshed</dt>
-                <dd>{formatGitRefreshedAt(gitStatusSummary?.refreshedAt)}</dd>
+                <dd>
+                  {formatGitRefreshedAt(activeGitStatusSummary?.refreshedAt)}
+                </dd>
               </div>
             </dl>
           </article>
@@ -3936,7 +3966,7 @@ export function App() {
                 tone={
                   gitStatusState === "error"
                     ? "danger"
-                    : gitStatusSummary?.isGitRepository === false
+                    : activeGitStatusSummary?.isGitRepository === false
                       ? "warning"
                       : "neutral"
                 }
@@ -3944,7 +3974,7 @@ export function App() {
               >
                 {gitStatusState === "error"
                   ? "unavailable"
-                  : gitStatusSummary?.isGitRepository === false
+                  : activeGitStatusSummary?.isGitRepository === false
                     ? "not a git repository"
                     : "read only"}
               </StatusPill>
@@ -3961,10 +3991,11 @@ export function App() {
                   </p>
                 </div>
               </div>
-            ) : gitStatusSummary && gitStatusSummary.files.length > 0 ? (
+            ) : activeGitStatusSummary &&
+              activeGitStatusSummary.files.length > 0 ? (
               <div className="git-review-layout">
                 <div className="git-change-list" aria-label="Changed files">
-                  {gitStatusSummary.files.map((file) => {
+                  {activeGitStatusSummary.files.map((file) => {
                     const isSelected =
                       selectedGitChangedFile?.path === file.path;
                     const matchingProposal = approvalMatchByPath.get(file.path);

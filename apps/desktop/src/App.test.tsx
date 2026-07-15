@@ -13,6 +13,7 @@ import { App } from "./App";
 import { previewRepositoryFile } from "./storage/filePreview";
 import { scanRepositoryFileTree } from "./storage/fileTreeScanner";
 import { loadGitFileDiff, loadGitStatusSummary } from "./storage/gitChanges";
+import { loadIndexingJobs } from "./storage/indexingJobStore";
 import { KNOWN_SEED_RECORD_IDS } from "./lib/seedRecords";
 import { dryRunGeneratedPatch } from "./storage/patchValidation";
 import {
@@ -2894,6 +2895,152 @@ describe("rollback surface", () => {
 
     expect(
       await screen.findByText(/will not overwrite work done since the apply/i),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("repository-scoped facts", () => {
+  // Every one of these is correct today only because activeRepository is pinned
+  // to repositories[0], so the live Git status can only ever be the active
+  // repository's. The moment a switch is possible there is an async window --
+  // and a stale-result window -- where the summary in hand describes a
+  // different repository than the one being named. Fail closed to unknown, not
+  // to the other repository's numbers.
+  //
+  // Every value here is chosen to differ from what the active repository's own
+  // saved record would produce (branch "main", openChanges 0 -> clean). A
+  // foreign status that happens to agree with the fallback proves nothing: the
+  // assertions could pass whether the guard exists or not.
+  const otherRepositoryStatus: GitStatusSummary = {
+    repositoryId: "repo-somewhere-else",
+    repositoryPath: "/somewhere/else",
+    branch: "other-branch",
+    headSha: "9999999",
+    isGitRepository: true,
+    isClean: false,
+    changedFileCount: 7,
+    stagedCount: 3,
+    unstagedCount: 4,
+    untrackedCount: 0,
+    conflictedCount: 0,
+    files: [
+      {
+        path: "somewhere/else/file.ts",
+        kind: "modified",
+        stage: "unstaged",
+        statusCode: " M",
+      },
+    ],
+    refreshedAt: "1783532100",
+  };
+
+  it("never reports another repository's changed-file count as this one's", async () => {
+    renderApp({ gitStatus: otherRepositoryStatus });
+
+    const overview = await screen.findByLabelText("Active work");
+
+    // The foreign repository has 7 changes and is dirty; this one's own saved
+    // record says 0 and clean. Falling back to this repository's own record is
+    // correct — reporting the other one's 7 is the lie.
+    expect(overview.textContent).not.toContain("7");
+    expect(overview.textContent).toContain("0");
+  });
+
+  // The derived Git facts are not only rendered — they are sent to the provider
+  // as context describing the active repository. A branch, cleanliness, and
+  // changed-file count read from a different repository would be labelled with
+  // this repository's id and name and shipped to OpenAI. That is the honesty
+  // failure with a consequence beyond the screen.
+  it("never sends another repository's Git facts to the provider as this one's", async () => {
+    vi.mocked(loadOpenAiProviderConfiguration).mockResolvedValue({
+      configured: true,
+      model: "gpt-5.6-luna",
+      reason: undefined,
+    });
+    vi.mocked(requestOpenAiPlan).mockResolvedValue({
+      summary: "Bounded plan",
+      steps: [],
+      affectedFiles: [],
+      risks: [],
+      validation: [],
+      patchArtifacts: [],
+      approvalRequired: true,
+    });
+    const { user } = renderApp({ gitStatus: otherRepositoryStatus });
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    const providerSelect = screen.getByRole("combobox", {
+      name: "Agent provider",
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("option", { name: "OpenAI · gpt-5.6-luna" }),
+      ).toBeEnabled();
+    });
+    await user.selectOptions(providerSelect, "openai");
+    await user.type(
+      screen.getByRole("textbox", { name: "Agent task request" }),
+      "Plan something",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Generate plan with OpenAI" }),
+    );
+
+    await waitFor(() => expect(requestOpenAiPlan).toHaveBeenCalled());
+    const [payload] = vi.mocked(requestOpenAiPlan).mock.calls[0] as [
+      {
+        context: {
+          branch: string;
+          git: { isClean: boolean; changedFileCount: number };
+        };
+      },
+    ];
+    expect(payload.context.branch).not.toBe("other-branch");
+    expect(payload.context.git.isClean).not.toBe(false);
+    expect(payload.context.git.changedFileCount).not.toBe(7);
+  });
+
+  // A second hardcoded index, alongside repositories[0]. An indexing job knows
+  // the repository it describes; taking the first one rendered whichever
+  // repository indexed most recently as though it were the active one.
+  it("never reports another repository's indexing job as this one's", async () => {
+    vi.mocked(loadIndexingJobs).mockResolvedValue([
+      {
+        id: "job-elsewhere",
+        repositoryId: "repo-somewhere-else",
+        repositoryName: "Somewhere Else",
+        status: "running",
+        progress: 42,
+        step: "Indexing a repository you are not looking at",
+        createdAt: "1783532100",
+        updatedAt: "1783532100",
+      },
+    ]);
+    renderApp();
+
+    await screen.findByRole("button", { name: "Repositories" });
+
+    expect(
+      screen.queryByText("Indexing a repository you are not looking at"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps apply readiness unknown rather than trusting another repository's tree", async () => {
+    renderApp({ gitStatus: otherRepositoryStatus });
+
+    await screen.findByRole("button", { name: "Agent Runs" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(
+      await screen.findByRole("button", {
+        name: /generated packages\/ai\/src\/index\.ts/,
+      }),
+    );
+
+    // The working-tree gate feeds apply readiness. A foreign clean tree must
+    // never read as this repository's clean tree.
+    expect(
+      await screen.findByText("Refresh Git status to check the working tree."),
     ).toBeInTheDocument();
   });
 });
