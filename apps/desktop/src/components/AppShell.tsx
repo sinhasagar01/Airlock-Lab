@@ -61,8 +61,6 @@ export function Sidebar({
         ))}
       </nav>
 
-      <UpgradeCard />
-
       <div className="sidebar-user" aria-label="Current user">
         <span className="sidebar-user__avatar" aria-hidden="true">
           S
@@ -104,21 +102,6 @@ function SidebarNavItem({
       <span>{label}</span>
       {count > 0 ? <span className="nav-count">{count}</span> : null}
     </button>
-  );
-}
-
-function UpgradeCard() {
-  return (
-    <div className="sidebar-upgrade">
-      <div className="sidebar-upgrade__icon">
-        <Icon name="spark" />
-      </div>
-      <h2>Pro Intelligence</h2>
-      <p>Deeper local code insight for approved agent work.</p>
-      <SecondaryButton className="sidebar-upgrade__button">
-        Upgrade Plan
-      </SecondaryButton>
-    </div>
   );
 }
 

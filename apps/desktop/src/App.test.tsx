@@ -13,6 +13,7 @@ import { App } from "./App";
 import { previewRepositoryFile } from "./storage/filePreview";
 import { scanRepositoryFileTree } from "./storage/fileTreeScanner";
 import { loadGitFileDiff, loadGitStatusSummary } from "./storage/gitChanges";
+import { KNOWN_SEED_RECORD_IDS } from "./lib/seedRecords";
 import { dryRunGeneratedPatch } from "./storage/patchValidation";
 import {
   acknowledgePatchApplyAttempt,
@@ -22,10 +23,12 @@ import {
 import { loadRepositoryValidationSnapshot } from "./storage/repositoryValidationSnapshot";
 import {
   saveApprovalRequest,
+  saveApprovalRequests,
   updateApprovalRequestStatus,
 } from "./storage/approvalRequestStore";
 import { saveAgentRunRecord } from "./storage/agentRunStore";
 import {
+  loadProposedChanges,
   saveProposedChange,
   saveProposedChanges,
 } from "./storage/proposedChangeStore";
@@ -1454,6 +1457,73 @@ describe("App smoke tests", () => {
     },
     message: "Quarantined for manual inspection.",
   };
+
+  it("does not offer an upgrade for a tier that does not exist", async () => {
+    renderApp();
+
+    await screen.findByRole("button", { name: "Approvals" });
+
+    expect(screen.queryByText("Pro Intelligence")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Upgrade Plan" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not present fabricated activity as workspace history", async () => {
+    renderApp();
+
+    await screen.findByRole("button", { name: "Approvals" });
+
+    // These three entries were static copy with invented timestamps rendered as
+    // though they were a real event feed.
+    expect(screen.queryByText("Intelligence Warmed")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Mock provider connected"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("2m ago")).not.toBeInTheDocument();
+  });
+
+  it("tells an empty workspace what to do instead of showing invented numbers", async () => {
+    renderApp({ repositories: [], files: [] });
+
+    expect(
+      await screen.findByText("No workspace state yet"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByText(/Choose a repository to begin/i).length,
+    ).toBeGreaterThan(0);
+    // The fabricated index time was shipped as a constant regardless of state.
+    expect(
+      screen.queryByText(/Last indexed Today, 10:24/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("never writes a seeded record into durable storage during hydration", async () => {
+    renderApp();
+
+    // Anchor on the read: hydration no longer writes, so a write can never be
+    // the barrier for hydration having finished.
+    await waitFor(() => expect(loadProposedChanges).toHaveBeenCalled());
+    await screen.findByRole("button", { name: "Approvals" });
+
+    // Hydration is the covert path: it ran on every launch with no user action
+    // and upserted seeds into the same tables as real records, where nothing
+    // distinguishes them afterwards. A user's own approve/reject decision may
+    // still persist -- that is what makes a seeded row "touched".
+    const writtenChangeIds = vi
+      .mocked(saveProposedChanges)
+      .mock.calls.flatMap(([changes]) => changes.map((change) => change.id));
+    const writtenApprovalIds = vi
+      .mocked(saveApprovalRequests)
+      .mock.calls.flatMap(([requests]) =>
+        requests.map((request) => request.id),
+      );
+
+    for (const seedId of KNOWN_SEED_RECORD_IDS) {
+      expect(writtenChangeIds).not.toContain(seedId);
+      expect(writtenApprovalIds).not.toContain(seedId);
+    }
+  });
 
   it("shows reconciled interrupted attempts and keeps apply unavailable", async () => {
     const interruptedChanges = defaultProposedChanges.map((change) =>

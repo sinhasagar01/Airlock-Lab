@@ -54,7 +54,6 @@ import {
 import {
   agentRuns as mockAgentRuns,
   changeFeatureBlocks,
-  dashboardActivity,
   emptyRepository,
   mockApprovalRequests,
   mockProposedChanges,
@@ -1355,16 +1354,17 @@ export function App() {
         );
         setProposedChangePlans(hydratedPlans);
         setApprovalRequests(hydratedApprovalRequests);
-        await saveApprovalRequests(hydratedApprovalRequests);
 
         const mergedProposedChanges =
           savedProposedChanges.length > 0
             ? mergeSeedProposedChanges(savedProposedChanges)
             : mockProposedChanges;
+        // Hydration must not write. It merges demo fixtures for display only;
+        // persisting them put fixtures into the same tables as real records
+        // where nothing distinguished them afterwards.
         const hydratedProposedChanges = await Promise.all(
           mergedProposedChanges.map(ensureProposedPatchArtifactDigests),
         );
-        await saveProposedChanges(hydratedProposedChanges);
         let reconciledProposedChanges = hydratedProposedChanges;
         if (hasNativeRuntime) {
           try {
@@ -1742,7 +1742,13 @@ export function App() {
         aria-label="Workspace metrics"
       >
         <SummaryCard
-          detail={`Last indexed ${workspace.summary.lastIndexedAt}`}
+          detail={
+            hasActiveRepository
+              ? activeRepository.lastIndexedAt
+                ? `Last indexed ${activeRepository.lastIndexedAt}`
+                : "Not indexed yet"
+              : "Choose a repository to begin"
+          }
           icon="database"
           label="Repositories"
           tone="accent"
@@ -1776,7 +1782,7 @@ export function App() {
             <div className="active-work-card__header">
               <div>
                 <p className="card-eyebrow card-eyebrow--dot">Active Work</p>
-                <h2>Draft app shell implementation plan</h2>
+                <h2>{demoWorkflowProposal?.title ?? "No active work"}</h2>
               </div>
               <StatusPill
                 tone={proposedChangeStatusTone(
@@ -1848,30 +1854,44 @@ export function App() {
           <div className="overview-side-column">
             <article className="overview-card recent-activity-card">
               <div className="overview-card__header">
-                <p className="card-eyebrow">Recent Activity</p>
-                <button className="text-action" type="button">
-                  View all
-                </button>
+                <p className="card-eyebrow">Workspace State</p>
               </div>
 
               <div className="reference-activity-list">
-                {dashboardActivity.map((activity) => (
-                  <div
-                    className={`reference-activity-item reference-activity-item--${
-                      statusTone[activity.status]
-                    }`}
-                    key={activity.title}
-                  >
-                    <span className="reference-activity-marker">
-                      {activity.status === "pending_approval" ? "!" : "✓"}
-                    </span>
-                    <div>
-                      <h3>{activity.title}</h3>
-                      <p>{activity.detail}</p>
+                {hasActiveRepository ? (
+                  <>
+                    <div className="reference-activity-item reference-activity-item--neutral">
+                      <div>
+                        <h3>{activeRepository.name}</h3>
+                        <p>
+                          {activeRepository.lastIndexedAt
+                            ? `Indexed ${activeRepository.lastIndexedAt}`
+                            : "Not indexed yet"}
+                        </p>
+                      </div>
                     </div>
-                    <time>{activity.time}</time>
+                    <div className="reference-activity-item reference-activity-item--neutral">
+                      <div>
+                        <h3>
+                          {pendingApprovalCount} pending approval
+                          {pendingApprovalCount === 1 ? "" : "s"}
+                        </h3>
+                        <p>
+                          {pendingApprovalCount > 0
+                            ? "Review them before any patch can be applied."
+                            : "Nothing is waiting on you."}
+                        </p>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="reference-activity-item reference-activity-item--neutral">
+                    <div>
+                      <h3>No workspace state yet</h3>
+                      <p>Choose a repository to begin.</p>
+                    </div>
                   </div>
-                ))}
+                )}
               </div>
             </article>
 

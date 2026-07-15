@@ -34,30 +34,6 @@ export const proposedChangePlans = createMockProposedChangePlans();
 export const mockApprovalRequests = createMockApprovalRequests();
 export const mockProposedChanges = createMockPersistedProposedChanges();
 
-export const dashboardActivity = [
-  {
-    badge: "ready",
-    detail: "Source tree, docs map, and Git status available.",
-    status: "ready" as DomainStatus,
-    time: "2m ago",
-    title: "Intelligence Warmed",
-  },
-  {
-    badge: "pending",
-    detail: "Provider abstraction spike produced a patch plan.",
-    status: "pending_approval" as DomainStatus,
-    time: "5m ago",
-    title: "Agent run awaiting approval",
-  },
-  {
-    badge: "completed",
-    detail: "Shell wired through package contracts successfully.",
-    status: "completed" as DomainStatus,
-    time: "12m ago",
-    title: "Mock provider connected",
-  },
-];
-
 export const quickStartItems = [
   {
     description: "Add a repository to begin",
