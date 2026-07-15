@@ -1,8 +1,8 @@
 [package]
 name = "ai-developer-workspace"
 version = "0.0.0"
-description = "AI Developer Workspace desktop shell"
-authors = ["AI Developer Workspace"]
+description = "Airlock desktop shell"
+authors = ["Airlock Lab"]
 edition = "2021"
 
 [lib]

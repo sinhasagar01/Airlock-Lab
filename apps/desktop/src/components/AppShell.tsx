@@ -44,8 +44,8 @@ export function Sidebar({
   return (
     <aside className="sidebar">
       <div className="brand-lockup">
-        <span className="product-mark">ADW</span>
-        <div className="brand">AI Developer Workspace</div>
+        <span className="product-mark">AIR</span>
+        <div className="brand">Airlock</div>
       </div>
 
       <nav aria-label="Primary navigation" className="sidebar-nav">

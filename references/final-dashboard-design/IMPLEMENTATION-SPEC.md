@@ -89,7 +89,7 @@ Sidebar must be fixed and full height.
 Header must include:
 
 - eyebrow label: WORKSPACE OVERVIEW or relevant tab label
-- title: AI Developer Workspace
+- title: Airlock
 - subtitle
 - provider status pill
 - pending approvals pill

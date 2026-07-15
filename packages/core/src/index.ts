@@ -135,7 +135,7 @@ export function createMockWorkspaceSnapshot(): WorkspaceSnapshot {
   return {
     summary: createWorkspaceSummary({
       id: "local-workspace",
-      name: "AI Developer Workspace",
+      name: "Airlock",
       description:
         "A local-first engineering workspace for repository understanding, AI-assisted implementation, and human-approved changes.",
       repositories: 2,

@@ -25,7 +25,7 @@ reads require the Tauri runtime.
 
 ## Pre-Demo Checklist
 
-1. Launch the native `AI Developer Workspace.app` build.
+1. Launch the native `Airlock.app` build.
 2. Have one non-sensitive local Git repository ready to select.
 3. Prefer a repository with indexed files. Use `Reindex repository` before the
    demo if Repository Intelligence reports zero files.

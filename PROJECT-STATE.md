@@ -142,6 +142,26 @@ ineligible for re-application, enforced by the native apply guard rather than by
 the UI. An interrupted rollback is seen by reconciliation, blocks the repository,
 and classifies unconditionally to `quarantine_required` with no probe.
 
+## App-Local Storage Address
+
+`workspace.db` — and therefore `patch_apply_backups`, `patch_rollback_backups`,
+and `patch_apply_attempts` — lives at a path derived from the Tauri bundle
+**identifier** and nothing else. `app_config_dir()` (used by the SQL plugin) and
+`app_local_data_dir()` (used by the apply lock) both resolve to
+`<platform dir>/<identifier>`; `productName` is never consulted by any path
+resolver, which is why the display name is free to change and the identifier is
+not. Changing the identifier makes the plugin lazily create a fresh empty
+database at the new address: existing records stay on disk, unreachable, while
+the app renders a calm empty state — and rollback keeps truthfully claiming it
+restores only from app-local backups it can no longer see.
+
+The identifier was changed exactly once, from `com.aidev.workspace` to
+`com.airlocklab.airlock`, alongside the rename to Airlock and before any
+distribution, while no patch backup existed in any database. It is now pinned by
+a native test carrying that reasoning. Verified rather than inferred: the renamed
+build creates its database under the new identifier and leaves a pre-existing
+old-identifier database byte-identical.
+
 Settings now reports whether OpenAI is configured through the native process
 and can run a read-only connection test for the configured model. The test sends
 no repository or task context, reads no provider response body, persists no

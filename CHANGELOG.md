@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- The product is now called Airlock.
+- **The bundle identifier changed, which orphans any existing local database.**
+  Local storage is addressed by the bundle identifier, so an install that had
+  data before this change now opens a fresh empty one: saved repositories,
+  proposals, approvals, apply attempts, and any patch backups remain on disk
+  under the old identifier and the app can no longer reach them. Nothing is
+  deleted, and nothing is recoverable through the app — re-pick your repository.
+  This was done once, deliberately, at the only point it was free: before any
+  distribution or notarization, and while no patch backup existed in any
+  database anywhere. The identifier is now pinned by a test that states what
+  changing it costs, because doing this to a real audit trail would leave
+  rollback truthfully claiming to restore from backups it cannot reach.
+
 - Agent Runs and Approvals now show the selected repository's work instead of
   every repository's. Both lists rendered everything under one repository's
   selector, and two places printed one repository's name directly above

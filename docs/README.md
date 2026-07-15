@@ -1,6 +1,6 @@
 # Docs
 
-This directory contains the product, architecture, engineering, UX, feature, and operational documentation for AI Developer Workspace.
+This directory contains the product, architecture, engineering, UX, feature, and operational documentation for Airlock.
 
 Key implementation-facing sections:
 

@@ -1,6 +1,6 @@
 # Roadmap
 
-Working backlog for AI Developer Workspace. This file is the single home for
+Working backlog for Airlock. This file is the single home for
 work that is agreed but not yet scheduled, and for findings that are understood
 but deliberately not being worked. A finding with no home is a finding that gets
 lost.

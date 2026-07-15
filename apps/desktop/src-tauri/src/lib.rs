@@ -10378,5 +10378,46 @@ pub fn run() {
             validate_generated_patch
         ])
         .run(tauri::generate_context!())
-        .expect("error while running AI Developer Workspace");
+        .expect("error while running Airlock");
+}
+
+/// The bundle identifier is an address, not a label. Pinned on purpose.
+#[cfg(test)]
+mod bundle_identifier_tests {
+    /// `productName` is display copy and may change freely. `identifier` may
+    /// not, and the asymmetry is the whole point of this test.
+    ///
+    /// `app_config_dir()` and `app_local_data_dir()` both resolve to
+    /// `<platform dir>/<identifier>`, joining the identifier and nothing else --
+    /// `productName` is never consulted by any path resolver in Tauri. That
+    /// directory holds `workspace.db`, and `workspace.db` holds
+    /// `patch_apply_backups` and `patch_apply_attempts`.
+    ///
+    /// Change this string and `tauri-plugin-sql` lazily creates a *fresh empty
+    /// database* at the new address on first load. Every proposal, attempt, and
+    /// backup becomes unreachable while the app renders a calm empty state and
+    /// reports nothing wrong. Rollback's "restores only from app-local backups"
+    /// stays true and becomes useless: the backups exist and nothing can reach
+    /// them. That is a false account produced by a rename rather than by a bug,
+    /// which is the exact failure class this product exists to refuse.
+    ///
+    /// It was changed once, knowingly, at the only moment it was free -- before
+    /// notarization, with zero backups in the only database that existed. That
+    /// was a decision. This test is here so the next one is a decision too, and
+    /// not a find-and-replace that happened to match.
+    #[test]
+    fn bundle_identifier_is_pinned_because_it_addresses_the_database() {
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))
+            .expect("tauri.conf.json must parse");
+
+        assert_eq!(
+            config["identifier"].as_str(),
+            Some("com.airlocklab.airlock"),
+            "The bundle identifier addresses the app-local database. Changing \
+             it orphans every existing install's proposals, attempts, and \
+             patch backups behind an empty database that looks healthy. If you \
+             are changing it deliberately, read this test's doc comment first, \
+             then update this assertion in the same commit."
+        );
+    }
 }

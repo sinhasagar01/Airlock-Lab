@@ -1,6 +1,6 @@
-# AI Developer Workspace
+# Airlock
 
-AI Developer Workspace is a local-first Tauri desktop application for
+Airlock is a local-first Tauri desktop application for
 understanding a repository, creating provider-backed implementation plans, and
 reviewing proposed changes behind explicit human approval and read-only safety
 checks.
