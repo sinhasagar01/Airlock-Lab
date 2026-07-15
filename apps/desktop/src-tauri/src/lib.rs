@@ -8878,6 +8878,48 @@ Binary files a/image.png and b/image.png differ";
         });
     }
 
+    /// A failed apply may be retried, and the guard must keep letting it.
+    ///
+    /// `apply_failed` is eligible today only by falling through every arm of a
+    /// guard that enumerates blocked statuses. Inverting that guard to an
+    /// allow-list would silently remove retry if `apply_failed` were left off,
+    /// and nothing would catch it -- there is no existing coverage for retry at
+    /// all. This pins the behaviour before the shape changes underneath it.
+    ///
+    /// Retry is safe because it is re-gated rather than replayed: the apply
+    /// request re-runs structure validation, a fresh `git apply --check`, and the
+    /// full snapshot comparison. The attempt row is `failed`, which is absent
+    /// from the unresolved-attempt gate, so the repository does not block either.
+    #[test]
+    fn safe_apply_allows_a_retry_after_a_failed_attempt() {
+        tauri::async_runtime::block_on(async {
+            let repository_path = create_temp_dir("safe-apply-retry-after-failure");
+            init_git_repo(&repository_path);
+            commit_test_file(&repository_path, "README.md", "fixture\n");
+            let pool = create_apply_test_pool().await;
+            let input = seed_apply_test_records(&pool, &repository_path, "approved").await;
+            // Exactly the state a rejected `git apply` leaves behind: the artifact
+            // marked failed, its validation evidence untouched, the tree unchanged.
+            mutate_apply_artifact(&pool, |artifacts| {
+                artifacts[0]["applyStatus"] = json!("apply_failed");
+                artifacts[0]["applyError"] = json!("Git could not apply the approved patch.");
+            })
+            .await;
+
+            let lock_directory = test_apply_lock_directory(&repository_path);
+            let result = apply_approved_patch_artifact_with_pool(&pool, &lock_directory, input)
+                .await
+                .expect("a failed attempt must remain retryable");
+
+            assert_eq!(result.status, "applied_verified");
+            assert_eq!(
+                fs::read_to_string(repository_path.join("generated.txt")).unwrap(),
+                "safe generated content\n"
+            );
+            remove_temp_dir(&repository_path);
+        });
+    }
+
     /// A rolled-back artifact must be refused by the native apply guard, not
     /// merely rendered differently.
     ///
