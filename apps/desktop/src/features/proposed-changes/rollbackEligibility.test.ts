@@ -141,18 +141,47 @@ describe("evaluateRollbackEligibility", () => {
     expect(result.detail).toMatch(/can never be rolled back/i);
   });
 
-  it("permanently refuses when the baseline has no content hash for the target", () => {
+  // Proven by construction (roadmap #4c): an ordinary apply can grow a file
+  // past the 256 KiB bound, the baseline truthfully records `too_large`, and
+  // the old copy said "no record was kept" — which was false. The honest
+  // obstacle is the pre-rollback backup: it cannot store a file past the bound,
+  // and that would be true even with a perfect baseline.
+  it("refuses an oversized target for the backup bound, not a recording failure", () => {
     const result = evaluateRollbackEligibility(
       artifact(),
       context({
         attempt: attempt({
           postApplyEvidence: {
             artifactDigest: "a".repeat(64),
-            // `too_large` carries no content hash, so there is nothing to
-            // compare the current file against.
             repositorySnapshot: baselineSnapshot({
               targetFileFingerprints: [
                 { path: TARGET, exists: true, status: "too_large" },
+              ],
+            }),
+            capturedAt: "1783532400",
+          },
+        }),
+      }),
+    );
+
+    expect(result.reason).toBe("target_too_large");
+    expect(result.isPermanentlyIneligible).toBe(true);
+    expect(result.detail).toMatch(/256 KiB/);
+    expect(result.detail).not.toMatch(/no record/i);
+  });
+
+  it("permanently refuses when the baseline fingerprint carries no hash", () => {
+    const result = evaluateRollbackEligibility(
+      artifact(),
+      context({
+        attempt: attempt({
+          postApplyEvidence: {
+            artifactDigest: "a".repeat(64),
+            // `unavailable` genuinely means the recording is unusable — the
+            // generic refusal is honest here, unlike for `too_large`.
+            repositorySnapshot: baselineSnapshot({
+              targetFileFingerprints: [
+                { path: TARGET, exists: true, status: "unavailable" },
               ],
             }),
             capturedAt: "1783532400",

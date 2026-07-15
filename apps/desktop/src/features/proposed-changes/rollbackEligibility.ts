@@ -27,6 +27,7 @@ export type RollbackBlockReason =
   | "already_rolled_back"
   | "rollback_in_progress"
   | "baseline_unavailable"
+  | "target_too_large"
   | "backup_unavailable"
   | "head_changed"
   | "branch_changed"
@@ -143,6 +144,19 @@ export function evaluateRollbackEligibility(
     baselineFingerprint?.status === "captured" &&
     baselineFingerprint.contentSha256,
   );
+
+  // An oversized target is refused for its true reason (proven, roadmap #4c).
+  // The baseline truthfully recorded `too_large`, so "no record was kept" would
+  // be false — and the real obstacle is the pre-rollback backup, which cannot
+  // store a file past the 256 KiB bound even with a perfect baseline.
+  if (baselineFingerprint?.status === "too_large") {
+    return block(
+      "target_too_large",
+      "This file exceeded the 256 KiB rollback backup limit when the patch was applied. Rollback must back up a file before overwriting it and cannot store this one, so this patch can never be rolled back from here.",
+      operation,
+      true,
+    );
+  }
 
   if (!hasBaseline) {
     return block(
