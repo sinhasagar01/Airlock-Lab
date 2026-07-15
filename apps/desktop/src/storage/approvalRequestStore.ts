@@ -126,3 +126,18 @@ export async function updateApprovalRequestStatus(
     [status, requestId],
   );
 }
+
+/**
+ * Deletes one persisted approval request by id.
+ *
+ * Deliberately not a general delete capability: the only caller is the demo
+ * fixture purge, which passes ids from a fixed known list.
+ */
+export async function deleteApprovalRequestById(requestId: string) {
+  const database = await getDatabase();
+  await ensureApprovalRequestTable(database);
+
+  await database.execute("DELETE FROM approval_requests WHERE id = $1", [
+    requestId,
+  ]);
+}

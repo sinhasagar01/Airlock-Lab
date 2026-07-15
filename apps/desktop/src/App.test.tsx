@@ -22,6 +22,7 @@ import {
 } from "./storage/patchApplication";
 import { loadRepositoryValidationSnapshot } from "./storage/repositoryValidationSnapshot";
 import {
+  deleteApprovalRequestById,
   saveApprovalRequest,
   saveApprovalRequests,
   updateApprovalRequestStatus,
@@ -505,6 +506,7 @@ vi.mock("./storage/approvalRequestStore", () => ({
   loadApprovalRequests: vi.fn(async () => mockState.approvals),
   saveApprovalRequest: vi.fn(async () => undefined),
   saveApprovalRequests: vi.fn(async () => undefined),
+  deleteApprovalRequestById: vi.fn(async () => undefined),
   updateApprovalRequestStatus: vi.fn(async () => undefined),
 }));
 
@@ -515,6 +517,7 @@ vi.mock("./storage/agentRunStore", () => ({
 
 vi.mock("./storage/proposedChangeStore", () => ({
   loadProposedChanges: vi.fn(async () => mockState.proposedChanges),
+  deleteProposedChangeById: vi.fn(async () => undefined),
   saveProposedChange: vi.fn(async (change: PersistedProposedChange) => {
     const existingIndex = mockState.proposedChanges.findIndex(
       (candidate) => candidate.id === change.id,
@@ -546,6 +549,7 @@ vi.mock("./storage/providerRuntime", () => ({
 }));
 
 function renderApp(options?: {
+  approvals?: ApprovalRequest[];
   files?: IndexedFileFact[];
   gitDiff?: GitFileDiff;
   gitStatus?: GitStatusSummary;
@@ -553,6 +557,7 @@ function renderApp(options?: {
   proposedChanges?: PersistedProposedChange[];
   repositories?: RepositorySummary[];
 }) {
+  mockState.approvals = options?.approvals ?? [...defaultApprovals];
   mockState.files = options?.files ?? [...defaultFiles];
   mockState.gitDiff = options?.gitDiff ?? defaultGitDiff;
   mockState.gitStatus = options?.gitStatus ?? defaultGitStatus;
@@ -573,6 +578,7 @@ async function goToTab(name: string) {
   await user.click(screen.getByRole("button", { name }));
 }
 
+const defaultApprovals = [...mockState.approvals];
 const defaultFiles = [...mockState.files];
 const defaultGitDiff = mockState.gitDiff;
 const defaultGitStatus = mockState.gitStatus;
@@ -1084,7 +1090,9 @@ describe("App smoke tests", () => {
         name: "Draft app shell implementation plan",
       }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText("demo workflow").length).toBeGreaterThan(0);
+    // Renamed from "demo workflow": the marker now covers every shipped demo
+    // record, not only the one the demo-workflow card links to.
+    expect(screen.getAllByText("Demo record").length).toBeGreaterThan(0);
     expect(screen.getByText("seeded path")).toBeInTheDocument();
     expect(screen.getAllByText(/approval-provider-rfc/).length).toBeGreaterThan(
       0,
@@ -1457,6 +1465,73 @@ describe("App smoke tests", () => {
     },
     message: "Quarantined for manual inspection.",
   };
+
+  it("purges untouched demo rows from storage but retains decided ones", async () => {
+    renderApp({
+      approvals: [
+        {
+          ...defaultApprovals[0],
+          id: "approval-provider-rfc",
+          status: "pending",
+        },
+        {
+          ...defaultApprovals[0],
+          id: "approval-indexing-job",
+          status: "approved",
+        },
+      ],
+    });
+
+    await waitFor(() => expect(deleteApprovalRequestById).toHaveBeenCalled());
+
+    const deleted = vi
+      .mocked(deleteApprovalRequestById)
+      .mock.calls.map(([id]: [string]) => id);
+
+    // The untouched row is pure fabrication that hydration wrote with no user
+    // action. The approved one carries a real decision and must survive.
+    expect(deleted).toContain("approval-provider-rfc");
+    expect(deleted).not.toContain("approval-indexing-job");
+  });
+
+  it("marks a retained demo record where it is displayed", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Approvals" }));
+
+    // Retention is only honest if the row declares itself at the point of
+    // display. A marker in Settings would leave this row reading as real.
+    expect((await screen.findAllByText("Demo record")).length).toBeGreaterThan(
+      0,
+    );
+  });
+
+  it("renders an approval whose agent run does not exist without blanking", async () => {
+    // Persisted approvals reference runs by id with no foreign key, and seeded
+    // agent runs were never persisted. Demo fixtures keep their runs in memory
+    // so the link resolves today; this pins the guard that keeps a dangling
+    // reference from blanking the screen if it ever stops resolving.
+    const { user } = renderApp({
+      approvals: [
+        {
+          ...defaultApprovals[0],
+          id: "approval-dangling",
+          title: "Approval with a missing run",
+          agentRunId: "run-that-was-never-persisted",
+        },
+      ],
+    });
+
+    await user.click(screen.getByRole("button", { name: "Approvals" }));
+
+    // The row renders at all -- the screen did not blank -- and it reports the
+    // missing link instead of an empty title.
+    const row = await screen.findByRole("button", {
+      name: /Approval with a missing run/,
+    });
+    expect(row).toBeInTheDocument();
+    expect(row.textContent).toContain("No linked run");
+  });
 
   it("does not offer an upgrade for a tier that does not exist", async () => {
     renderApp();

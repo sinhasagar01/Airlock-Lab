@@ -46,6 +46,12 @@ import {
 import { AppHeader, AppShell, Sidebar } from "./components/AppShell";
 import { GitDiffPreviewPanel } from "./features/changes/GitDiffPreviewPanel";
 import { demoWorkflow } from "./features/demo-workflow/demoWorkflow";
+import {
+  isSeededRecordId,
+  isSeededRunId,
+  isUntouchedSeededApproval,
+  isUntouchedSeededProposal,
+} from "./lib/seedRecords";
 import { IndexedFileBrowser } from "./features/file-preview/IndexedFileBrowser";
 import {
   PatchArtifactDetail,
@@ -88,6 +94,7 @@ import {
 import {
   loadApprovalRequests,
   saveApprovalRequest,
+  deleteApprovalRequestById,
   saveApprovalRequests,
   updateApprovalRequestStatus,
 } from "./storage/approvalRequestStore";
@@ -115,6 +122,7 @@ import { loadIndexingJobs, saveIndexingJob } from "./storage/indexingJobStore";
 import {
   loadProposedChanges,
   saveProposedChange,
+  deleteProposedChangeById,
   saveProposedChanges,
 } from "./storage/proposedChangeStore";
 import {
@@ -1319,6 +1327,41 @@ export function App() {
           return;
         }
 
+        // Past versions wrote demo fixtures into storage on every launch, with
+        // no user action, into the same tables as real records. Remove the ones
+        // nobody ever decided on. A fixture carrying a human decision or apply
+        // evidence is retained: the subject is fabricated, the act is not.
+        const purgedApprovalIds = new Set<string>();
+        const purgedProposalIds = new Set<string>();
+
+        for (const request of savedApprovalRequests) {
+          if (isUntouchedSeededApproval(request)) {
+            try {
+              await deleteApprovalRequestById(request.id);
+              purgedApprovalIds.add(request.id);
+            } catch {
+              // A failed purge is not fatal: the record stays marked on display.
+            }
+          }
+        }
+        for (const change of savedProposedChanges) {
+          if (isUntouchedSeededProposal(change)) {
+            try {
+              await deleteProposedChangeById(change.id);
+              purgedProposalIds.add(change.id);
+            } catch {
+              // A failed purge is not fatal: the record stays marked on display.
+            }
+          }
+        }
+
+        const retainedApprovalRequests = savedApprovalRequests.filter(
+          (request) => !purgedApprovalIds.has(request.id),
+        );
+        const retainedProposedChanges = savedProposedChanges.filter(
+          (change) => !purgedProposalIds.has(change.id),
+        );
+
         setIndexingJobs(savedIndexingJobs);
         const savedRunIds = new Set(
           savedAgentRunRecords.map((record) => record.run.id),
@@ -1343,8 +1386,8 @@ export function App() {
               ]
             : mockProposedChangePlans;
         const hydratedApprovalRequests =
-          savedApprovalRequests.length > 0
-            ? mergeSeedApprovalRequests(savedApprovalRequests)
+          retainedApprovalRequests.length > 0
+            ? mergeSeedApprovalRequests(retainedApprovalRequests)
             : mockApprovalRequests;
         setAgentRuns(
           reconcileAgentRunApprovalStatuses(
@@ -1356,8 +1399,8 @@ export function App() {
         setApprovalRequests(hydratedApprovalRequests);
 
         const mergedProposedChanges =
-          savedProposedChanges.length > 0
-            ? mergeSeedProposedChanges(savedProposedChanges)
+          retainedProposedChanges.length > 0
+            ? mergeSeedProposedChanges(retainedProposedChanges)
             : mockProposedChanges;
         // Hydration must not write. It merges demo fixtures for display only;
         // persisting them put fixtures into the same tables as real records
@@ -2466,9 +2509,9 @@ export function App() {
                     >
                       {run.status.replaceAll("_", " ")}
                     </StatusPill>
-                    {run.id === demoWorkflow.runId ? (
+                    {isSeededRunId(run.id) ? (
                       <StatusPill tone="agent" size="sm" showDot={false}>
-                        demo workflow
+                        Demo record
                       </StatusPill>
                     ) : null}
                     <small>
@@ -3009,9 +3052,9 @@ export function App() {
                         >
                           {approval.risk} risk
                         </StatusPill>
-                        {approval.id === demoWorkflow.approvalRequestId ? (
+                        {isSeededRecordId(approval.id) ? (
                           <StatusPill tone="agent" size="sm" showDot={false}>
-                            demo workflow
+                            Demo record
                           </StatusPill>
                         ) : null}
                       </span>

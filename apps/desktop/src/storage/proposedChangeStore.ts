@@ -128,3 +128,18 @@ export async function saveProposedChanges(changes: PersistedProposedChange[]) {
     await saveProposedChange(change);
   }
 }
+
+/**
+ * Deletes one persisted proposed change by id.
+ *
+ * Deliberately not a general delete capability: the only caller is the demo
+ * fixture purge, which passes ids from a fixed known list.
+ */
+export async function deleteProposedChangeById(changeId: string) {
+  const database = await getDatabase();
+  await ensureProposedChangesTable(database);
+
+  await database.execute("DELETE FROM proposed_changes WHERE id = $1", [
+    changeId,
+  ]);
+}
