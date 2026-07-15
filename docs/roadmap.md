@@ -88,7 +88,7 @@ it did. Items are ordered by how much they protect or clarify that claim.
 
 ## Next
 
-### #4a Apply must not report success without persisting a baseline
+### #4a Apply's rollback baseline is best-effort — a capability gap, not a safety one
 
 Rollback's drift check compares the target against the post-apply fingerprint in
 `post_apply_evidence_json`. That record is best-effort: the snapshot capture is
@@ -96,11 +96,107 @@ Rollback's drift check compares the target against the post-apply fingerprint in
 `applied_verified` with no baseline and therefore be permanently
 un-rollbackable.
 
-Rollback v1 handles this by refusing, and by showing the ineligibility with its
-reason before the user clicks. But "safe" currently depends on evidence apply
-does not guarantee. Deliberately not fixed inside v1: it would change the apply
-path while adding the first consumer that depends on it --- two risks at once, on
-the highest-risk task.
+**Correction to this entry's earlier framing, which said "'safe' currently
+depends on evidence apply does not guarantee." That is withdrawn — it was
+wrong.** Safety does not depend on this record. When the baseline is absent
+rollback refuses (`baseline_unavailable`) and the surface says so permanently
+before the user clicks. The behaviour is already fail-closed. What a missing
+baseline costs is the **capability** to roll back, not a safety property. The
+earlier framing implied a live hazard and there is none; a roadmap that
+misstates a hazard is the same dishonesty this document exists to remove.
+
+**It also barely fires, which was established by probe rather than argument:**
+
+- Of `capture_repository_validation_snapshot`'s failure branches, only the
+  `git status` read is reachable here. The digest is freshly computed so it is
+  always valid, and the path count/length/safety checks were already passed by
+  the same function twice earlier in the same request.
+- `git status --porcelain=v1` **does not fail while `index.lock` is held** —
+  measured: exit 0, correct output, git simply declines to write the refreshed
+  index. It fails only at 128 on genuine repository damage (unreadable `.git`,
+  corrupt `HEAD`), or on the 15-second timeout.
+- On the `applied_verified` path that read is *proven working microseconds
+  earlier*: `load_git_status_summary` already read the same status, and had it
+  failed, post-apply verification would have quarantined rather than reaching
+  `applied_verified`.
+- The fire-and-forget `UPDATE` is equally improbable: a **checked** `UPDATE` to
+  the same row (`status = 'applying'`, `rows_affected` asserted) succeeded before
+  the write, and a checked `UPDATE` to `proposed_changes` succeeded immediately
+  before it.
+
+**The useful finding is an ordering one.** `post_apply_evidence.repository_snapshot`
+has exactly two consumers, both rollback, and rollback needs three scalars from
+it: the target's content hash, `branch`, and `head_sha`. `branch` and `head_sha`
+are already known **before** the write (they are in `final_snapshot`, gated
+unchanged, and `git apply` cannot move HEAD). Only the content hash is inherently
+post-write, and it is a pure filesystem read. So today a whole `git status`
+subprocess is run to obtain data that does not need it — the one fragile
+ingredient is the one rollback does not use.
+
+**The honest terminal state, when it does fire:** keep `applied_verified` and
+record the unavailability **explicitly**. Two independent claims are being
+conflated — "the working tree changed exactly as approved" (true, proven) and
+"we recorded how to undo it" (false). Quarantine would be a false account:
+nothing unaccountable happened. But today un-rollbackability is inferred from an
+*absence*, which cannot distinguish "not recorded" from "failed to load" or "old
+row" — absence-as-signal is the fail-open shape. A positive assertion
+(`rollbackBaseline: recorded | unavailable`, with a reason) is the real fix, and
+is most of this item's remaining value. It must **not** become a new
+`applyStatus`: that enum answers "what happened to the working tree", the answer
+really is `applied_verified`, and a new variant would ripple into every gate that
+matches on it.
+
+Legacy artifacts with no baseline stay permanently un-rollbackable. A hash
+*could* be derived by re-applying the stored patch to the stored backup in a
+scratch directory, but that substitutes a derived model for a recorded
+observation inside a destructive path, which is precisely what #3 and post-apply
+verification exist to prevent. The population is bounded, local, and shrinking,
+and the surface already refuses with a specific reason.
+
+### #4c Rollback misdiagnoses an oversized post-apply target — UNPROVEN
+
+**Recorded as unproven: argued from the constants and the code path, not yet
+demonstrated by a constructed test. It becomes a task when a test proves it.**
+
+`fingerprint_target_file` never returns an error — it returns typed statuses, and
+only `captured` carries a content hash. Post-apply content is pre-apply plus the
+patch: the pre-apply target may be up to `MAX_FINGERPRINT_BYTES` (256 KiB) and
+the patch up to `MAX_GENERATED_PATCH_BYTES` (64 KiB). So an ordinary apply that
+grows a 250 KiB file by 10 KiB should persist a `too_large` fingerprint carrying
+no hash. Nothing fails: the capture succeeds, the `UPDATE` succeeds, the baseline
+is written — and rollback then refuses `baseline_unavailable`.
+
+The refusal is safe but **misdiagnosed**. We would tell the user "no record of
+this file's contents was kept" when a record *was* kept and truthfully says
+`too_large`. And the baseline is not the real obstacle: a target above 256 KiB
+can never be rolled back regardless, because the pre-rollback backup cannot store
+the bytes it would destroy. The honest message is "this file is too large for
+rollback to safely back up before overwriting."
+
+Note the constraint on any fix: raising `MAX_FINGERPRINT_BYTES` is **forbidden**
+— it feeds the validation snapshot digest and therefore the apply gate. A larger
+or streaming baseline hash must be additive and separate.
+
+### #4d No gate enforces refreshed validation before retrying a failed apply
+
+`docs/security/patch-application-safety.md` Decision #9 says "A failed attempt
+requires refreshed validation before retry." **No gate enforces that.** An
+artifact left at `apply_failed` is eligible for apply, its attempt row is
+`failed` (absent from the unresolved-attempt gate), and its `validationStatus`
+stays `dry_run_passed` because the failure path never clears it. After a rejected
+`git apply` the working tree is unchanged, so the snapshot still matches and a
+retry proceeds without the user revalidating.
+
+This is defensible — the apply request re-runs structure validation, a fresh
+`git apply --check`, and the full snapshot comparison in the same request, so a
+retry is re-gated rather than replayed. The defect is that **the document and the
+code disagree and neither is obviously wrong**. Either Decision #9 means the
+in-request revalidation it already gets and should say so, or it means a fresh
+user-initiated validation and a gate is missing. That is a policy decision, not a
+bug fix.
+
+Recorded rather than resolved during the guard inversion: tightening retry inside
+a shape change would be a policy decision smuggled into a refactor.
 
 ### #5 `GitStatusSummary` needs an `unknown` state
 
@@ -222,26 +318,29 @@ file-tree summary with extension counts.
   wrong but harmless, and the alternative is not refusing — so it is out of
   rollback v1. Fixing it means storing the full OID in the snapshot, which
   changes the snapshot digest and therefore the apply path.
-- **The apply artifact guard enumerates blocked statuses instead of
-  allow-listing eligible ones.** The `applyStatus` arms in
-  `apply_approved_patch_artifact_under_lock` name the statuses that refuse. A
-  status none of them names falls through every arm and reaches the write, and
-  the default for an unrecognized state is therefore **apply**.
+- **The unresolved-attempt gate and the reconciliation query enumerate, one
+  layer up.** The artifact guard was inverted to an allow-list; these two were
+  not, and they have the identical shape on `PatchApplyAttemptStatus`.
 
-  **The bug is the shape, not any missing arm.** This has now produced two
-  findings: `interrupted` / `needs_inspection` were absent before #1, and
-  `rolled_back` was absent during #4 — where it did not merely render oddly but
-  **re-applied the patch, wrote the file, and returned `applied_verified`**
-  (caught by test before landing). Both were fixed by adding an arm, which
-  resolves the instance and leaves the shape. The next status anyone adds will
-  fall through in exactly the same way, and it will keep being an
-  eligible-by-default write until the guard inverts.
+  `acquire_repository_apply_lock` blocks on
+  `status IN ('pending', 'applying', 'rolling_back', 'interrupted',
+  'needs_inspection', 'quarantine_required')`. **A future attempt status absent
+  from that list silently stops blocking the repository.** That is "no exit and
+  no door" — the exact hazard the rollback design named when it required
+  `rolling_back` to join the list — except here the failure is quieter: the
+  default is *don't block*, so a repository with an unresolved attempt would keep
+  accepting applies as though nothing were pending.
 
-  The fix is to invert it: derive eligibility from an explicit allow-list of
-  states an apply may proceed from, so an unrecognized status fails closed. Not
-  done in #4 deliberately — inverting a gate on the highest-risk task, while
-  adding the first operation that depends on it, is two risks at once. It should
-  be its own change with its own proof.
+  `reconcile_interrupted_patch_apply_attempts_with_pool` selects
+  `status IN ('pending', 'applying', 'rolling_back')`. A future in-flight status
+  absent from it is **never seen, never classified, never resolved**.
+
+  These are worse than the artifact guard was, in one respect: the artifact guard
+  produced a visible wrong outcome (a file was written), whereas these produce
+  silence. Inverting them means enumerating the statuses that *don't* block or
+  *aren't* in flight, which is a smaller list and a real design decision — an
+  attempt status is not obviously terminal or not. Out of scope for the artifact
+  guard inversion; worth its own change with its own proof.
 - **Fingerprint TOCTOU and timestamp granularity.** `fingerprint_target_file`
   does `symlink_metadata` → `canonicalize` → read as three steps. A swap to a
   symlink mid-window is caught by the canonical-root check, and a swap to a
