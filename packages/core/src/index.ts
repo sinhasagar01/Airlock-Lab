@@ -107,12 +107,13 @@ export function createWorkspaceSummary(
  * migration: no table, column, or serde name is derived from them.
  *
  * `agents` is a section that is deliberately NOT in `primaryNavigation`. Agent
- * Runs left the nav with part 4 -- the noun implies a loop that does not exist
- * -- while the destination is still reachable from Repositories and Working
- * tree. Part 5 folds it into Review and removes it from this union.
+ * Runs left the nav with part 4 -- the noun implies a loop that does not exist.
+ * Part 5 folded the destination into Review: composing a proposal, reviewing its
+ * plan and checks, and deciding on it all happen on one surface. The `agents` id
+ * is gone from this union because the destination it named no longer exists.
  */
 export type NavigationSection =
-  "review" | "repositories" | "agents" | "working-tree" | "settings";
+  "review" | "repositories" | "working-tree" | "settings";
 
 export type NavigationItem = {
   id: NavigationSection;

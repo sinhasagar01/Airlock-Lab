@@ -47,7 +47,6 @@ import { GitDiffPreviewPanel } from "./features/changes/GitDiffPreviewPanel";
 import { demoWorkflow } from "./features/demo-workflow/demoWorkflow";
 import {
   isSeededRecordId,
-  isSeededRunId,
   isUntouchedSeededApproval,
   isUntouchedSeededProposal,
 } from "./lib/seedRecords";
@@ -69,7 +68,6 @@ import {
   workspace,
 } from "./lib/appData";
 import {
-  resolveAgentRunRepositoryId,
   resolveApprovalRepositoryId,
   scopeRecordsToRepository,
 } from "./lib/repositoryScoping";
@@ -80,14 +78,12 @@ import {
   reconcileAgentRunApprovalStatuses,
 } from "./lib/seedMerging";
 import {
-  agentRunTone,
   approvalRiskTone,
   approvalStatusTone,
   changeKindTone,
   fileNameFromPath,
   formatGitRefreshedAt,
   patchArtifactTone,
-  proposedChangeStatusTone,
   repositoryTone,
   riskTone,
   stepStatusTone,
@@ -198,9 +194,6 @@ export function App() {
   const [fileSearch, setFileSearch] = useState("");
   const [extensionFilter, setExtensionFilter] = useState("all");
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
-  const [selectedAgentRunId, setSelectedAgentRunId] = useState(
-    mockAgentRuns[0].id,
-  );
   const [agentTask, setAgentTask] = useState("");
   const [selectedAgentProviderId, setSelectedAgentProviderId] =
     useState<AgentProviderId>("mock");
@@ -247,8 +240,6 @@ export function App() {
   const [approvalGitFileDiffState, setApprovalGitFileDiffState] = useState<
     "idle" | "loading" | "ready" | "error"
   >("idle");
-  const [selectedAgentPatchArtifactId, setSelectedAgentPatchArtifactId] =
-    useState<string | null>(null);
   const [selectedApprovalPatchArtifactId, setSelectedApprovalPatchArtifactId] =
     useState<string | null>(null);
   const [validatingPatchArtifactId, setValidatingPatchArtifactId] = useState<
@@ -343,31 +334,11 @@ export function App() {
     () => repositories.map((repository) => repository.id),
     [repositories],
   );
-  // Agent Runs and Approvals were repository-blind: they rendered every
-  // repository's work under one repository's selector. Neither record can
-  // answer which repository it belongs to on its own -- both carry
-  // `repository` as a display *name* -- so the durable link runs through the
-  // proposal. Records whose link does not resolve are grouped, never dropped.
-  const scopedAgentRuns = useMemo(
-    () =>
-      scopeRecordsToRepository({
-        records: agentRuns,
-        resolveRepositoryId: (run) =>
-          resolveAgentRunRepositoryId(run.id, persistedProposedChanges),
-        activeRepositoryId: activeRepository.id,
-        savedRepositoryIds,
-      }),
-    [
-      activeRepository.id,
-      agentRuns,
-      persistedProposedChanges,
-      savedRepositoryIds,
-    ],
-  );
-  const visibleAgentRuns = useMemo(
-    () => [...scopedAgentRuns.scoped, ...scopedAgentRuns.unlinked],
-    [scopedAgentRuns],
-  );
+  // Approvals were repository-blind: they rendered every repository's work
+  // under one repository's selector. An approval cannot answer which
+  // repository it belongs to on its own -- it carries `repository` as a
+  // display *name* -- so the durable link runs through the proposal. Records
+  // whose link does not resolve are grouped, never dropped.
   const scopedApprovalRequests = useMemo(
     () =>
       scopeRecordsToRepository({
@@ -391,35 +362,6 @@ export function App() {
     ],
     [scopedApprovalRequests],
   );
-  // Falls back to the first *visible* run: a selection pointing at another
-  // repository's run must not survive a switch. `null` is reachable -- a
-  // repository with no runs of its own and nothing unlinked -- so the detail
-  // card is guarded rather than dereferencing it.
-  // `.at(0)`, not `[0]`: `noUncheckedIndexedAccess` is off, so `[0]` infers as
-  // `AgentRun` even on an empty list, and TypeScript then narrows this const to
-  // its initializer's type at every read -- an annotation alone is silently
-  // discarded. `.at(0)` returns `AgentRun | undefined`, which is the truth, and
-  // is what makes the compiler force every consumer to prove it has a run.
-  const activeAgentRun: AgentRun | null =
-    visibleAgentRuns.find((run) => run.id === selectedAgentRunId) ??
-    visibleAgentRuns.at(0) ??
-    null;
-  const activeAgentRunIsScopedToRepository = visibleAgentRuns.some(
-    (run) =>
-      run.id === activeAgentRun?.id &&
-      scopedAgentRuns.scoped.includes(run),
-  );
-  const activeProposedPlan =
-    proposedChangePlans.find((plan) => plan.runId === activeAgentRun?.id) ??
-    null;
-  const activePersistedProposedChange =
-    persistedProposedChanges.find(
-      (change) => change.runId === activeAgentRun?.id,
-    ) ?? null;
-  const activeRunApproval =
-    approvalRequests.find(
-      (approval) => approval.agentRunId === activeAgentRun?.id,
-    ) ?? null;
   const selectedApprovalRequest =
     visibleApprovalRequests.find(
       (approval) => approval.id === selectedApprovalRequestId,
@@ -615,12 +557,6 @@ export function App() {
     null;
   const selectedApprovalChangedFile =
     selectedApprovalDiffEntry?.changedFile ?? null;
-  const selectedAgentPatchArtifact =
-    activePersistedProposedChange?.patchArtifacts.find(
-      (artifact) => artifact.id === selectedAgentPatchArtifactId,
-    ) ??
-    activePersistedProposedChange?.patchArtifacts[0] ??
-    null;
   const selectedApprovalPatchArtifact =
     selectedApprovalProposedChange?.patchArtifacts.find(
       (artifact) => artifact.id === selectedApprovalPatchArtifactId,
@@ -633,14 +569,10 @@ export function App() {
         attempt.patchArtifactId === selectedApprovalPatchArtifact?.id &&
         attempt.proposedChangeId === selectedApprovalProposedChange?.id,
     ) ?? null;
-  const selectedReadinessArtifact =
-    activeSection === "review"
-      ? selectedApprovalPatchArtifact
-      : selectedAgentPatchArtifact;
-  const selectedReadinessChange =
-    activeSection === "review"
-      ? selectedApprovalProposedChange
-      : activePersistedProposedChange;
+  // Review is the only surface with an apply lifecycle now (part 5 folded
+  // Agent Runs in), so the readiness subject is always the selected approval's.
+  const selectedReadinessArtifact = selectedApprovalPatchArtifact;
+  const selectedReadinessChange = selectedApprovalProposedChange;
   const selectedReadinessRepositorySnapshot =
     currentFingerprintSnapshot &&
     currentFingerprintSnapshot.artifactId === selectedReadinessArtifact?.id
@@ -699,11 +631,6 @@ export function App() {
       setGitStatusSummary(null);
       setGitStatusState("error");
     }
-  }
-
-  function openDemoAgentRun() {
-    setSelectedAgentRunId(demoWorkflow.runId);
-    setActiveSection("agents");
   }
 
   async function startAgentRun() {
@@ -817,7 +744,9 @@ export function App() {
           (request) => request.id !== result.approvalRequest.id,
         ),
       ]);
-      setSelectedAgentRunId(result.run.id);
+      // Select the freshly-composed proposal so review continues on this same
+      // surface without a navigation step (part 5).
+      setSelectedApprovalRequestId(result.approvalRequest.id);
       setAgentTask("");
 
       let persistenceUnavailable = storageStatus !== "ready";
@@ -1389,7 +1318,6 @@ export function App() {
   }
 
   function openDemoApprovalReview() {
-    setSelectedAgentRunId(demoWorkflow.runId);
     setSelectedApprovalRequestId(demoWorkflow.approvalRequestId);
     setActiveSection("review");
   }
@@ -1536,23 +1464,6 @@ export function App() {
   }, [approvalDiffEntries, selectedApprovalDiffPath]);
 
   useEffect(() => {
-    const artifacts = activePersistedProposedChange?.patchArtifacts ?? [];
-
-    if (artifacts.length === 0) {
-      setSelectedAgentPatchArtifactId(null);
-      return;
-    }
-
-    const selectedArtifactStillExists = artifacts.some(
-      (artifact) => artifact.id === selectedAgentPatchArtifactId,
-    );
-
-    if (!selectedArtifactStillExists) {
-      setSelectedAgentPatchArtifactId(artifacts[0].id);
-    }
-  }, [activePersistedProposedChange, selectedAgentPatchArtifactId]);
-
-  useEffect(() => {
     const artifacts = selectedApprovalProposedChange?.patchArtifacts ?? [];
 
     if (artifacts.length === 0) {
@@ -1574,7 +1485,7 @@ export function App() {
 
     async function loadCurrentFingerprintSnapshot() {
       if (
-        !["agents", "review"].includes(activeSection) ||
+        activeSection !== "review" ||
         !hasActiveRepository ||
         !selectedReadinessArtifact?.artifactDigest ||
         !selectedReadinessArtifact.validationRepositorySnapshot
@@ -1874,7 +1785,7 @@ export function App() {
     if (
       !hasNativeRuntime ||
       storageStatus !== "ready" ||
-      !["agents", "review"].includes(activeSection)
+      activeSection !== "review"
     ) {
       return;
     }
@@ -2167,42 +2078,6 @@ export function App() {
 
   // Shared by the scoped list and the unlinked group so the two cannot drift
   // into rendering a record differently depending on which one it landed in.
-  function renderAgentRunRow(run: AgentRun) {
-    const runApproval = approvalRequests.find(
-      (approval) => approval.agentRunId === run.id,
-    );
-
-    return (
-      <button
-        aria-current={activeAgentRun?.id === run.id ? "true" : undefined}
-        aria-label={`Open agent run ${run.title}`}
-        className="agent-run-list-item"
-        key={run.id}
-        onClick={() => setSelectedAgentRunId(run.id)}
-        type="button"
-      >
-        <IconBadge icon="agent" tone="agent" size="sm" />
-        <span>
-          <strong>{run.title}</strong>
-          <small>
-            {run.repository} · {agentProviderName(run.providerId)} · {run.model}
-          </small>
-        </span>
-        <StatusPill tone={agentRunTone(run.status)} size="sm" showDot={false}>
-          {run.status.replaceAll("_", " ")}
-        </StatusPill>
-        {isSeededRunId(run.id) ? (
-          <StatusPill tone="agent" size="sm" showDot={false}>
-            Demo record
-          </StatusPill>
-        ) : null}
-        <small>
-          {run.startedAt} · {runApproval ? "approval required" : "no approval"}
-        </small>
-      </button>
-    );
-  }
-
   function renderApprovalRow(approval: ApprovalRequest) {
     const linkedRun = agentRuns.find((run) => run.id === approval.agentRunId);
 
@@ -2478,9 +2353,9 @@ export function App() {
                     </SecondaryButton>
                     <SecondaryButton
                       icon="play"
-                      onClick={() => setActiveSection("agents")}
+                      onClick={() => setActiveSection("review")}
                     >
-                      Start mock agent run
+                      Propose a change
                     </SecondaryButton>
                     <SecondaryButton
                       icon="changes"
@@ -2534,19 +2409,12 @@ export function App() {
                   </dl>
                   <div className="demo-workflow-actions">
                     <PrimaryButton
-                      disabled={!demoWorkflowRun}
-                      icon="play"
-                      onClick={openDemoAgentRun}
-                    >
-                      Continue review workflow
-                    </PrimaryButton>
-                    <SecondaryButton
                       disabled={!demoWorkflowApproval}
                       icon="approval"
                       onClick={openDemoApprovalReview}
                     >
-                      Review approval
-                    </SecondaryButton>
+                      Continue review workflow
+                    </PrimaryButton>
                   </div>
                 </article>
               </section>
@@ -2622,12 +2490,34 @@ export function App() {
         </section>
       ) : null}
 
-      {activeSection === "agents" ? (
-        <section className="agent-run-workspace">
+      {activeSection === "review" ? (
+        <section className="approvals-dashboard">
+          <article className="overview-card approvals-hero-card">
+            <div className="overview-card__header">
+              <div>
+                <p className="card-eyebrow">Human Approval Review</p>
+                <h2>{visiblePendingApprovalCount} pending approvals</h2>
+              </div>
+              <StatusPill tone="warning">Review before execution</StatusPill>
+            </div>
+            <p>
+              Approving records your decision. It does not touch your files.
+              Compose a proposal below, inspect its plan and read-only checks,
+              then approve or reject it -- all on this one surface.
+            </p>
+          </article>
+
+          {/*
+            Compose lives on Review now (part 5). Agent Runs was a separate
+            destination; the noun implied a loop that does not exist, so it was
+            folded in rather than renamed. Proposing a change and deciding on it
+            are one flow, so they share one surface. `startAgentRun` is unchanged
+            -- only the form that calls it moved.
+          */}
           <article className="overview-card agent-run-create-card">
             <div className="overview-card__header">
               <div>
-                <p className="card-eyebrow">Create Agent Run</p>
+                <p className="card-eyebrow">Propose a change</p>
                 <h2>Start with {agentProviderName(selectedAgentProviderId)}</h2>
               </div>
               <StatusPill
@@ -2701,7 +2591,7 @@ export function App() {
                   aria-label="Agent task request"
                   maxLength={1200}
                   onChange={(event) => setAgentTask(event.target.value)}
-                  placeholder={`Describe the repository task you want ${agentProviderName(selectedAgentProviderId)} to plan...`}
+                  placeholder={`Describe a change you want ${agentProviderName(selectedAgentProviderId)} to propose...`}
                   rows={3}
                   value={agentTask}
                 />
@@ -2747,457 +2637,17 @@ export function App() {
             >
               {agentExecutionMessage}
             </p>
-          </article>
-
-          <aside className="overview-card agent-run-list-card">
-            <div className="overview-card__header">
-              <div>
-                <p className="card-eyebrow">Run List</p>
-                <h2>Recent agent runs</h2>
-              </div>
-              <StatusPill tone="agent" size="sm">
-                {visibleAgentRuns.length} runs
-              </StatusPill>
-            </div>
-
-            <div className="agent-run-list">
-              {scopedAgentRuns.scoped.length > 0 ? (
-                scopedAgentRuns.scoped.map(renderAgentRunRow)
-              ) : (
-                <p className="record-list-empty">
-                  No agent run belongs to this repository.
-                </p>
-              )}
-              {scopedAgentRuns.unlinked.length > 0 ? (
-                <div
-                  aria-label="Not linked to a saved repository"
-                  className="record-list-group"
-                  role="group"
-                >
-                  <p className="record-list-group__label">
-                    Not linked to a saved repository
-                  </p>
-                  {scopedAgentRuns.unlinked.map(renderAgentRunRow)}
-                </div>
-              ) : null}
-            </div>
-          </aside>
-
-          {activeAgentRun === null ? (
-            <article className="overview-card agent-run-detail-card">
-              <div className="overview-card__header">
-                <div>
-                  <p className="card-eyebrow card-eyebrow--dot">
-                    Selected Agent Run
-                  </p>
-                  <h2>No agent run selected</h2>
-                </div>
-              </div>
-              <p className="tab-card-copy">
-                No agent run belongs to this repository, and none is waiting to be
-                linked to one. Describe a task above to create a review-only plan.
-              </p>
-            </article>
-          ) : (
-            <article className="overview-card agent-run-detail-card">
-              <div className="overview-card__header">
-                <div>
-                  <p className="card-eyebrow card-eyebrow--dot">
-                    Selected Agent Run
-                  </p>
-                  <h2>{activeAgentRun.title}</h2>
-                </div>
-                <StatusPill tone={agentRunTone(activeAgentRun.status)}>
-                  {activeAgentRun.status.replaceAll("_", " ")}
-                </StatusPill>
-              </div>
-
-              <p className="tab-card-copy">{activeAgentRun.taskSummary}</p>
-
-              <dl className="tab-fact-grid agent-detail-fact-grid">
-                <div>
-                  <dt>Provider / Model</dt>
-                  <dd>
-                    {agentProviderName(activeAgentRun.providerId)} ·{" "}
-                    {activeAgentRun.model}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Repository</dt>
-                  <dd>{activeAgentRun.repository}</dd>
-                </div>
-                <div>
-                  <dt>Branch</dt>
-                  <dd>
-                    {activeAgentRunIsScopedToRepository
-                      ? activeRepository.branch
-                      : "Not linked to a saved repository"}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Started / Elapsed</dt>
-                  <dd>
-                    {activeAgentRun.startedAt} · {activeAgentRun.elapsed}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Confidence</dt>
-                  <dd>{activeAgentRun.confidence}</dd>
-                </div>
-                <div>
-                  <dt>Approval Requirement</dt>
-                  <dd>
-                    {activeAgentRun.approvalRequired
-                      ? "Human approval required"
-                      : "No approval required"}
-                  </dd>
-                </div>
-              </dl>
-
-              {activeAgentRun.id === demoWorkflow.runId ? (
-                <div className="agent-detail-section demo-workflow-inline">
-                  <div className="overview-card__header">
-                    <p className="card-eyebrow">Demo workflow</p>
-                    <StatusPill tone="warning" size="sm">
-                      seeded path
-                    </StatusPill>
-                  </div>
-                  <p>
-                    This run is linked to persisted proposal{" "}
-                    <strong>{demoWorkflowProposal?.id ?? "not available"}</strong>
-                    , approval{" "}
-                    <strong>{demoWorkflowApproval?.id ?? "not available"}</strong>
-                    , generated patch artifact records, and matching local Git
-                    diffs when the same paths appear in Git status.
-                  </p>
-                </div>
-              ) : null}
-
-              <div className="agent-detail-section provider-context-card">
-                <div className="overview-card__header">
-                  <p className="card-eyebrow">Provider Context</p>
-                  <StatusPill tone="success" size="sm">
-                    {provider.status}
-                  </StatusPill>
-                </div>
-                <p>
-                  {activeAgentRun.providerId === "openai"
-                    ? "OpenAI produced validated review records from bounded repository context. Generated artifacts are proposals only and remain separate from local Git diffs."
-                    : "The deterministic demo provider is connected for local planning and approval rehearsal. It returns one fixed demo patch and does not author changes to your own code."}
-                </p>
-                {/*
-                  Demo vs real provider. This line used to read "Mock Provider is
-                  a demo that plans only; applying and rolling back a patch needs
-                  a real provider such as OpenAI." That was true while the demo
-                  provider declared supportsPatchGeneration: false -- and the
-                  demo unlock made it false. The distinction it draws is still
-                  real, so it moves rather than goes: the demo's patch is a fixed
-                  fixture, not model output, and only a real provider can propose
-                  a change to the user's own code.
-                */}
-                <p className="provider-context-card__distinction">
-                  Demo Provider is a demo, not a model. It returns one fixed
-                  patch that creates airlock-demo.md so you can exercise apply
-                  and rollback for real; proposing changes to your own code needs
-                  a real provider such as OpenAI.
-                </p>
-              </div>
-            </article>
-          )}
-
-          <article className="overview-card proposed-plan-card">
-            <div className="overview-card__header">
-              <div>
-                <p className="card-eyebrow">Proposed Plan</p>
-                <h2>Structured implementation plan</h2>
-              </div>
-              <StatusPill
-                tone={
-                  activePersistedProposedChange
-                    ? proposedChangeStatusTone(
-                        activePersistedProposedChange.status,
-                      )
-                    : activeProposedPlan?.approvalRequired
-                      ? "warning"
-                      : "success"
-                }
-              >
-                {activePersistedProposedChange?.status.replaceAll("_", " ") ??
-                  (activeProposedPlan?.approvalRequired
-                    ? "approval required"
-                    : "approval not required")}
-              </StatusPill>
-            </div>
-
-            <p className="tab-card-copy">
-              {activePersistedProposedChange?.summary ??
-                activeProposedPlan?.summary ??
-                "No structured proposed plan is available for this run yet."}
-            </p>
-
-            {activePersistedProposedChange ? (
-              <dl className="tab-fact-grid proposal-link-fact-grid">
-                <div>
-                  <dt>Proposal Record</dt>
-                  <dd>{activePersistedProposedChange.id}</dd>
-                </div>
-                <div>
-                  <dt>Approval Link</dt>
-                  <dd>
-                    {activePersistedProposedChange.approvalRequestId ??
-                      "Not linked"}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Patch Artifacts</dt>
-                  <dd>
-                    {activePersistedProposedChange.patchArtifacts.length > 0
-                      ? `${activePersistedProposedChange.patchArtifacts.length} stored`
-                      : "Not generated"}
-                  </dd>
-                </div>
-              </dl>
-            ) : null}
-
-            {activeProposedPlan ? (
-              <div className="proposed-plan-grid">
-                <section className="plan-section plan-steps-section">
-                  <div className="plan-section__header">
-                    <IconBadge icon="index" tone="context" size="md" />
-                    <div>
-                      <p className="card-eyebrow">Implementation Steps</p>
-                      <h3>Ordered plan</h3>
-                    </div>
-                  </div>
-                  <ol className="plan-step-list">
-                    {activeProposedPlan.steps.map((step) => (
-                      <li key={step.id}>
-                        <StatusPill
-                          tone={stepStatusTone(step.status)}
-                          size="sm"
-                          showDot={false}
-                        >
-                          {step.status.replaceAll("_", " ")}
-                        </StatusPill>
-                        <div>
-                          <strong>{step.title}</strong>
-                          <p>{step.description}</p>
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
-                </section>
-
-                <section className="plan-section plan-files-section">
-                  <div className="plan-section__header">
-                    <IconBadge icon="file" tone="accent" size="md" />
-                    <div>
-                      <p className="card-eyebrow">Expected Files</p>
-                      <h3>Affected files</h3>
-                    </div>
-                  </div>
-                  <div className="plan-file-list">
-                    {(
-                      activePersistedProposedChange?.files ??
-                      activeProposedPlan.affectedFiles.map((file) => ({
-                        operation: file.changeType,
-                        patchArtifactStatus: "not_generated" as const,
-                        path: file.path,
-                        reason: file.reason,
-                        riskLevel: "medium" as const,
-                      }))
-                    ).map((file) => (
-                      <div className="plan-file-item" key={file.path}>
-                        <StatusPill tone="neutral" size="sm" showDot={false}>
-                          {file.operation}
-                        </StatusPill>
-                        <div>
-                          <strong>{file.path}</strong>
-                          <span>{file.reason}</span>
-                        </div>
-                        <StatusPill
-                          tone={patchArtifactTone(file.patchArtifactStatus)}
-                          size="sm"
-                          showDot={false}
-                        >
-                          {file.patchArtifactStatus.replaceAll("_", " ")}
-                        </StatusPill>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-
-                <section className="plan-section plan-artifacts-section">
-                  <div className="plan-section__header">
-                    <IconBadge icon="changes" tone="agent" size="md" />
-                    <div>
-                      <p className="card-eyebrow">Generated Patch Artifacts</p>
-                      <h3>Reviewable patch proposals</h3>
-                    </div>
-                  </div>
-                  <p className="patch-artifact-copy">
-                    Provider-generated artifacts are persisted review records.
-                    Missing records remain placeholders, while any applied
-                    artifact is labeled explicitly.
-                  </p>
-                  {/*
-                    Read-only here on purpose. Apply — with its readiness gates
-                    and typed confirmation — lives only behind Approval Review
-                    (#8 / #11 slice A). Agent Runs shows what a run proposed and
-                    hands off to the linked approval via the "Review approval"
-                    control in the side column; it never applies. Non-interactive
-                    so there is no selection that leads nowhere.
-                  */}
-                  <PatchArtifactList
-                    artifacts={
-                      activePersistedProposedChange?.patchArtifacts ?? []
-                    }
-                  />
-                </section>
-
-                <section className="plan-section plan-risk-section">
-                  <div className="plan-section__header">
-                    <IconBadge icon="approval" tone="warning" size="md" />
-                    <div>
-                      <p className="card-eyebrow">Risk Summary</p>
-                      <h3>Known risks</h3>
-                    </div>
-                  </div>
-                  <div className="plan-risk-list">
-                    {activeProposedPlan.risks.map((risk) => (
-                      <div className="plan-risk-item" key={risk.title}>
-                        <StatusPill
-                          tone={riskTone(risk.level)}
-                          size="sm"
-                          showDot={false}
-                        >
-                          {risk.level}
-                        </StatusPill>
-                        <div>
-                          <strong>{risk.title}</strong>
-                          <span>{risk.description}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-
-              </div>
-            ) : null}
-          </article>
-
-          <aside className="agent-run-side-column">
-            <article className="overview-card run-repository-context-card">
-              <div className="overview-card__header">
-                <div>
-                  <p className="card-eyebrow">Repository Context</p>
-                  <h3>{activeRepository.name}</h3>
-                </div>
-                <StatusPill
-                  tone={repositoryTone(activeRepository.status)}
-                  size="sm"
-                >
-                  {activeRepository.status.replace("_", " ")}
-                </StatusPill>
-              </div>
-              <dl className="agent-context-facts">
-                <div>
-                  <dt>Indexed files</dt>
-                  <dd>{repositoryIntelligence.totalIndexedFiles}</dd>
-                </div>
-                <div>
-                  <dt>Open changes</dt>
-                  <dd>{activeRepository.openChanges}</dd>
-                </div>
-                <div>
-                  <dt>Key folders</dt>
-                  <dd>
-                    {repositoryIntelligence.projectFolders
-                      .slice(0, 3)
-                      .map((folder) => folder.name)
-                      .join(", ") || "Not available yet"}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Key files</dt>
-                  <dd>
-                    {repositoryIntelligence.keyFiles
-                      .slice(0, 3)
-                      .map((file) => file.name)
-                      .join(", ") || "Not available yet"}
-                  </dd>
-                </div>
-              </dl>
-            </article>
-
-            <article className="overview-card approval-handoff-card">
-              <div className="overview-card__header">
-                <div>
-                  <p className="card-eyebrow">Approval Handoff</p>
-                  <h3>
-                    {activeRunApproval
-                      ? activeRunApproval.title
-                      : "No linked approval yet"}
-                  </h3>
-                </div>
-                <StatusPill
-                  tone={
-                    activeRunApproval
-                      ? approvalStatusTone(activeRunApproval.status)
-                      : "neutral"
-                  }
-                  size="sm"
-                >
-                  {activeRunApproval?.status ?? "planned"}
-                </StatusPill>
-              </div>
-              <p>
-                {activeRunApproval
-                  ? activeRunApproval.summary
-                  : "Approval review will attach here when the run produces a reviewable request."}
-              </p>
-              <div className="approval-handoff-actions">
-                <PrimaryButton
-                  disabled={!activeRunApproval}
-                  icon="approval"
-                  onClick={() => {
-                    if (activeRunApproval) {
-                      setSelectedApprovalRequestId(activeRunApproval.id);
-                    }
-
-                    setActiveSection("review");
-                  }}
-                >
-                  Review approval
-                </PrimaryButton>
-                {activeAgentRun?.id === demoWorkflow.runId ? (
-                  <SecondaryButton
-                    icon="changes"
-                    onClick={openDemoChangeReview}
-                  >
-                    Inspect local diffs
-                  </SecondaryButton>
-                ) : null}
-              </div>
-            </article>
-          </aside>
-        </section>
-      ) : null}
-
-      {activeSection === "review" ? (
-        <section className="approvals-dashboard">
-          <article className="overview-card approvals-hero-card">
-            <div className="overview-card__header">
-              <div>
-                <p className="card-eyebrow">Human Approval Review</p>
-                <h2>{visiblePendingApprovalCount} pending approvals</h2>
-              </div>
-              <StatusPill tone="warning">Review before execution</StatusPill>
-            </div>
-            <p>
-              Select a request, inspect the linked agent run and structured
-              plan, then approve or reject the work before any implementation
-              proceeds.
+            {/*
+              Demo vs real provider, kept where the compose form makes the choice.
+              The demo returns one fixed patch that creates airlock-demo.md so
+              apply and rollback are exercisable for real; it does not author
+              changes to your own code -- that needs a real provider.
+            */}
+            <p className="provider-context-card__distinction">
+              Demo Provider is a demo, not a model. It returns one fixed patch
+              that creates airlock-demo.md so you can exercise apply and rollback
+              for real; proposing changes to your own code needs a real provider
+              such as OpenAI.
             </p>
           </article>
 
@@ -3326,9 +2776,6 @@ export function App() {
                       repository paths match exactly.
                     </p>
                     <div className="demo-workflow-actions">
-                      <SecondaryButton icon="play" onClick={openDemoAgentRun}>
-                        Open agent run
-                      </SecondaryButton>
                       <SecondaryButton
                         icon="changes"
                         onClick={openDemoChangeReview}
@@ -3355,6 +2802,101 @@ export function App() {
                       <span key={file}>{file}</span>
                     ))}
                   </div>
+                </div>
+
+                {/*
+                  The structured plan folded in from the retired Agent Runs
+                  destination (part 5). A proposal now carries its own plan on
+                  the surface where it is decided, so review does not require
+                  navigating away to see what was proposed.
+                */}
+                {selectedApprovalPlan ? (
+                  <div className="approval-review-section approval-plan-section">
+                    <div className="plan-section__header">
+                      <IconBadge icon="index" tone="context" size="md" />
+                      <div>
+                        <p className="card-eyebrow">Proposed Plan</p>
+                        <h3>Structured implementation plan</h3>
+                      </div>
+                    </div>
+                    <p className="tab-card-copy">
+                      {selectedApprovalPlan.summary}
+                    </p>
+                    <div className="proposed-plan-grid">
+                      <section className="plan-section plan-steps-section">
+                        <div className="plan-section__header">
+                          <IconBadge icon="index" tone="context" size="sm" />
+                          <div>
+                            <p className="card-eyebrow">Implementation Steps</p>
+                            <h4>Ordered plan</h4>
+                          </div>
+                        </div>
+                        <ol className="plan-step-list">
+                          {selectedApprovalPlan.steps.map((step) => (
+                            <li key={step.id}>
+                              <StatusPill
+                                tone={stepStatusTone(step.status)}
+                                size="sm"
+                                showDot={false}
+                              >
+                                {step.status.replaceAll("_", " ")}
+                              </StatusPill>
+                              <div>
+                                <strong>{step.title}</strong>
+                                <p>{step.description}</p>
+                              </div>
+                            </li>
+                          ))}
+                        </ol>
+                      </section>
+
+                      <section className="plan-section plan-risk-section">
+                        <div className="plan-section__header">
+                          <IconBadge icon="approval" tone="warning" size="sm" />
+                          <div>
+                            <p className="card-eyebrow">Risk Summary</p>
+                            <h4>Known risks</h4>
+                          </div>
+                        </div>
+                        <div className="plan-risk-list">
+                          {selectedApprovalPlan.risks.map((risk) => (
+                            <div className="plan-risk-item" key={risk.title}>
+                              <StatusPill
+                                tone={riskTone(risk.level)}
+                                size="sm"
+                                showDot={false}
+                              >
+                                {risk.level}
+                              </StatusPill>
+                              <div>
+                                <strong>{risk.title}</strong>
+                                <span>{risk.description}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </section>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="approval-review-section provider-context-card">
+                  <div className="plan-section__header">
+                    <IconBadge icon="agent" tone="agent" size="md" />
+                    <div>
+                      <p className="card-eyebrow">Provider Context</p>
+                      <h3>
+                        {selectedApprovalRun
+                          ? agentProviderName(selectedApprovalRun.providerId)
+                          : "Provider not linked"}
+                      </h3>
+                    </div>
+                  </div>
+                  <p>
+                    {selectedApprovalRun?.providerId === "openai"
+                      ? "OpenAI produced validated review records from bounded repository context. Generated artifacts are proposals only and remain separate from local Git diffs."
+                      : "The deterministic demo provider is connected for local planning and approval rehearsal. It returns one fixed demo patch and does not author changes to your own code."}
+                  </p>
                 </div>
 
                 <div className="approval-decision-card">
@@ -3700,9 +3242,9 @@ export function App() {
               </PrimaryButton>
               <SecondaryButton
                 icon="play"
-                onClick={() => setActiveSection("agents")}
+                onClick={() => setActiveSection("review")}
               >
-                Start mock agent run
+                Propose a change
               </SecondaryButton>
             </div>
           </article>
@@ -3775,9 +3317,6 @@ export function App() {
                   onClick={openDemoApprovalReview}
                 >
                   Review approval
-                </SecondaryButton>
-                <SecondaryButton icon="play" onClick={openDemoAgentRun}>
-                  Open agent run
                 </SecondaryButton>
               </div>
             </article>

@@ -584,23 +584,16 @@ async function goToTab(name: string) {
 }
 
 /*
- * Agent Runs left the navigation with part 4: the noun implies a loop that does
- * not exist, and it is the destination part 5 folds into Review. The section
- * itself still renders, so every test that drove a run keeps its subject rather
- * than being deleted.
- *
- * It is reached through Working tree, and that route is the finding, not a
- * convenience. The Repositories entry point renders only when a repository is
- * already saved, so an empty workspace could not reach the composer through it
- * at all. Working tree's hero renders unconditionally, which makes it the ONLY
- * surviving door -- and "the only way to start a run is buried two clicks deep
- * on the page about Git status" is precisely why part 5 must follow part 4.
+ * Part 5 deleted the Agent Runs destination and folded it into Review: the
+ * composer, the structured plan, the checks, and the decision now share one
+ * surface. This helper -- named for the retired destination so the many tests
+ * that drove a run keep their subject -- simply lands on Review, where all of
+ * that now lives. A populated workspace already enters on Review, but clicking
+ * it explicitly keeps every caller robust to whatever section it was left on.
  */
 async function openAgentRuns(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole("button", { name: "Working tree" }));
-  await user.click(
-    await screen.findByRole("button", { name: "Start mock agent run" }),
-  );
+  await user.click(screen.getByRole("button", { name: "Review" }));
+  await screen.findByRole("heading", { level: 1, name: "Review" });
 }
 
 const defaultApprovals = [...mockState.approvals];
@@ -882,12 +875,9 @@ describe("App smoke tests", () => {
       ),
     ).toBeInTheDocument();
 
-    await openAgentRuns(user);
-    expect(
-      await screen.findByRole("heading", { level: 1, name: "Agent Runs" }),
-    ).toBeInTheDocument();
-    expect(await screen.findByText("Provider Context")).toBeInTheDocument();
-
+    // Part 5: Agent Runs is no longer a destination. Review is the one surface
+    // that composes a proposal, shows its plan and Provider Context, and holds
+    // the decision.
     await user.click(screen.getByRole("button", { name: "Review" }));
     expect(
       await screen.findByRole("heading", { level: 1, name: "Review" }),
@@ -895,6 +885,7 @@ describe("App smoke tests", () => {
     expect(
       await screen.findByRole("heading", { name: "2 pending approvals" }),
     ).toBeInTheDocument();
+    expect(screen.getByText("Provider Context")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Working tree" }));
     expect(
@@ -923,12 +914,11 @@ describe("App smoke tests", () => {
     ).toBeInTheDocument();
   });
 
-  it("opens the clearly labeled mock-provider composer from Repositories", async () => {
+  it("renders the clearly labeled mock-provider composer on Review", async () => {
     const { user } = renderApp();
 
-    // Overview and its quick-start shortcut are gone with part 4. The composer
-    // is reached from the Repositories entry point, which is now the only way
-    // in until part 5 puts it on Review.
+    // Part 5 put the composer on Review: proposing a change and deciding on it
+    // are one flow, so they share one surface.
     await openAgentRuns(user);
 
     expect(
@@ -939,6 +929,56 @@ describe("App smoke tests", () => {
         "Describe a task to create a review-only plan with the mock provider.",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("folds compose, plan, checks, and decision onto Review with no navigation", async () => {
+    // The core of part 5: Agent Runs is gone as a destination. On Review -- with
+    // no navigation to any other surface -- the composer, the selected
+    // proposal's structured plan, its read-only checks line, and its decision
+    // controls all coexist. Selecting an artifact from the list is selection
+    // within this surface, not a hop to a separate run detail.
+    const { user } = renderApp();
+
+    // Land on Review (the front door). openAgentRuns only ever reaches Review --
+    // there is no second surface to hop to.
+    await openAgentRuns(user);
+
+    // Compose control (ASSERT: the compose control renders on Review).
+    expect(
+      screen.getByRole("textbox", { name: "Agent task request" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Run mock agent" }),
+    ).toBeInTheDocument();
+
+    // The selected proposal's plan (ASSERT: a proposal renders its plan without
+    // navigation).
+    expect(
+      screen.getByText("Structured implementation plan"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Ordered plan")).toBeInTheDocument();
+
+    // Its decision controls, on the same surface.
+    expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled();
+
+    // ASSERT: no readiness gate label is in the document on arrival -- the gates
+    // are evidence behind the Advanced disclosure, not workflow steps.
+    expect(
+      screen.getByRole("button", { name: /Advanced.*readiness gates/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Artifact digest matches validation"),
+    ).not.toBeInTheDocument();
+
+    // Its read-only checks line, once the generated artifact is selected in
+    // place (selection, not navigation).
+    await user.click(
+      await screen.findByRole("button", {
+        name: /generated packages\/ai\/src\/index\.ts/,
+      }),
+    );
+    expect(await screen.findByText("checks passed")).toBeInTheDocument();
   });
 
   it("persists repositories returned by the native directory picker", async () => {
@@ -1270,33 +1310,23 @@ describe("App smoke tests", () => {
     expect(screen.getByText(/proposal-mvp-shell/)).toBeInTheDocument();
     expect(screen.getByText("1 generated · 4 total")).toBeInTheDocument();
 
+    // Part 5: "Continue review workflow" lands directly on Review with the demo
+    // approval selected -- there is no separate Agent Runs detail to pass through.
     await user.click(
       screen.getByRole("button", { name: "Continue review workflow" }),
     );
 
     expect(
       await screen.findByRole("heading", {
-        name: "Draft app shell implementation plan",
-      }),
-    ).toBeInTheDocument();
-    // Renamed from "demo workflow": the marker now covers every shipped demo
-    // record, not only the one the demo-workflow card links to.
-    expect(screen.getAllByText("Demo record").length).toBeGreaterThan(0);
-    expect(screen.getByText("seeded path")).toBeInTheDocument();
-    expect(screen.getAllByText(/approval-provider-rfc/).length).toBeGreaterThan(
-      0,
-    );
-    expect(
-      screen.getByRole("button", { name: "Inspect local diffs" }),
-    ).toBeEnabled();
-
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
-
-    expect(
-      await screen.findByRole("heading", {
         name: "Approve provider abstraction patch plan",
       }),
     ).toBeInTheDocument();
+    // The marker covers every shipped demo record, not only the one the
+    // demo-workflow card links to.
+    expect(screen.getAllByText("Demo record").length).toBeGreaterThan(0);
+    expect(
+      screen.getByRole("button", { name: "Inspect local diffs" }),
+    ).toBeEnabled();
     expect(screen.getByText("Connected MVP review path")).toBeInTheDocument();
     expect(
       screen.getByText(/generated patch artifact states/),
@@ -1424,14 +1454,6 @@ describe("App smoke tests", () => {
 
     expect(
       await screen.findByRole("heading", {
-        name: "Draft app shell implementation plan",
-      }),
-    ).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
-
-    expect(
-      await screen.findByRole("heading", {
         name: "Approve provider abstraction patch plan",
       }),
     ).toBeInTheDocument();
@@ -1466,61 +1488,34 @@ describe("App smoke tests", () => {
     );
   });
 
-  it("renders selected agent run detail with structured proposed plan and approval handoff", async () => {
+  it("carries the selected proposal's plan, provider context, and reviewable patch inline on Review", async () => {
+    // Part 5: the structured plan folded in from the retired Agent Runs
+    // destination. A proposal carries its own plan on the surface where it is
+    // decided -- no navigation to a separate run detail.
     const { user } = renderApp();
 
     await openAgentRuns(user);
 
+    // The selected approval's own title, plan, and status render without a hop.
     expect(
       await screen.findByRole("heading", {
-        name: "Draft app shell implementation plan",
+        name: "Approve provider abstraction patch plan",
       }),
     ).toBeInTheDocument();
     expect(
       screen.getByText("Structured implementation plan"),
     ).toBeInTheDocument();
     expect(screen.getByText("Ordered plan")).toBeInTheDocument();
-    expect(screen.getByText("Affected files")).toBeInTheDocument();
     expect(screen.getByText("Known risks")).toBeInTheDocument();
-    expect(
-      screen.getAllByText("apps/desktop/src/App.tsx").length,
-    ).toBeGreaterThan(0);
-    expect(screen.getByText("Proposal Record")).toBeInTheDocument();
-    expect(screen.getAllByText("proposal-mvp-shell").length).toBeGreaterThan(0);
     expect(screen.getAllByText("ready for review").length).toBeGreaterThan(0);
-    expect(screen.getByText("Generated Patch Artifacts")).toBeInTheDocument();
-    expect(screen.getByText("Reviewable patch proposals")).toBeInTheDocument();
-    expect(
-      screen.getByText(/any applied artifact is labeled explicitly/),
-    ).toBeInTheDocument();
-    // The read-only list still surfaces each artifact's status; the "Patch not
-    // generated" detail state and its copy moved to Approval Review with the
-    // rest of the patch artifact detail.
-    expect(screen.getAllByText("not generated").length).toBeGreaterThan(0);
-    expect(
-      screen.queryByText("Generated patch artifact preview"),
-    ).not.toBeInTheDocument();
-    // Provider context prose stays with the run on this surface. It used to
-    // read "Mock runs do not generate patch content", which the demo unlock
-    // made false.
+    // Provider context prose, folded in. It used to read "Mock runs do not
+    // generate patch content", which the demo unlock made false.
     expect(
       screen.getByText(/does not author changes to your own code/),
     ).toBeInTheDocument();
-    // The generated-artifact list is a read-only summary in Agent Runs; the
-    // reviewable detail and every apply affordance now live in Approval Review.
-    expect(screen.getByText(String(defaultFiles.length))).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Review approval" }),
-    ).toBeEnabled();
-    expect(
-      screen.queryByRole("button", { name: "Diffs not generated yet" }),
-    ).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
-
-    expect(
-      await screen.findByRole("heading", { name: "2 pending approvals" }),
-    ).toBeInTheDocument();
+    // The reviewable patch artifact list and its detail live here too.
+    expect(screen.getByText("Generated Patch Artifacts")).toBeInTheDocument();
+    expect(screen.getAllByText("not generated").length).toBeGreaterThan(0);
 
     await user.click(
       await screen.findByRole("button", {
@@ -1566,7 +1561,6 @@ describe("App smoke tests", () => {
 
     await openAgentRuns(user);
     // Checks run on review-open, behind Approval Review.
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
@@ -1593,7 +1587,6 @@ describe("App smoke tests", () => {
 
     await openAgentRuns(user);
     // Apply Readiness renders on the sole apply surface: Approval Review.
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
 
     expect(
       await screen.findByRole("heading", { name: "Apply Readiness" }),
@@ -1636,7 +1629,6 @@ describe("App smoke tests", () => {
     const { user } = renderApp();
 
     await openAgentRuns(user);
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
 
     // The readiness section is on screen...
     expect(
@@ -1662,7 +1654,6 @@ describe("App smoke tests", () => {
     const { user } = renderApp();
 
     await openAgentRuns(user);
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
 
     await screen.findByRole("heading", { name: "Apply Readiness" });
 
@@ -1933,7 +1924,6 @@ describe("App smoke tests", () => {
     );
     await openAgentRuns(user);
     // Apply, and its recovery evidence, live only behind Approval Review now.
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
@@ -2015,7 +2005,6 @@ describe("App smoke tests", () => {
     const { user } = renderApp({ proposedChanges: quarantinedChanges });
 
     await openAgentRuns(user);
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
@@ -2050,7 +2039,6 @@ describe("App smoke tests", () => {
     const { user } = renderApp({ proposedChanges: quarantinedProposedChanges });
 
     await openAgentRuns(user);
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
@@ -2098,7 +2086,6 @@ describe("App smoke tests", () => {
     const { user } = renderApp({ proposedChanges: quarantinedProposedChanges });
 
     await openAgentRuns(user);
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
@@ -2205,7 +2192,6 @@ describe("App smoke tests", () => {
     const { user } = renderApp({ gitStatus: cleanGitStatus });
 
     await openAgentRuns(user);
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
@@ -2286,9 +2272,11 @@ describe("App smoke tests", () => {
     );
     await user.click(screen.getByRole("button", { name: "Run mock agent" }));
 
+    // The freshly-composed proposal is selected in place, so its approval
+    // detail heading appears on this same surface -- no navigation step.
     expect(
       await screen.findByRole("heading", {
-        name: "Add a repository context summary",
+        name: "Review Add a repository context summary",
       }),
     ).toBeInTheDocument();
     expect(
@@ -2461,7 +2449,6 @@ describe("App smoke tests", () => {
     );
     // The checks run on review-open behind Approval Review; the reviewable
     // detail lives here too.
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", { name: /generated src\/App\.tsx/ }),
     );
@@ -2637,28 +2624,30 @@ describe("App smoke tests", () => {
     expect(saveApprovalRequest).not.toHaveBeenCalled();
   });
 
-  it("switches the selected agent run from the run list", async () => {
+  it("switches the selected proposal from the review queue", async () => {
+    // Part 5: the run list is gone; selecting from the approval queue is how a
+    // reviewer switches which proposal's plan, checks, and decision are shown.
     const { user } = renderApp();
 
     await openAgentRuns(user);
     await user.click(
       await screen.findByRole("button", {
-        name: "Open agent run Refresh repository context index",
+        name: /Review approval Approve indexing job persistence follow-up/,
       }),
     );
 
     expect(
       await screen.findByRole("heading", {
-        name: "Refresh repository context index",
+        name: "Approve indexing job persistence follow-up",
       }),
     ).toBeInTheDocument();
-    expect(screen.getAllByText(/mock-context-v1/).length).toBeGreaterThan(0);
+    // The linked run and affected files follow the selection.
+    expect(
+      screen.getAllByText("Refresh repository context index").length,
+    ).toBeGreaterThan(0);
     expect(
       screen.getAllByText("packages/indexing/src/index.ts").length,
     ).toBeGreaterThan(0);
-    expect(
-      screen.getByText("Approve indexing job persistence follow-up"),
-    ).toBeInTheDocument();
   });
 
   it("keeps approval actions visible, wired, and reflected in pending count", async () => {
@@ -2894,7 +2883,6 @@ describe("rollback surface", () => {
 
     await openAgentRuns(user);
     // Rollback lives with apply, behind Approval Review.
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
         name: new RegExp(`generated ${AI_PATH.replace(/[/.]/g, "\\$&")}`),
@@ -3196,7 +3184,6 @@ describe("repository-scoped facts", () => {
     await screen.findByRole("button", { name: "Review" });
     const user = userEvent.setup();
     await openAgentRuns(user);
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
@@ -3401,7 +3388,6 @@ describe("repository switching", () => {
     // Drive a real apply to a real in-flight state: `Apply Patch` only appears
     // once validation, approval, and every readiness gate have passed.
     await openAgentRuns(user);
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
@@ -3483,112 +3469,16 @@ describe("repository-scoped agent runs and approvals", () => {
       );
   }
 
-  it("splits agent runs into the active repository's work and an explicit unlinked group", async () => {
-    // `run-mvp-shell` links to this repository. `run-index-refresh` loses its
-    // proposal entirely, so nothing can say which repository it belongs to.
-    const { user } = renderApp({
-      repositories: [activeRepository],
-      proposedChanges: proposalsFor(activeRepository.id),
-    });
-
-    await openAgentRuns(user);
-
-    const unlinkedGroup = await screen.findByRole("group", {
-      name: "Not linked to a saved repository",
-    });
-
-    // Fails in both directions: with no filter the unlinked run sits in the
-    // main list and the group never renders; over-filter and the scoped run
-    // disappears from it.
-    expect(
-      within(unlinkedGroup).getByRole("button", {
-        name: /Refresh repository context index/,
-      }),
-    ).toBeInTheDocument();
-    expect(
-      within(unlinkedGroup).queryByRole("button", {
-        name: /Draft app shell implementation plan/,
-      }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", {
-        name: /Open agent run Draft app shell implementation plan/,
-      }),
-    ).toBeInTheDocument();
-  });
-
-  it("hides another saved repository's agent run without grouping it as unlinked", async () => {
-    const { user } = renderApp({
-      repositories: bothRepositories,
-      proposedChanges: proposalsFor(activeRepository.id, otherRepository.id),
-    });
-
-    await openAgentRuns(user);
-
-    expect(
-      await screen.findByRole("button", {
-        name: /Open agent run Draft app shell implementation plan/,
-      }),
-    ).toBeInTheDocument();
-    // Another repository's work: not shown here, and not mislabelled as
-    // unlinked either -- its link resolves perfectly well.
-    expect(
-      screen.queryByRole("button", {
-        name: /Open agent run Refresh repository context index/,
-      }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("group", { name: "Not linked to a saved repository" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("does not print the active repository's branch beside an unlinked run", async () => {
-    const { user } = renderApp({
-      repositories: [activeRepository],
-      proposedChanges: proposalsFor(activeRepository.id),
-    });
-
-    await openAgentRuns(user);
-    await user.click(
-      await screen.findByRole("button", {
-        name: /Open agent run Refresh repository context index/,
-      }),
-    );
-
-    expect(
-      await screen.findByRole("heading", {
-        name: "Refresh repository context index",
-      }),
-    ).toBeInTheDocument();
-    // The whole defect: one repository's name printed directly above another
-    // repository's branch. `release-2026-07` belongs to no run on this screen.
-    expect(screen.queryByText("release-2026-07")).not.toBeInTheDocument();
-    expect(
-      screen.getByText("Not linked to a saved repository", {
-        selector: "dd",
-      }),
-    ).toBeInTheDocument();
-  });
-
-  it("renders an empty agent run detail rather than crashing when no run is visible", async () => {
-    // Both demo runs belong to the other saved repository, so the active
-    // repository has no runs and nothing is unlinked. Before the guard, the
-    // detail card dereferenced an undefined run and the render threw.
-    const { user } = renderApp({
-      repositories: bothRepositories,
-      proposedChanges: proposalsFor(otherRepository.id, otherRepository.id),
-    });
-
-    await openAgentRuns(user);
-
-    expect(
-      await screen.findByRole("heading", { name: "No agent run selected" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("group", { name: "Not linked to a saved repository" }),
-    ).not.toBeInTheDocument();
-  });
-
+  /*
+   * Part 5 deleted the Agent Runs destination, and with it the rendered run
+   * list and run-detail card. The four agent-run rendering tests that lived
+   * here (list splitting, hiding another repository's run, the branch-mismatch
+   * guard, and the empty-detail guard) are removed rather than re-pointed: their
+   * subject no longer exists. The scoping LOGIC they exercised -- the shared
+   * `scopeRecordsToRepository` -- is still covered in full by the parallel
+   * approval tests below, which render the same scoped/unlinked grouping in
+   * Review's queue.
+   */
   it("splits approvals into the active repository's work and an explicit unlinked group", async () => {
     const { user } = renderApp({
       repositories: [activeRepository],
@@ -3735,9 +3625,12 @@ describe("no fabricated repository", () => {
     const unlinkedGroup = await screen.findByRole("group", {
       name: "Not linked to a saved repository",
     });
+    // Part 5: the demo record is now surfaced by its approval in Review's queue
+    // (the run list is gone), and it lands in the unlinked group because nothing
+    // saved matches its proposal's repository.
     expect(
       within(unlinkedGroup).getByRole("button", {
-        name: /Open agent run Draft app shell implementation plan/,
+        name: /Review approval Approve provider abstraction patch plan/,
       }),
     ).toBeInTheDocument();
   });
@@ -3756,13 +3649,13 @@ describe("one apply entry point (#8 / #11 slice A)", () => {
     files: [],
   };
 
-  it("renders the apply affordance only in Approvals, never in Agent Runs", async () => {
+  it("renders the apply affordance in exactly one place on Review", async () => {
     const { user } = renderApp({ gitStatus: cleanGitStatus });
 
     // Drive the artifact all the way to a live apply: validated and approved,
-    // entirely inside Approvals, which is now the sole apply surface.
+    // entirely inside Review, which is now the sole apply surface (part 5 folded
+    // Agent Runs in, so there is no second surface to leak an apply control to).
     await openAgentRuns(user);
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
@@ -3772,7 +3665,7 @@ describe("one apply entry point (#8 / #11 slice A)", () => {
     await screen.findByText("checks passed");
     await user.click(screen.getByRole("button", { name: "Approve" }));
 
-    // Exactly one apply affordance render site, and it is here in Approvals.
+    // Exactly one apply affordance render site, and exactly one patch detail.
     expect(
       await screen.findByRole("button", { name: "Apply Patch" }),
     ).toBeInTheDocument();
@@ -3782,37 +3675,24 @@ describe("one apply entry point (#8 / #11 slice A)", () => {
     expect(
       screen.getAllByRole("region", { name: "Patch artifact detail" }),
     ).toHaveLength(1);
-
-    // The same approved, validated run seen from Agent Runs offers no apply
-    // affordance and renders no patch artifact detail at all.
-    await openAgentRuns(user);
-    expect(
-      screen.queryByRole("button", { name: "Apply Patch" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("region", { name: "Patch artifact detail" }),
-    ).not.toBeInTheDocument();
   });
 
-  it("navigates from an Agent Run to its linked approval, with that approval selected", async () => {
+  it("selects a proposal's own approval from the review queue, not the default", async () => {
     const { user } = renderApp();
 
     await openAgentRuns(user);
-    // Pick the run whose linked approval is NOT the Approvals default, so the
-    // control must actually set the selection rather than land on it by chance.
+    // Select the second proposal directly from the queue -- part 5 removed the
+    // run-to-approval handoff; selection happens in place on Review.
     await user.click(
       await screen.findByRole("button", {
-        name: "Open agent run Refresh repository context index",
+        name: /Review approval Approve indexing job persistence follow-up/,
       }),
     );
 
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
-
-    // The section switched to Approvals...
     expect(
       await screen.findByRole("heading", { name: "2 pending approvals" }),
     ).toBeInTheDocument();
-    // ...with the run's own linked approval selected, not the default one.
+    // The selected approval's detail is shown, not the default one.
     expect(
       screen.getByRole("heading", {
         name: "Approve indexing job persistence follow-up",
@@ -3836,7 +3716,6 @@ describe("checks collapse into one line (#11 slice C)", () => {
 
   async function openGeneratedArtifact(user: ReturnType<typeof userEvent.setup>) {
     await openAgentRuns(user);
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
@@ -3981,7 +3860,6 @@ describe("Slice G: the six distinctions as copy", () => {
     user: ReturnType<typeof userEvent.setup>,
   ) {
     await openAgentRuns(user);
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,

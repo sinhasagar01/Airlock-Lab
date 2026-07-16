@@ -81,7 +81,6 @@ export const maintenanceActions = [
 export const navigationIcons: Record<NavigationSection, IconName> = {
   review: "approval",
   repositories: "repository",
-  agents: "play",
   "working-tree": "changes",
   settings: "settings",
 };
@@ -89,7 +88,6 @@ export const navigationIcons: Record<NavigationSection, IconName> = {
 export const sectionEyebrows: Record<NavigationSection, string> = {
   review: "Human approval",
   repositories: "Workspace repositories",
-  agents: "Agent runs",
   "working-tree": "Workspace changes",
   settings: "Workspace settings",
 };
@@ -105,11 +103,6 @@ export const sectionHeaders: Record<
     title: "Repositories",
     description:
       "Choose a repository and understand it through indexed facts, project structure, and safe local context.",
-  },
-  agents: {
-    title: "Agent Runs",
-    description:
-      "Inspect requested work, repository context, proposed plans, and the approval handoff.",
   },
   review: {
     title: "Review",

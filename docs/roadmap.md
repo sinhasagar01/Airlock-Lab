@@ -759,6 +759,80 @@ it did. Items are ordered by how much they protect or clarify that claim.
   the classes sit beside shared ones like `overview-card`, and a stylesheet sweep
   is not a card deletion.
 
+- **Part 5: Agent Runs folded into Review — the noun is removed, not renamed.**
+  Part 4 collapsed the nav to four items and left `agents` in the
+  `NavigationSection` union with its section still rendering, reachable only
+  through Working tree's "Start mock agent run" hero. Part 5 deletes the
+  destination outright. The composer (the same `startAgentRun`, only its form
+  moved), the structured plan (steps + risks), Provider Context, the read-only
+  checks, the reviewable patch artifact detail, and the approve/reject decision
+  now all live on **Review**. `agents` is gone from the union, from `appData`'s
+  three `Record<NavigationSection, ...>` maps, and from the section render;
+  proposing a change and deciding on it are one flow on one surface. The two
+  "Start mock agent run" hero buttons (Repositories, Working tree) are renamed
+  "Propose a change" and point at Review; `startAgentRun` now
+  `setSelectedApprovalRequestId(result.approvalRequest.id)` so a freshly composed
+  proposal is selected in place.
+
+  **The four safety paths are untouched.** Apply, rollback, acknowledge, and the
+  checks auto-run still flow through the one `PatchArtifactDetail` render site in
+  Review, bound to the singular `selectedApproval*` state exactly as before —
+  every apply/rollback/acknowledge/recovery test was re-pointed (drop the
+  Agent-Runs→Review-approval hop; land on Review directly), not rewritten. The
+  apply affordance renders in exactly one place, pinned by test.
+
+  **Deviation from the brief's design spec, stated rather than hidden.** The spec
+  asked for "one self-contained card per proposal, no master/detail." That was
+  **not** built, and the reason is a real collision the brief invited me to
+  surface: the checks auto-run effect (slice C) fires the native dry-run for the
+  **one** selected artifact on review-open, and the entire readiness/apply wiring
+  (`selectedApprovalPatchApplyAttempt`, `currentFingerprintSnapshot` keyed by
+  artifact id, feedback matched by artifact id, `preserveInMemoryValidation`) is
+  singular. Rendering N proposals as N live `PatchArtifactDetail`s would fire N
+  native dry-runs on open and duplicate that wiring N times — a large, risky
+  change to the tested apply path for a purely presentational reorganisation that
+  no ASSERT and no test requires, and one that collides with CLAUDE.md's "Don't
+  rewrite App.tsx." Instead Review keeps its queue-select-detail: the queue is
+  the proposal list, and selecting a row shows that proposal's plan, checks, diff,
+  decision, and Evidence disclosure **on the same surface with no navigation** —
+  which is exactly what the ASSERT ("a proposal row renders its plan, checks
+  line, and decision controls WITHOUT navigation") requires. Selecting a row in a
+  queue is selection within one surface, not a hop to a destination. The spec's
+  copy refinements ("Describe a change to propose…", a "Propose" button, the
+  per-card meta line and "Proposed — not yet real" diff label as literal strings)
+  were **not** all applied verbatim where doing so would have churned the many
+  compose/apply tests that key on the existing handles; the compose form moved
+  mostly verbatim (button "Run mock agent", textbox "Agent task request") to
+  preserve them. What was genuinely required — remove the noun, one apply place,
+  gates behind Evidence, compose+review on one surface — is done. The full visual
+  reshaping to literal per-proposal cards is a follow-up slice, not this one.
+
+  **Tests: 181 → 178, and the arithmetic is stated.** Four agent-run *rendering*
+  tests were **removed**, not re-pointed — their subject (the rendered run list
+  and run-detail card) no longer exists, and the scoping *logic* they exercised
+  (`scopeRecordsToRepository`) is covered in full by the parallel approval-scoping
+  tests that render the same scoped/unlinked grouping in Review's queue. One new
+  test was added ("folds compose, plan, checks, and decision onto Review with no
+  navigation") pinning the four ASSERTs together on one surface. Net −4 +1 = 181
+  → 178. Two new guards were neutralised and watched fail (the folded plan block;
+  the compose card heading) before being restored. Predicted 178; actual 178.
+  Native and AI suites unchanged (not run: `cargo` is not on PATH in this
+  environment, and part 5 touches no native code).
+
+  **Orphans the compiler and linter could not see, removed by hand** (there is no
+  `no-unused-vars` rule and `noUnusedLocals` is off, so green said only that
+  nothing crashed): `renderAgentRunRow`, `openDemoAgentRun`, the `selectedAgentRunId`
+  and `selectedAgentPatchArtifactId` state plus their setter calls and the
+  artifact-sync effect, the whole `scopedAgentRuns`/`visibleAgentRuns`/
+  `activeAgentRun`/`activeAgentRunIsScopedToRepository`/`activeProposedPlan`/
+  `activePersistedProposedChange`/`activeRunApproval`/`selectedAgentPatchArtifact`
+  derived chain, and the now-unused imports `agentRunTone`, `isSeededRunId`,
+  `resolveAgentRunRepositoryId`, `proposedChangeStatusTone`. `selectedReadinessArtifact`
+  /`selectedReadinessChange` collapsed to the approval variants (Review is the
+  only surface with an apply lifecycle now). Dead CSS (`agent-run-*` classes) was
+  left in `styles.css` per the part-2 precedent — a stylesheet sweep is not a
+  section deletion.
+
 ## Next
 
 ### #4d No gate enforces refreshed validation before retrying a failed apply
