@@ -1102,23 +1102,27 @@ dt {
   margin-top: 20px;
 }
 
+/*
+  One content column, because one child is rendered. This template used to be
+  `24px minmax(0, 1fr) max-content` -- a marker track, a content track, and a
+  time track -- back when the card was the fabricated activity feed. #2 deleted
+  the marker <span> and the <time>, leaving the content <div> as the only child,
+  and grid auto-placement dropped it into the 24px marker track. Combined with
+  `overflow-wrap: anywhere` on .overview-card h3, a repository name did not
+  overflow -- it broke between characters and rendered vertically.
+
+  The `:not(:last-child)::after` rail went with it, not as unrelated cleanup:
+  it was a 1px timeline spine at `left: 11px`, the centre of the deleted marker
+  track, joining markers that no longer exist. With content starting at x=0 it
+  would have struck through the text -- a new break introduced by this fix.
+*/
 .reference-activity-item {
   align-items: start;
   display: grid;
   gap: 14px;
-  grid-template-columns: 24px minmax(0, 1fr) max-content;
+  grid-template-columns: minmax(0, 1fr);
   min-height: 54px;
   position: relative;
-}
-
-.reference-activity-item:not(:last-child)::after {
-  background: #f0dfcf;
-  bottom: -2px;
-  content: "";
-  left: 11px;
-  position: absolute;
-  top: 28px;
-  width: 1px;
 }
 
 .reference-activity-marker {
