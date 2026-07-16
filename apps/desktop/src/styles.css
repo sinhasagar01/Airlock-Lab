@@ -2583,37 +2583,41 @@ dt {
   overflow-wrap: anywhere;
 }
 
-.patch-validation-panel {
-  align-items: center;
+.patch-checks {
   background: var(--color-surface-muted);
   border: 1px solid #e1e8f0;
   border-radius: var(--radius-md);
   display: grid;
-  gap: 16px;
-  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 6px;
   padding: 16px;
 }
 
-.patch-validation-panel__title {
+.patch-checks__title {
   align-items: center;
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
 }
 
-.patch-validation-panel__title > span:first-child {
+.patch-checks__title > span:first-child {
   color: var(--color-text-primary);
   font-size: 13px;
   font-weight: 760;
   line-height: 1.3;
 }
 
-.patch-validation-panel p {
+.patch-checks__reason {
   color: var(--color-text-secondary);
   font-size: 12px;
   font-weight: 520;
   line-height: 1.5;
-  margin-top: 6px;
+}
+
+.patch-checks__observed {
+  color: var(--color-text-tertiary, var(--color-text-secondary));
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
 }
 
 .patch-apply-recovery {
@@ -4796,7 +4800,6 @@ dd {
   .approval-side-column,
   .approval-decision-card,
   .approval-card-grid,
-  .patch-validation-panel,
   .patch-apply-recovery__facts,
   .apply-readiness__gates,
   .settings-row,

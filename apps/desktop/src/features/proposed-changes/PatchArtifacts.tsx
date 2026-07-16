@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import {
   initialPatchValidationStatus,
   type PatchApplyAttempt,
-  type PatchValidationStatus,
   type ProposedPatchArtifact,
 } from "@ai-dev/ai";
 import {
@@ -20,8 +19,10 @@ import {
 import {
   applyReadinessGateStatusLabel,
   evaluateApplyReadiness,
+  summarizeChecks,
   type ApplyReadinessContext,
   type ApplyReadinessGateStatus,
+  type ChecksSummaryStatus,
 } from "./applyReadiness";
 import {
   evaluateRollbackEligibility,
@@ -78,20 +79,28 @@ function patchArtifactSummary(artifact: ProposedPatchArtifact) {
   return "No generated patch content is stored";
 }
 
-function patchValidationTone(status: PatchValidationStatus) {
-  if (status === "dry_run_passed") {
+function checksTone(status: ChecksSummaryStatus) {
+  if (status === "passed") {
     return "success" as const;
   }
 
-  if (status === "invalid_structure" || status === "dry_run_failed") {
+  if (status === "failed") {
     return "danger" as const;
   }
 
-  if (status === "valid_structure") {
-    return "warning" as const;
+  return "warning" as const;
+}
+
+function checksStatusLabel(status: ChecksSummaryStatus) {
+  if (status === "passed") {
+    return "checks passed";
   }
 
-  return "neutral" as const;
+  if (status === "failed") {
+    return "checks failed";
+  }
+
+  return "checks incomplete";
 }
 
 export function PatchArtifactList({
@@ -180,11 +189,11 @@ type PatchArtifactDetailProps = {
   isAcknowledging?: boolean;
   isApplying?: boolean;
   isRollingBack?: boolean;
-  isValidating?: boolean;
+  isRunningChecks?: boolean;
   onAcknowledge?: (confirmationPhrase: string) => void;
   onApply?: (confirmationPhrase: string) => void;
   onRollback?: (confirmationPhrase: string) => void;
-  onValidate?: () => void;
+  onRunChecks?: () => void;
   rollbackEligibilityContext?: RollbackEligibilityContext | null;
   rollbackFeedback?: {
     status: "success" | "error";
@@ -231,11 +240,11 @@ export function PatchArtifactDetail({
   isAcknowledging = false,
   isApplying = false,
   isRollingBack = false,
-  isValidating = false,
+  isRunningChecks = false,
   onAcknowledge,
   onApply,
   onRollback,
-  onValidate,
+  onRunChecks,
   rollbackEligibilityContext = null,
   rollbackFeedback = null,
 }: PatchArtifactDetailProps) {
@@ -246,10 +255,7 @@ export function PatchArtifactDetail({
   const [isConfirmingRollback, setIsConfirmingRollback] = useState(false);
   const [rollbackPhrase, setRollbackPhrase] = useState("");
   const [showAdvancedGates, setShowAdvancedGates] = useState(false);
-  const validationStatus = artifact
-    ? initialPatchValidationStatus(artifact)
-    : "unavailable";
-  const canValidate = Boolean(
+  const canRunChecks = Boolean(
     artifact?.status === "generated" &&
     !artifact.isBinary &&
     !artifact.isTooLarge &&
@@ -258,6 +264,21 @@ export function PatchArtifactDetail({
   const applyReadiness = artifact
     ? evaluateApplyReadiness(artifact, applyReadinessContext)
     : null;
+  const checksSummary = applyReadiness ? summarizeChecks(applyReadiness) : null;
+  // The recorded moment the checks were last observed. It is a static point in
+  // time carried on the line, not a live subscription -- there is no watcher.
+  const checksObservedAt = artifact?.dryRunAt ?? artifact?.validatedAt ?? null;
+  // The checks run a native git subprocess. Fire it once, on open, and only in
+  // the native runtime: the browser preview cannot run git, and a stale but
+  // already-observed artifact is reported, never silently re-validated.
+  const shouldAutoRunChecks = Boolean(
+    artifact &&
+    applyReadinessContext.isNativeRuntime &&
+    onRunChecks &&
+    canRunChecks &&
+    artifact.applyStatus === undefined &&
+    !artifact.validatedAt,
+  );
   const canApply = Boolean(applyReadiness?.canApply && onApply);
   const applicationVerified =
     artifact?.applyStatus === "applied" ||
@@ -299,6 +320,17 @@ export function PatchArtifactDetail({
     setIsConfirmingRollback(false);
     setRollbackPhrase("");
     setShowAdvancedGates(false);
+  }, [artifact?.id]);
+
+  // Keyed on the artifact id: the checks are a one-time observation taken when
+  // this artifact is opened, not a watcher. Re-opening an already-observed
+  // artifact does not re-run them (guarded by `shouldAutoRunChecks`), so a stale
+  // observation is reported by the projection rather than silently refreshed.
+  useEffect(() => {
+    if (shouldAutoRunChecks) {
+      onRunChecks?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [artifact?.id]);
 
   // Display-only: the readiness logic is authoritative and untouched. The full
@@ -352,33 +384,32 @@ export function PatchArtifactDetail({
         </div>
       </dl>
 
-      {artifact ? (
-        <div className="patch-validation-panel">
-          <div>
-            <div className="patch-validation-panel__title">
-              <span>Validation and dry-run</span>
-              <StatusPill
-                tone={patchValidationTone(validationStatus)}
-                size="sm"
-                showDot={false}
-              >
-                {validationStatus.replaceAll("_", " ")}
-              </StatusPill>
-            </div>
-            <p>
-              {artifact.validationMessage ??
-                (validationStatus === "not_validated"
-                  ? "Structure and applicability have not been checked against the selected repository."
-                  : "This artifact does not have reviewable text content for validation.")}
-            </p>
+      {artifact && checksSummary ? (
+        <div className="patch-checks" aria-label="Checks">
+          <div className="patch-checks__title">
+            <span>Checks</span>
+            <StatusPill
+              tone={isRunningChecks ? "neutral" : checksTone(checksSummary.status)}
+              size="sm"
+              showDot={false}
+            >
+              {isRunningChecks
+                ? "running checks"
+                : checksStatusLabel(checksSummary.status)}
+            </StatusPill>
           </div>
-          <SecondaryButton
-            disabled={!canValidate || isValidating}
-            icon="approval"
-            onClick={onValidate}
-          >
-            {isValidating ? "Checking patch" : "Validate & dry-run"}
-          </SecondaryButton>
+          <p className="patch-checks__reason" role="status">
+            {isRunningChecks
+              ? "Running structure validation and the read-only Git dry-run."
+              : checksSummary.reason}
+          </p>
+          <p className="patch-checks__observed">
+            {checksObservedAt
+              ? `Checks observed at ${checksObservedAt}. They are not re-run while this approval stays open.`
+              : applyReadinessContext.isNativeRuntime
+                ? "Checks run once when this approval is opened."
+                : "Checks run in the native desktop app, not the browser preview."}
+          </p>
         </div>
       ) : null}
 

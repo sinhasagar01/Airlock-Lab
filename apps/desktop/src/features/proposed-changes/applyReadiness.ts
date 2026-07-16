@@ -452,6 +452,55 @@ export function evaluateApplyReadiness(
   };
 }
 
+export type ChecksSummaryStatus = "passed" | "failed" | "incomplete";
+
+export type ChecksSummary = {
+  status: ChecksSummaryStatus;
+  reason: string;
+};
+
+// "Checks" is validation and the read-only dry-run collapsed into one verdict,
+// plus the freshness evidence that decides whether that verdict still holds. It
+// is a coarse projection of the SAME evaluator the Advanced list renders in full
+// -- never a read of the durable `validationStatus`. That field records that a
+// dry-run once passed and is never cleared (#4d), so a line that read it would
+// report "passed" over a repository that has since moved out from under the
+// artifact. The freshness gates are what make the projection honest: an artifact
+// whose validated snapshot no longer matches the working tree fails here, even
+// though its stored dry-run status still says it passed.
+const CHECK_GATE_IDS: readonly ApplyReadinessGate["id"][] = [
+  "structure",
+  "dry_run",
+  "artifact_digest",
+  "validation_snapshot",
+  "target_fingerprints",
+  "repository_staleness",
+];
+
+export function summarizeChecks(result: ApplyReadinessResult): ChecksSummary {
+  const checkGates = CHECK_GATE_IDS.map((id) =>
+    result.gates.find((item) => item.id === id),
+  ).filter((item): item is ApplyReadinessGate => item !== undefined);
+
+  const blocked = checkGates.find((item) => item.status === "blocked");
+  if (blocked) {
+    return { status: "failed", reason: blocked.detail };
+  }
+
+  const incomplete = checkGates.find(
+    (item) => item.status === "not_checked" || item.status === "future",
+  );
+  if (incomplete) {
+    return { status: "incomplete", reason: incomplete.detail };
+  }
+
+  return {
+    status: "passed",
+    reason:
+      "Structure validation and the read-only Git dry-run passed, and the validated repository state still matches.",
+  };
+}
+
 export function applyReadinessGateStatusLabel(
   status: ApplyReadinessGateStatus,
 ) {

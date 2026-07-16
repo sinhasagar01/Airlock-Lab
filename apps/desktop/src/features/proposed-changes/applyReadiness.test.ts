@@ -5,6 +5,7 @@ import type {
 import { describe, expect, it } from "vitest";
 import {
   evaluateApplyReadiness,
+  summarizeChecks,
   type ApplyReadinessContext,
 } from "./applyReadiness";
 
@@ -340,5 +341,76 @@ describe("evaluateApplyReadiness", () => {
 
     expect(gateStatus(result, "target_fingerprints")).toBe("future");
     expect(gateStatus(result, "repository_staleness")).toBe("future");
+  });
+});
+
+// The checks line is a projection of THIS evaluator, not of the durable
+// validationStatus. Every case here shares its inputs with an evaluateApplyReadiness
+// case above; summarizeChecks only changes the level of detail.
+describe("summarizeChecks", () => {
+  it("passes when structure, dry-run, and every freshness gate pass", () => {
+    const summary = summarizeChecks(
+      evaluateApplyReadiness(generatedArtifact(), readyContext),
+    );
+
+    expect(summary.status).toBe("passed");
+    expect(summary.reason).toContain("read-only Git dry-run passed");
+  });
+
+  // The critical property, in pure form. The artifact's durable validationStatus
+  // is "dry_run_passed" -- a naive line that read it would say "passed". The
+  // repository has moved under the artifact, so the evaluator blocks staleness
+  // and the projection must report failed with the staleness reason.
+  it("fails on staleness even though the durable status still says dry_run_passed", () => {
+    const artifact = generatedArtifact();
+    expect(artifact.validationStatus).toBe("dry_run_passed");
+
+    const summary = summarizeChecks(
+      evaluateApplyReadiness(artifact, {
+        ...readyContext,
+        currentRepositorySnapshot: {
+          ...validationSnapshot,
+          headSha: "def5678",
+          repositorySnapshotDigest: "b".repeat(64),
+        },
+      }),
+    );
+
+    expect(summary.status).toBe("failed");
+    expect(summary.reason).toBe(
+      "Repository state changed after validation. Re-run validation before future apply.",
+    );
+  });
+
+  it("fails when the read-only dry-run failed", () => {
+    const summary = summarizeChecks(
+      evaluateApplyReadiness(
+        generatedArtifact({ validationStatus: "dry_run_failed" }),
+        readyContext,
+      ),
+    );
+
+    expect(summary.status).toBe("failed");
+    expect(summary.reason).toBe("The read-only Git applicability check failed.");
+  });
+
+  it("is incomplete before validation has run", () => {
+    const summary = summarizeChecks(
+      evaluateApplyReadiness(
+        generatedArtifact({
+          validationStatus: "not_validated",
+          validatedArtifactDigest: undefined,
+          validationRepositorySnapshot: undefined,
+          validatedAt: undefined,
+          dryRunAt: undefined,
+        }),
+        readyContext,
+      ),
+    );
+
+    expect(summary.status).toBe("incomplete");
+    expect(summary.reason).toBe(
+      "Run structure validation before evaluating this gate.",
+    );
   });
 });

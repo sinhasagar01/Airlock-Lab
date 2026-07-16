@@ -380,6 +380,61 @@ it did. Items are ordered by how much they protect or clarify that claim.
   shown failing for the right reason (`scanRepositoryFileTree` never called) before
   the change. Predicted 154 → 156 frontend; actual 156.
 
+- **IA restructure slice C — validate and dry-run collapse into one Checks line
+  that runs on review-open.** The artifact detail carried a "Validation and
+  dry-run" panel with a **Validate & dry-run** button the operator had to click,
+  and a status pill that read the durable `validationStatus`. That field is
+  written once and **never cleared** (#4d), so the pill said "passed" over a
+  repository that had since moved out from under the artifact. The panel is now a
+  single **Checks** line, and it is **a projection of `evaluateApplyReadiness`,
+  not of `validationStatus`** — the same evaluator the Advanced gate list renders
+  in full, at two detail levels. The checks verdict reads six gates (structure,
+  dry-run, artifact digest, validation snapshot, target fingerprints, repository
+  staleness): any blocked gate is a failed line naming that gate's reason, so a
+  stale dry-run is reported failed even while its stored status still says passed.
+
+  **Proven failing against a naive `validationStatus`-reading implementation
+  first, as the brief required.** With the projection wired to only the
+  structure and dry-run gates — the two that are pure functions of
+  `validationStatus` — the critical test rendered "checks passed" for an artifact
+  whose `repositorySnapshotDigest` no longer matched. Adding the freshness gates
+  turned it to "checks failed" naming the staleness reason. Pinned in both the
+  App surface and a pure `summarizeChecks` unit test.
+
+  **The checks run on review-open, exactly once, and never in the browser.** An
+  effect keyed on the artifact id fires the native dry-run when a generated,
+  never-checked artifact with no apply lifecycle is opened in the native runtime.
+  Re-opening an already-checked artifact does not re-invoke native (guarded by
+  `!validatedAt`), and a stale-but-checked artifact is **reported stale, not
+  silently re-validated** — which is exactly what makes the critical staleness
+  case observable. The line carries its observation time (`dryRunAt ?? validatedAt`)
+  and states that checks are not re-run while the approval stays open; there is no
+  watcher. The two guards that matter — native-runtime and already-checked — were
+  neutralised and watched fail (the browser test fired a subprocess; the re-open
+  and staleness tests re-invoked native) before being restored.
+
+  **A real concurrency bug the auto-run exposed, fixed with it.** The review-open
+  reconcile reload (`reconcileApplyAttemptsForReview`) reads durable storage and
+  can land its state update *after* the check has written its passed result,
+  reverting the surface to "not validated" with no trigger to re-run — the
+  auto-run is keyed on the artifact id, which did not change. Because validation
+  is durable and never cleared (#4d), a reloaded artifact that lacks a validation
+  the in-memory copy already has is a **stale read, not a cleared field**. A new
+  `preserveInMemoryValidation` keeps the fresher in-memory validation while
+  leaving the recomputed current-content digest untouched — so a genuinely
+  changed artifact still fails the digest gate rather than inheriting a stale
+  pass. Without it, the OpenAI end-to-end test's checks stuck at "incomplete";
+  the same race made the default-fixture path timing-dependent.
+
+  **`applyReadiness.ts`'s gate logic was not touched** — `summarizeChecks` is a
+  new pure projection over the existing gates, so the apply button's disabled
+  state and its pinning tests are unchanged. Display and UI-local state only: no
+  types, tables, columns, or serde names changed. The CSS `patch-validation-panel`
+  rules were renamed to `patch-checks`. Twelve apply/validate/OpenAI tests that
+  clicked the removed button were re-routed to the auto-run; predicted 156 → 168
+  frontend (+4 App checks, +4 `summarizeChecks`, +4 `preserveInMemoryValidation`);
+  actual 168. Native 104 and AI 15 unchanged.
+
 ## Next
 
 ### #4d No gate enforces refreshed validation before retrying a failed apply
@@ -509,8 +564,12 @@ green unmodified (see the Done entry). D: Index merged into Select — selecting
 repository starts indexing on both selection surfaces (native picker first-run and
 saved-list switch), with no control between select and indexed; Reindex survives as
 an explicit action for refreshing an already-indexed repository, and its label
-stops asserting a first index that never happened (see the Done entry). Remaining:
-C, then 3 nav rename, 4 domain nouns, 5 the six distinctions, 6 demo-workflow copy.
+stops asserting a first index that never happened (see the Done entry). C: validate
+and dry-run collapse into one Checks line that runs on review-open — a projection
+of `evaluateApplyReadiness`, not of the durable `validationStatus`, so a stale
+dry-run reads failed rather than "passed" forever (#4d), and the reload race it
+exposed is closed by `preserveInMemoryValidation` (see the Done entry). Remaining:
+3 nav rename, 4 domain nouns, 5 the six distinctions, 6 demo-workflow copy.
 (The letter/number split is intentional: these lettered slices — order A, B, D, C,
 E, F, G — are the restructure's stable identifiers; the numbers above predate them
 and are kept for continuity.) The bound throughout is user-visible copy

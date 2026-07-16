@@ -80,6 +80,7 @@ import {
 import {
   mergeSeedApprovalRequests,
   mergeSeedProposedChanges,
+  preserveInMemoryValidation,
   reconcileAgentRunApprovalStatuses,
 } from "./lib/seedMerging";
 import {
@@ -1839,7 +1840,12 @@ export function App() {
 
         if (isMounted) {
           setPatchApplyAttempts(attempts);
-          setPersistedProposedChanges(hydratedChanges);
+          // Preserve a validation this reload raced: the checks run on the same
+          // review-open, and their durable result must not be reverted by a
+          // read that landed before the check wrote it (#4d).
+          setPersistedProposedChanges((currentChanges) =>
+            preserveInMemoryValidation(hydratedChanges, currentChanges),
+          );
         }
       } catch {
         // Existing persisted state remains visible when diagnostics are unavailable.
@@ -3857,7 +3863,7 @@ export function App() {
                         }
                       : undefined
                   }
-                  isValidating={
+                  isRunningChecks={
                     selectedApprovalPatchArtifact?.id ===
                     validatingPatchArtifactId
                   }
@@ -3875,7 +3881,7 @@ export function App() {
                       );
                     }
                   }}
-                  onValidate={() => {
+                  onRunChecks={() => {
                     if (
                       selectedApprovalProposedChange &&
                       selectedApprovalPatchArtifact

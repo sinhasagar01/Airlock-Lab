@@ -1407,20 +1407,19 @@ describe("App smoke tests", () => {
     });
 
     await user.click(screen.getByRole("button", { name: "Agent Runs" }));
-    // Validation lives with apply, behind Approval Review.
+    // Checks run on review-open, behind Approval Review.
     await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
       }),
     );
-    await user.click(
-      screen.getByRole("button", { name: "Validate & dry-run" }),
-    );
 
-    expect(await screen.findByText("valid structure")).toBeInTheDocument();
+    // Structure passed but the native dry-run could not run, so the checks line
+    // reports incomplete -- never a false "passed" -- and names the dry-run gap.
+    expect(await screen.findByText("checks incomplete")).toBeInTheDocument();
     expect(
-      screen.getByText(/native Git dry-run is unavailable in this runtime/),
+      screen.getByText("A successful native dry-run has not been recorded."),
     ).toBeInTheDocument();
     expect(saveProposedChange).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -2051,10 +2050,8 @@ describe("App smoke tests", () => {
         name: /generated packages\/ai\/src\/index\.ts/,
       }),
     );
-    await user.click(
-      screen.getByRole("button", { name: "Validate & dry-run" }),
-    );
-    await screen.findByText("dry run passed");
+    // Checks run automatically on open; no validate control to click.
+    await screen.findByText("checks passed");
     await user.click(screen.getByRole("button", { name: "Approve" }));
     await user.click(
       await screen.findByRole("button", { name: "Apply Patch" }),
@@ -2284,7 +2281,8 @@ describe("App smoke tests", () => {
     expect(saveApprovalRequest).toHaveBeenCalledWith(
       expect.objectContaining({ status: "pending" }),
     );
-    // Validation and the reviewable detail live behind Approval Review now.
+    // The checks run on review-open behind Approval Review; the reviewable
+    // detail lives here too.
     await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", { name: /generated src\/App\.tsx/ }),
@@ -2292,20 +2290,19 @@ describe("App smoke tests", () => {
     expect(
       await screen.findByText("Provider-generated proposal · not applied"),
     ).toBeInTheDocument();
-    expect(screen.getByText("not validated")).toBeInTheDocument();
 
-    await user.click(
-      screen.getByRole("button", { name: "Validate & dry-run" }),
+    // Opening the artifact runs the native dry-run once; no human clicks it.
+    await waitFor(() =>
+      expect(dryRunGeneratedPatch).toHaveBeenCalledWith(
+        "repo-workspace",
+        "/workspace",
+        expect.objectContaining({ filePath: "src/App.tsx" }),
+        expect.objectContaining({ operation: "modify" }),
+        expect.stringMatching(/^[a-f0-9]{64}$/),
+        ["src/App.tsx"],
+      ),
     );
-    expect(dryRunGeneratedPatch).toHaveBeenCalledWith(
-      "repo-workspace",
-      "/workspace",
-      expect.objectContaining({ filePath: "src/App.tsx" }),
-      expect.objectContaining({ operation: "modify" }),
-      expect.stringMatching(/^[a-f0-9]{64}$/),
-      ["src/App.tsx"],
-    );
-    expect(await screen.findByText("dry run passed")).toBeInTheDocument();
+    expect(await screen.findByText("checks passed")).toBeInTheDocument();
     // Individual gate labels live behind the Advanced control now.
     await user.click(
       screen.getByRole("button", { name: /readiness gates/i }),
@@ -3386,8 +3383,8 @@ describe("repository switching", () => {
         name: /generated packages\/ai\/src\/index\.ts/,
       }),
     );
-    await user.click(screen.getByRole("button", { name: "Validate & dry-run" }));
-    await screen.findByText("dry run passed");
+    // Checks run on open; no validate control to click.
+    await screen.findByText("checks passed");
     await user.click(screen.getByRole("button", { name: "Approve" }));
     await user.click(await screen.findByRole("button", { name: "Apply Patch" }));
     await user.type(
@@ -3746,10 +3743,8 @@ describe("one apply entry point (#8 / #11 slice A)", () => {
         name: /generated packages\/ai\/src\/index\.ts/,
       }),
     );
-    await user.click(
-      screen.getByRole("button", { name: "Validate & dry-run" }),
-    );
-    await screen.findByText("dry run passed");
+    // Checks run on open; no validate control to click.
+    await screen.findByText("checks passed");
     await user.click(screen.getByRole("button", { name: "Approve" }));
 
     // Exactly one apply affordance render site, and it is here in Approvals.
@@ -3803,5 +3798,151 @@ describe("one apply entry point (#8 / #11 slice A)", () => {
         name: "Approve provider abstraction patch plan",
       }),
     ).not.toBeInTheDocument();
+  });
+});
+
+// Slice C (#11): validation and dry-run collapse into one "Checks" line that
+// runs on review-open. The line is a projection of evaluateApplyReadiness, not
+// of the durable `validationStatus` -- which records that a dry-run once passed
+// and is never cleared (#4d), so reading it would say "passed" forever even
+// once the repository moves out from under the artifact.
+describe("checks collapse into one line (#11 slice C)", () => {
+  const AI_ARTIFACT_ID = "proposal-file-ai-patch-artifact";
+
+  async function openGeneratedArtifact(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
+    await user.click(
+      await screen.findByRole("button", {
+        name: /generated packages\/ai\/src\/index\.ts/,
+      }),
+    );
+  }
+
+  it("runs the native dry-run once on open, with no Validate control, and reports a passed checks line with its observation time", async () => {
+    const { user } = renderApp();
+    await openGeneratedArtifact(user);
+
+    // Opening the approval and landing on the generated artifact runs the
+    // native dry-run exactly once. No human clicks a validate button.
+    await waitFor(() =>
+      expect(dryRunGeneratedPatch).toHaveBeenCalledTimes(1),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Validate & dry-run" }),
+    ).not.toBeInTheDocument();
+
+    // One checks line: a passed verdict, one reason, and the time it was
+    // observed. It is a static observation, not a live watcher.
+    expect(await screen.findByText("checks passed")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Structure validation and the read-only Git dry-run passed, and the validated repository state still matches.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Checks observed at 1783532400/)).toBeInTheDocument();
+  });
+
+  it("does not re-invoke the native dry-run when an already-checked artifact is re-opened", async () => {
+    const { user } = renderApp();
+    await openGeneratedArtifact(user);
+    await waitFor(() =>
+      expect(dryRunGeneratedPatch).toHaveBeenCalledTimes(1),
+    );
+    await screen.findByText("checks passed");
+
+    // Move to another artifact, then return to the already-checked one.
+    await user.click(
+      screen.getByRole("button", {
+        name: /not generated apps\/desktop\/src\/App\.tsx/,
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", {
+        name: /generated packages\/ai\/src\/index\.ts/,
+      }),
+    );
+
+    // The observation is not refreshed: still exactly one native invocation.
+    expect(await screen.findByText(/Checks observed at 1783532400/)).toBeInTheDocument();
+    expect(dryRunGeneratedPatch).toHaveBeenCalledTimes(1);
+  });
+
+  // CRITICAL. The durable validationStatus is "dry_run_passed" and is never
+  // cleared, but the repository snapshot no longer matches the validated one.
+  // A line that reads validationStatus says "passed" here -- a stale, false
+  // account. The line must project the evaluator, which blocks on staleness.
+  it("reports checks failed from the evaluator, not a stale passed status, when the repository moved under a validated artifact", async () => {
+    // The artifact content is unchanged; only the repository moved. The digest
+    // gate is left unbound (validatedArtifactDigest omitted), so the one gate
+    // that blocks is repository staleness -- the point under test. The app
+    // recomputes `artifactDigest` from the rawDiff on hydrate, so the current
+    // digest is present and the current-snapshot load fires.
+    const staleProposal: PersistedProposedChange = {
+      ...defaultProposedChanges[0],
+      patchArtifacts: defaultProposedChanges[0].patchArtifacts.map((artifact) =>
+        artifact.id === AI_ARTIFACT_ID
+          ? {
+              ...artifact,
+              validationStatus: "dry_run_passed" as const,
+              validationMessage:
+                "Git reported the patch applicable at validation time.",
+              validatedAt: "1783532400",
+              dryRunAt: "1783532400",
+              validationRepositorySnapshot: {
+                repositoryId: "repo-workspace",
+                branch: "main",
+                headSha: "abc1234",
+                isClean: false,
+                changedFileCount: 3,
+                relevantFilePaths: ["packages/ai/src/index.ts"],
+                artifactDigest: "a".repeat(64),
+                targetFileFingerprints: [
+                  {
+                    path: "packages/ai/src/index.ts",
+                    exists: true,
+                    sizeBytes: 120,
+                    modifiedAt: "1783532000",
+                    contentSha256: "f".repeat(64),
+                    status: "captured" as const,
+                  },
+                ],
+                // Stale: the working tree the artifact was validated against no
+                // longer matches the current repository snapshot ("a".repeat).
+                repositorySnapshotDigest: "b".repeat(64),
+                capturedAt: "1783532400",
+                fingerprintedAt: "1783532400",
+              },
+            }
+          : artifact,
+      ),
+    };
+    const { user } = renderApp({
+      proposedChanges: [staleProposal, ...defaultProposedChanges.slice(1)],
+    });
+    await openGeneratedArtifact(user);
+
+    expect(await screen.findByText("checks failed")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Repository state changed after validation. Re-run validation before future apply.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("checks passed")).not.toBeInTheDocument();
+    // A stale observation is reported, never silently re-run.
+    expect(dryRunGeneratedPatch).not.toHaveBeenCalled();
+  });
+
+  // The riskiest property: the checks line fires a native git subprocess on
+  // render. It must never fire in the browser preview, which cannot run git.
+  it("never fires the native dry-run subprocess in the browser runtime", async () => {
+    vi.mocked(isTauriRuntime).mockReturnValue(false);
+    const { user } = renderApp();
+    await openGeneratedArtifact(user);
+
+    expect(
+      await screen.findByText(/Checks run in the native desktop app/),
+    ).toBeInTheDocument();
+    expect(dryRunGeneratedPatch).not.toHaveBeenCalled();
   });
 });

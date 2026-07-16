@@ -1,7 +1,9 @@
+import type { PersistedProposedChange } from "@ai-dev/ai";
 import { describe, expect, it } from "vitest";
 import { agentRuns as mockAgentRuns, mockProposedChanges } from "./appData";
 import {
   mergeSeedProposedChanges,
+  preserveInMemoryValidation,
   reconcileAgentRunApprovalStatuses,
 } from "./seedMerging";
 
@@ -65,5 +67,95 @@ describe("mergeSeedProposedChanges", () => {
     expect(reconciledRun.nextStep).toBe(
       "Approval rejected. No patch has been applied.",
     );
+  });
+});
+
+describe("preserveInMemoryValidation", () => {
+  function changeWith(
+    artifactOverrides: Partial<PersistedProposedChange["patchArtifacts"][number]>,
+  ): PersistedProposedChange {
+    return {
+      id: "proposal-1",
+      runId: "run-1",
+      approvalRequestId: "approval-1",
+      repositoryId: "repo-1",
+      title: "Change",
+      summary: "Summary",
+      status: "ready_for_review",
+      files: [],
+      patchArtifacts: [
+        {
+          id: "artifact-1",
+          proposedChangeId: "proposal-1",
+          filePath: "src/App.tsx",
+          status: "generated",
+          isBinary: false,
+          isTooLarge: false,
+          rawDiff: "diff",
+          ...artifactOverrides,
+        },
+      ],
+      createdAt: "t",
+      updatedAt: "t",
+    };
+  }
+
+  const validated = changeWith({
+    validationStatus: "dry_run_passed",
+    validationMessage: "Passed.",
+    artifactDigest: "current-digest",
+    validatedArtifactDigest: "current-digest",
+    validatedAt: "2026-07-16T00:00:00.000Z",
+    dryRunAt: "2026-07-16T00:00:00.000Z",
+  });
+
+  it("keeps an in-memory validation the reload raced past", () => {
+    // The reload read the pre-check row: no validation on the reloaded artifact.
+    const reloaded = changeWith({ artifactDigest: "current-digest" });
+
+    const [result] = preserveInMemoryValidation([reloaded], [validated]);
+    const artifact = result.patchArtifacts[0];
+
+    expect(artifact.validationStatus).toBe("dry_run_passed");
+    expect(artifact.validatedAt).toBe("2026-07-16T00:00:00.000Z");
+    expect(artifact.validatedArtifactDigest).toBe("current-digest");
+  });
+
+  // Non-vacuous: with nothing to preserve, the reload passes through untouched,
+  // so this cannot silently turn every reload into a keep-in-memory.
+  it("passes the reload through when the in-memory copy has no validation either", () => {
+    const reloaded = changeWith({ validationStatus: "dry_run_failed" });
+    const currentUnvalidated = changeWith({});
+
+    const [result] = preserveInMemoryValidation([reloaded], [currentUnvalidated]);
+
+    expect(result.patchArtifacts[0].validationStatus).toBe("dry_run_failed");
+  });
+
+  it("does not overwrite a reload that carries its own validation", () => {
+    const reloaded = changeWith({
+      validationStatus: "dry_run_failed",
+      validatedAt: "2026-07-16T01:00:00.000Z",
+    });
+
+    const [result] = preserveInMemoryValidation([reloaded], [validated]);
+
+    expect(result.patchArtifacts[0].validationStatus).toBe("dry_run_failed");
+    expect(result.patchArtifacts[0].validatedAt).toBe(
+      "2026-07-16T01:00:00.000Z",
+    );
+  });
+
+  // The recomputed current-content digest survives, so a changed artifact that
+  // inherits a preserved validated digest still fails the digest gate rather
+  // than passing on stale evidence.
+  it("leaves the reloaded content digest untouched while preserving the validated digest", () => {
+    const reloaded = changeWith({ artifactDigest: "changed-content-digest" });
+
+    const [result] = preserveInMemoryValidation([reloaded], [validated]);
+    const artifact = result.patchArtifacts[0];
+
+    expect(artifact.artifactDigest).toBe("changed-content-digest");
+    expect(artifact.validatedArtifactDigest).toBe("current-digest");
   });
 });
