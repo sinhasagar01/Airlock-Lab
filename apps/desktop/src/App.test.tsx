@@ -948,7 +948,7 @@ describe("App smoke tests", () => {
       screen.getByRole("textbox", { name: "Agent task request" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Run mock agent" }),
+      screen.getByRole("button", { name: "Propose" }),
     ).toBeInTheDocument();
 
     // The selected proposal's plan (ASSERT: a proposal renders its plan without
@@ -965,7 +965,7 @@ describe("App smoke tests", () => {
     // ASSERT: no readiness gate label is in the document on arrival -- the gates
     // are evidence behind the Advanced disclosure, not workflow steps.
     expect(
-      screen.getByRole("button", { name: /Advanced.*readiness gates/i }),
+      screen.getByRole("button", { name: /Evidence/i }),
     ).toBeInTheDocument();
     expect(
       screen.queryByText("Artifact digest matches validation"),
@@ -1524,7 +1524,7 @@ describe("App smoke tests", () => {
     );
     expect(screen.getByText("Generated patch artifact")).toBeInTheDocument();
     expect(
-      screen.getByText("Provider-generated proposal · not applied"),
+      screen.getByText("Proposed — not yet real"),
     ).toBeInTheDocument();
     expect(
       screen.getByText("+export type PatchArtifact = string;"),
@@ -1641,7 +1641,7 @@ describe("App smoke tests", () => {
     }
 
     await user.click(
-      screen.getByRole("button", { name: /Advanced.*readiness gates/i }),
+      screen.getByRole("button", { name: /Evidence/i }),
     );
 
     // Every gate is present once revealed, each exactly once.
@@ -1660,7 +1660,7 @@ describe("App smoke tests", () => {
     // Reveal the gates to read the authoritative first blocking reason, without
     // hardcoding which gate blocks first in the fixture's default state.
     await user.click(
-      screen.getByRole("button", { name: /readiness gates/i }),
+      screen.getByRole("button", { name: /Evidence/i }),
     );
     const gateList = screen.getByRole("list", {
       name: "Apply readiness gates",
@@ -1677,7 +1677,7 @@ describe("App smoke tests", () => {
     // Collapse the gate list again: the reason survives as a single summary
     // line while the eighteen gate labels leave the document.
     await user.click(
-      screen.getByRole("button", { name: /readiness gates/i }),
+      screen.getByRole("button", { name: /Evidence/i }),
     );
     for (const label of APPLY_READINESS_GATE_LABELS) {
       expect(screen.queryByText(label)).not.toBeInTheDocument();
@@ -2270,7 +2270,7 @@ describe("App smoke tests", () => {
       screen.getByRole("textbox", { name: "Agent task request" }),
       "Add a repository context summary",
     );
-    await user.click(screen.getByRole("button", { name: "Run mock agent" }));
+    await user.click(screen.getByRole("button", { name: "Propose" }));
 
     // The freshly-composed proposal is selected in place, so its approval
     // detail heading appears on this same surface -- no navigation step.
@@ -2405,7 +2405,7 @@ describe("App smoke tests", () => {
       "Add provider-backed repository planning",
     );
     await user.click(
-      screen.getByRole("button", { name: "Generate plan with OpenAI" }),
+      screen.getByRole("button", { name: "Propose" }),
     );
 
     expect(
@@ -2453,7 +2453,7 @@ describe("App smoke tests", () => {
       await screen.findByRole("button", { name: /generated src\/App\.tsx/ }),
     );
     expect(
-      await screen.findByText("Provider-generated proposal · not applied"),
+      await screen.findByText("Proposed — not yet real"),
     ).toBeInTheDocument();
 
     // Opening the artifact runs the native dry-run once; no human clicks it.
@@ -2470,7 +2470,7 @@ describe("App smoke tests", () => {
     expect(await screen.findByText("checks passed")).toBeInTheDocument();
     // Individual gate labels live behind the Advanced control now.
     await user.click(
-      screen.getByRole("button", { name: /readiness gates/i }),
+      screen.getByRole("button", { name: /Evidence/i }),
     );
     expect(
       screen.getByText("Artifact digest matches validation"),
@@ -2530,7 +2530,7 @@ describe("App smoke tests", () => {
       "Create an invalid plan",
     );
     await user.click(
-      screen.getByRole("button", { name: "Generate plan with OpenAI" }),
+      screen.getByRole("button", { name: "Propose" }),
     );
 
     expect(
@@ -2568,7 +2568,7 @@ describe("App smoke tests", () => {
       "Create a provider plan",
     );
     await user.click(
-      screen.getByRole("button", { name: "Generate plan with OpenAI" }),
+      screen.getByRole("button", { name: "Propose" }),
     );
 
     expect(
@@ -2611,7 +2611,7 @@ describe("App smoke tests", () => {
     // only reason this state was never seen. It names the obstacle rather than
     // a repository, and the control that would act is not offered.
     expect(await screen.findByText("repository required")).toBeInTheDocument();
-    const runButton = screen.getByRole("button", { name: "Run mock agent" });
+    const runButton = screen.getByRole("button", { name: "Propose" });
     expect(runButton).toBeDisabled();
 
     await user.click(runButton);
@@ -3136,7 +3136,7 @@ describe("repository-scoped facts", () => {
       "Plan something",
     );
     await user.click(
-      screen.getByRole("button", { name: "Generate plan with OpenAI" }),
+      screen.getByRole("button", { name: "Propose" }),
     );
 
     await waitFor(() => expect(requestOpenAiPlan).toHaveBeenCalled());
@@ -3192,7 +3192,7 @@ describe("repository-scoped facts", () => {
 
     // The eighteen gates are behind the Advanced control now.
     await user.click(
-      await screen.findByRole("button", { name: /readiness gates/i }),
+      await screen.findByRole("button", { name: /Evidence/i }),
     );
 
     // The working-tree gate feeds apply readiness. A foreign clean tree must
@@ -3344,7 +3344,7 @@ describe("repository switching", () => {
       "Plan against the disposable repository",
     );
     await user.click(
-      screen.getByRole("button", { name: "Generate plan with OpenAI" }),
+      screen.getByRole("button", { name: "Propose" }),
     );
 
     await waitFor(() => expect(requestOpenAiPlan).toHaveBeenCalled());
@@ -4116,5 +4116,125 @@ describe("part 2: duplicated and empty cards are not drawn", () => {
     expect(
       screen.queryByLabelText("Type RESET WORKSPACE to confirm reset"),
     ).toBeNull();
+  });
+});
+
+// Part 5 finish: the design-spec copy on the folded Review surface. The
+// architecture stayed single-detail (a user decision, per CLAUDE.md's "don't
+// rewrite App.tsx"); these guards pin the honesty labels and compose copy the
+// spec calls for, which are independent of that architecture.
+describe("part 5: Review carries the design-spec copy", () => {
+  const withDiff = (): PersistedProposedChange[] => {
+    const proposal = defaultProposedChanges[0];
+    return [
+      {
+        ...proposal,
+        patchArtifacts: proposal.patchArtifacts.map((artifact) =>
+          artifact.filePath === "packages/ai/src/index.ts"
+            ? {
+                ...artifact,
+                rawDiff: [
+                  "diff --git a/packages/ai/src/index.ts b/packages/ai/src/index.ts",
+                  "--- a/packages/ai/src/index.ts",
+                  "+++ b/packages/ai/src/index.ts",
+                  "@@ -1 +1 @@",
+                  "-export type OldPlan = string;",
+                  "+export type NewPlan = string;",
+                ].join("\n"),
+              }
+            : artifact,
+        ),
+      },
+      ...defaultProposedChanges.slice(1),
+    ];
+  };
+
+  it("labels the compose control with the spec's copy", async () => {
+    const { user } = renderApp();
+
+    await openAgentRuns(user);
+
+    expect(
+      screen.getByPlaceholderText("Describe a change to propose…"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Propose" }),
+    ).toBeInTheDocument();
+  });
+
+  it("marks the proposed diff as proposed, not yet real", async () => {
+    const { user } = renderApp({ proposedChanges: withDiff() });
+
+    await openAgentRuns(user);
+    await user.click(
+      await screen.findByRole("button", {
+        name: /generated packages\/ai\/src\/index\.ts/,
+      }),
+    );
+
+    // The distinction the whole product exists to hold: a diff is what was
+    // proposed, not what is on disk. This label previously appeared nowhere.
+    expect(
+      await screen.findByText("Proposed — not yet real"),
+    ).toBeInTheDocument();
+  });
+
+  it("states the obligation, not the record state, on a pending proposal", async () => {
+    const { user } = renderApp();
+
+    await openAgentRuns(user);
+
+    // A pending approval is the user's obligation. The row said "pending"; it
+    // now says what the user must do.
+    expect(screen.getAllByText("Needs you").length).toBeGreaterThan(0);
+  });
+
+  it("says apply unlocks only after approval on a pending proposal", async () => {
+    const { user } = renderApp();
+
+    await openAgentRuns(user);
+
+    expect(
+      screen.getByText("Apply unlocks after approval"),
+    ).toBeInTheDocument();
+  });
+
+  it("names the gate disclosure Evidence", async () => {
+    const { user } = renderApp({ proposedChanges: withDiff() });
+
+    await openAgentRuns(user);
+    await user.click(
+      await screen.findByRole("button", {
+        name: /generated packages\/ai\/src\/index\.ts/,
+      }),
+    );
+
+    expect(
+      await screen.findByRole("button", { name: /Evidence/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("collapses a patchless proposal to a plan-only row", async () => {
+    const proposal = defaultProposedChanges[0];
+    const patchless: PersistedProposedChange = {
+      ...proposal,
+      patchArtifacts: proposal.patchArtifacts.map((artifact) => ({
+        ...artifact,
+        status: "not_generated" as const,
+        rawDiff: undefined,
+      })),
+    };
+    const { user } = renderApp({ proposedChanges: [patchless] });
+
+    await openAgentRuns(user);
+    await user.click(
+      (await screen.findAllByRole("button", { name: /not generated/i }))[0],
+    );
+
+    expect(
+      await screen.findByText(
+        "Plan only — the demo provider produced no patch",
+      ),
+    ).toBeInTheDocument();
   });
 });

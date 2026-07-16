@@ -2080,6 +2080,23 @@ export function App() {
   // into rendering a record differently depending on which one it landed in.
   function renderApprovalRow(approval: ApprovalRequest) {
     const linkedRun = agentRuns.find((run) => run.id === approval.agentRunId);
+    // The pill states the user's obligation, not the record's internal state:
+    // a pending request is work the user owes ("Needs you"); a proposal that
+    // carries no patch is not an apply the user can perform ("No patch").
+    const linkedChange = persistedProposedChanges.find(
+      (change) =>
+        change.approvalRequestId === approval.id ||
+        change.runId === approval.agentRunId,
+    );
+    const hasReviewablePatch = Boolean(
+      linkedChange?.patchArtifacts.some((artifact) => artifact.rawDiff),
+    );
+    const obligation =
+      approval.status === "pending"
+        ? "Needs you"
+        : hasReviewablePatch
+          ? approval.status
+          : "No patch";
 
     return (
       <button
@@ -2106,7 +2123,7 @@ export function App() {
             size="sm"
             showDot={false}
           >
-            {approval.status}
+            {obligation}
           </StatusPill>
           <StatusPill
             tone={approvalRiskTone(approval.risk)}
@@ -2591,7 +2608,7 @@ export function App() {
                   aria-label="Agent task request"
                   maxLength={1200}
                   onChange={(event) => setAgentTask(event.target.value)}
-                  placeholder={`Describe a change you want ${agentProviderName(selectedAgentProviderId)} to propose...`}
+                  placeholder="Describe a change to propose…"
                   rows={3}
                   value={agentTask}
                 />
@@ -2623,9 +2640,7 @@ export function App() {
                 >
                   {agentExecutionState === "running"
                     ? "Creating plan..."
-                    : selectedAgentProviderId === "openai"
-                      ? "Generate plan with OpenAI"
-                      : "Run mock agent"}
+                    : "Propose"}
                 </PrimaryButton>
               </div>
             </form>
@@ -2937,6 +2952,11 @@ export function App() {
                     >
                       Approve
                     </PrimaryButton>
+                    {selectedApprovalRequest.status === "pending" ? (
+                      <p className="approval-decision-hint">
+                        Apply unlocks after approval
+                      </p>
+                    ) : null}
                   </div>
                 </div>
               </article>

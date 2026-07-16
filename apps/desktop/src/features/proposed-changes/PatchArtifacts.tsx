@@ -614,8 +614,8 @@ export function PatchArtifactDetail({
               onClick={() => setShowAdvancedGates((shown) => !shown)}
             >
               {showAdvancedGates
-                ? "Hide all readiness gates"
-                : "Advanced: show all 18 readiness gates"}
+                ? "Hide evidence"
+                : "Evidence — 18 readiness gates"}
             </SecondaryButton>
             {showAdvancedGates ? (
               <ul
@@ -913,13 +913,13 @@ export function PatchArtifactDetail({
           </div>
         </div>
       ) : artifact.status === "not_generated" ? (
-        <div className="patch-artifact-state">
+        <div className="patch-artifact-state patch-artifact-state--plan-only">
           <IconBadge icon="changes" tone="neutral" size="md" />
           <div>
-            <h4>Patch not generated</h4>
+            <h4>Plan only — the demo provider produced no patch</h4>
             <p>
-              Future agent execution will attach a reviewable generated patch
-              here.
+              A real provider proposes a patch to review; the demo planned
+              without one. Nothing here can be applied.
             </p>
           </div>
         </div>
@@ -971,7 +971,12 @@ export function PatchArtifactDetail({
             actually changed.
           </p>
           <div className="generated-patch-preview__label">
-            Provider-generated proposal · not applied
+            <span className="generated-patch-preview__file">
+              {artifact.filePath}
+            </span>
+            <span className="generated-patch-preview__proposed">
+              Proposed — not yet real
+            </span>
           </div>
           <pre className="git-diff-code" tabIndex={0}>
             {artifact.rawDiff.split("\n").map((line, index) => (

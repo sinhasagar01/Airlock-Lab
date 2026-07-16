@@ -833,6 +833,49 @@ it did. Items are ordered by how much they protect or clarify that claim.
   left in `styles.css` per the part-2 precedent — a stylesheet sweep is not a
   section deletion.
 
+- **Part 5 (copy pass): the design-spec labels now land on the folded Review.**
+  The fold above deliberately deferred the spec's copy; this pass applies it on
+  the *same* single-detail architecture (a human decision — the alternative, a
+  literal per-proposal-card rebuild, was declined against CLAUDE.md's "Don't
+  rewrite App.tsx" and to avoid N cards firing N native dry-runs). Landed:
+  the compose control now reads "Describe a change to propose…" with a "Propose"
+  button (was "Run mock agent" / "Generate plan with OpenAI"); the proposed diff
+  carries a header strip **"Proposed — not yet real"** — the distinction the
+  product exists to hold, which appeared nowhere before; the approval-row pill
+  states the user's obligation, **"Needs you"** for pending and **"No patch"**
+  for a patchless proposal, not the record's internal status; a muted **"Apply
+  unlocks after approval"** sits beside Approve while pending; the gate
+  disclosure is reframed **"Evidence — 18 readiness gates"** / "Hide evidence";
+  a patchless artifact collapses to **"Plan only — the demo provider produced no
+  patch"**; and the shared compact page title drops to 25px/500.
+
+  **One honest deviation from the spec string.** The spec labels the disclosure
+  "Evidence — 18 checks, artifact digest, repository snapshot, fingerprints",
+  but the disclosure only reveals the 18 readiness gates. Shipping that full
+  label would promise three kinds of evidence the panel does not show — exactly
+  the fabrication class #2 and #3 record. The label names what it actually
+  reveals: "Evidence — 18 readiness gates". If the digest/snapshot/fingerprints
+  are wanted *in* the disclosure, that is a content change, not a copy one.
+
+  **Tests: 178 → 184.** Six new guards, each **watched failing for the right
+  reason first** (a genuinely-absent element, not an invented path — one had an
+  ambiguous `/not generated/i` selector that was tightened before it counted).
+  The obligation-pill guard, the only one with branching logic, was additionally
+  neutralised and watched fail before restore. Coupled existing tests were
+  re-pointed to the new copy, not deleted: "Run mock agent"/"Generate plan with
+  OpenAI" → "Propose" (8 sites), the disclosure handle → `/Evidence/i` (a stable
+  match across both toggle labels, since collapsed "…readiness gates" and
+  expanded "Hide evidence" share only "evidence"), and the diff label (2 sites).
+  Predicted 184; actual 184. AI 19 green; native not run (`cargo` not on PATH).
+
+  **Not done, deliberately.** The literal per-proposal-card visual (each proposal
+  a self-contained card rather than queue-select-detail), the checks *band* vs
+  the current summary, and the per-card meta line remain a follow-up — they need
+  the architecture the fold declined. The in-section `approvals-hero-card` now
+  duplicates the page header's eyebrow/title/subtitle and is a candidate for
+  removal, but that is a card deletion, not a copy pass, so it was left. Dead
+  `agent-run-*` CSS still unswept.
+
 ## Next
 
 ### #4d No gate enforces refreshed validation before retrying a failed apply
