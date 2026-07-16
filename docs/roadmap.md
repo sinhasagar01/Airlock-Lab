@@ -996,6 +996,41 @@ is weakest at — generating AI plans — rather than by the safety machinery th
 file; it does not implement), and "Repository Intelligence" for what is a
 file-tree summary with extension counts.
 
+**RESOLVED — the demo provider now produces a real, applyable patch.** It returns
+exactly one create-patch for `airlock-demo.md` at the repository root, three fixed
+lines that say what the file is and that it is safe to delete, so apply,
+post-apply verification, and rollback are reachable with no key and no network.
+The entry below stands as the record of why that mattered; its first bullet
+("Mock Provider … cannot reach the product's entire point") is **withdrawn**.
+
+**Not the fabrication #2 and slice 2 removed, and the distinction is the whole
+argument.** Those wrote demo rows into durable tables *on launch*, with no user
+action and nothing marking them invented. This produces a patch only when a human
+asks for a run, is labelled a demo everywhere it surfaces, writes a file that
+explains itself in its own content, and is a **fixed fixture that never claims to
+be model output**. Option 2 of the three below, taken on its own terms.
+
+**Every byte proven against real git before the code existed**, in a disposable
+repository: `git apply --check` accepts it, `git apply` creates the file,
+delete-and-re-apply succeeds (so the demo survives its own rollback), and
+applying while the file exists is refused rather than clobbering it.
+`new file mode 100644` is **load-bearing** — without it git rejects the diff
+("error: dev/null: No such file or directory"), because git will not read
+`--- /dev/null` as a creation unless the mode line marks the file new. The brief
+that specified this work enumerated the diff's parts and omitted that line; the
+probe is what caught it. **See #18** — this is that pattern, third-party edition:
+the spec modelled git's consumer by assumption and git disagreed.
+
+**Two shipped sentences became false the moment it landed, and their tests stayed
+green over the lie.** Slice G's distinction 4 ("Mock Provider is a demo that plans
+only; applying and rolling back a patch needs a real provider such as OpenAI") and
+the Provider Context prose ("Mock runs do not generate patch content") were both
+true only while `supportsPatchGeneration` was `false`. A string assertion cannot
+notice the world moving underneath it. Both corrected; a test now pins the old
+claims *absent*. This is the clearest instance yet of this document's own warning
+that green means nothing crashed — the copy tests were green and the app was
+lying.
+
 **Airlock cannot demonstrate its own core loop without a paid API key and an
 unproven provider path.** Found while preparing the packaged click-through, and
 recorded here rather than as a QA note because it is a product fact, not a
@@ -1073,6 +1108,18 @@ predicts rather than by reading the code.
 | #3 | `parse_porcelain_line` | git prints paths literally | git quotes and C-escapes spaces, non-ASCII, quotes, backslashes | fail-closed — false quarantine of a correct apply |
 | new | provider + native structure validation | header is `diff --git a/{p} b/{p}` | git's generator **quotes** spaced paths; `git apply --check` accepts both forms | fail-closed — refuses a valid patch |
 | probe | `parse_porcelain_line` rename split | ` -> ` separates old from new | a *filename* may contain ` -> `, and git quotes it | fail-closed — dropped status line |
+| new | `validate_generated_patch_structure` + the demo-patch spec | `--- /dev/null` + `+++ b/{p}` is a create | git needs `new file mode 100644` or it reads `/dev/null` as a **literal path** and rejects | **fail-open** — validator says valid, `git apply` refuses |
+
+**The fifth instance, found while unlocking the demo.** The native structure
+validator accepts a create-diff with the mode line **stripped**; git rejects that
+same diff outright. So the validator's model of a creation is broader than git's,
+and passing it is **necessary but never sufficient** — a patch can clear every
+structural gate and still fail at apply. It fails closed in practice only because
+git itself refuses, which is luck rather than design: the gate is not the thing
+catching it. Pinned by a native test that asserts *both* forms pass the validator,
+so the disagreement is recorded rather than rediscovered. Direction matters here —
+this is the second **fail-open** row after F1, and like F1 it comes from modelling
+git's *consumer* too narrowly.
 
 **Correction to the framing that prompted this entry.** It proposed one root
 cause: "the code assumes a form git does not actually produce." That is exact for
