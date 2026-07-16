@@ -27,8 +27,12 @@ findings, and corrections. Update it when work lands.
 - Every task ends with: commits made, --ff-only to main, main green, pushed.
 - Verify each commit in a throwaway worktree. Confirm @ai-dev/* resolves INSIDE it
   before trusting any result.
-- --ff-only to main, re-verify green, delete branch, push behind a SCRIPTED
-  isPrivate gate. Never force-push.
+- --ff-only to main, re-verify green, delete branch, push. Never force-push.
+- The remote is PUBLIC and deliberately so. There is no isPrivate gate: it was
+  dropped when the repository was made public, because a gate whose condition can
+  never hold again is not a safeguard, it is a stall. What it was standing in for
+  still applies — everything pushed is world-readable on arrival, so it is on you
+  to not commit a secret, not on a visibility check to catch one.
 - NEVER: reset, checkout of files, clean, rebase, amend.
 
 ## Safety
@@ -54,7 +58,7 @@ npm run typecheck && npm run lint && npm run test && npm run build && git diff -
 cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 
-Baseline: 150 frontend, 104 native, 15 AI. Remote private, main pushed.
+Baseline: 198 frontend, 104 native, 15 AI. Remote public, main pushed.
 
 ## Report format
 
