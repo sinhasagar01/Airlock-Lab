@@ -6,9 +6,7 @@
 
 Airlock v1: the change-control airlock, with Safe Patch Application and Rollback
 behind native gates, a four-surface Review-first interface, and honest state.
-See [`docs/release-notes/airlock-v1.md`](docs/release-notes/airlock-v1.md). (This
-is the first changelog cut; entries below accumulated across the mvp-demo-v1 and
-airlock-v1 checkpoints, which the log had not previously sectioned.)
+See [`docs/release-notes/airlock-v1.md`](docs/release-notes/airlock-v1.md).
 
 - The README now shows the app instead of describing an older one. It was
   rewritten around the current four-surface shape — Review as the front door,
@@ -272,6 +270,13 @@ airlock-v1 checkpoints, which the log had not previously sectioned.)
 - Added readiness tests for approved/dry-run-passed, pending approval, failed
   structure, failed dry-run, missing repository, binary, oversized, and
   protected-path states.
+## mvp-demo-v1 — 2026-07-15
+
+The first complete review-only workflow: select and understand a repository,
+plan through a provider, review generated artifacts and read-only checks, and
+record a durable human approval. No patch application. See
+[`docs/release-notes/mvp-demo-v1.md`](docs/release-notes/mvp-demo-v1.md).
+
 - Completed a native MVP demo rehearsal across repository indexing,
   Repository Intelligence, mock run creation, approval decisions, artifact
   validation, Changes, Settings, and restart hydration.
