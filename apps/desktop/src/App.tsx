@@ -3209,13 +3209,23 @@ export function App() {
                 <p>
                   {activeAgentRun.providerId === "openai"
                     ? "OpenAI produced validated review records from bounded repository context. Generated artifacts are proposals only and remain separate from local Git diffs."
-                    : "The deterministic mock provider is connected for local planning and approval rehearsal. Mock runs do not generate patch content."}
+                    : "The deterministic demo provider is connected for local planning and approval rehearsal. It returns one fixed demo patch and does not author changes to your own code."}
                 </p>
-                {/* Demo vs real provider: Mock Provider plans only and can
-                    never reach the apply/rollback path; that needs a real one. */}
+                {/*
+                  Demo vs real provider. This line used to read "Mock Provider is
+                  a demo that plans only; applying and rolling back a patch needs
+                  a real provider such as OpenAI." That was true while the demo
+                  provider declared supportsPatchGeneration: false -- and the
+                  demo unlock made it false. The distinction it draws is still
+                  real, so it moves rather than goes: the demo's patch is a fixed
+                  fixture, not model output, and only a real provider can propose
+                  a change to the user's own code.
+                */}
                 <p className="provider-context-card__distinction">
-                  Mock Provider is a demo that plans only; applying and rolling
-                  back a patch needs a real provider such as OpenAI.
+                  Demo Provider is a demo, not a model. It returns one fixed
+                  patch that creates airlock-demo.md so you can exercise apply
+                  and rollback for real; proposing changes to your own code needs
+                  a real provider such as OpenAI.
                 </p>
               </div>
             </article>

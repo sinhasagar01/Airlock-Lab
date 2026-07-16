@@ -65,7 +65,10 @@ describe("AgentProviderAdapter", () => {
       name: "Mock Provider",
       capabilities: {
         supportsPlanGeneration: true,
-        supportsPatchGeneration: false,
+        // Was `false`, which is why apply/verify/rollback could not be reached
+        // without a paid OpenAI key. The demo provider now generates exactly one
+        // declared fixture patch.
+        supportsPatchGeneration: true,
         supportsStreaming: false,
         supportsToolUse: false,
       },
@@ -90,15 +93,25 @@ describe("AgentProviderAdapter", () => {
     });
     expect(result.steps).toHaveLength(3);
     expect(result.affectedFiles.map((file) => file.path)).toEqual([
+      "airlock-demo.md",
       "src/App.tsx",
       "README.md",
     ]);
+    // The demo file is generated; the indexed context candidates are not. The
+    // provider produces one patch and does not claim to have authored the rest.
     expect(
-      result.affectedFiles.every(
-        (file) => file.patchArtifactStatus === "not_generated",
-      ),
-    ).toBe(true);
-    expect(result.patchArtifacts).toEqual([]);
+      result.affectedFiles
+        .filter((file) => file.patchArtifactStatus === "not_generated")
+        .map((file) => file.path),
+    ).toEqual(["src/App.tsx", "README.md"]);
+    expect(result.patchArtifacts).toEqual([
+      {
+        filePath: "airlock-demo.md",
+        status: "generated",
+        isBinary: false,
+        rawDiff: expect.stringContaining("new file mode 100644"),
+      },
+    ]);
   });
 });
 
@@ -225,7 +238,7 @@ describe("patch artifact structure validation", () => {
 });
 
 describe("executeMockAgentRun", () => {
-  it("creates a linked review-only run, plan, proposal, and approval", async () => {
+  it("creates a linked run, plan, proposal, and approval", async () => {
     const result = await executeMockAgentRun({
       id: "run-test",
       repositoryId: "repo-test",
@@ -247,7 +260,10 @@ describe("executeMockAgentRun", () => {
       approvalRequired: true,
     });
     expect(result.plan.runId).toBe(result.run.id);
+    // The demo file leads: it is the only file this provider generates a patch
+    // for. The indexed context files behind it stay review-only candidates.
     expect(result.plan.affectedFiles.map((file) => file.path)).toEqual([
+      "airlock-demo.md",
       "src/App.tsx",
       "README.md",
     ]);
@@ -255,12 +271,138 @@ describe("executeMockAgentRun", () => {
       result.approvalRequest.id,
     );
     expect(result.approvalRequest.agentRunId).toBe(result.run.id);
-    expect(result.proposedChange.patchArtifacts).toHaveLength(2);
+    // Three artifacts now: the generated demo patch, plus the two context
+    // candidates that remain `not_generated`. The split is the point -- the demo
+    // provider generates exactly one patch and does not pretend to author the
+    // repository's real files.
+    expect(result.proposedChange.patchArtifacts).toHaveLength(3);
     expect(
-      result.proposedChange.patchArtifacts.every(
-        (artifact) => artifact.status === "not_generated",
+      result.proposedChange.patchArtifacts.filter(
+        (artifact) => artifact.status === "generated",
       ),
-    ).toBe(true);
+    ).toHaveLength(1);
+    expect(
+      result.proposedChange.patchArtifacts
+        .filter((artifact) => artifact.status === "not_generated")
+        .map((artifact) => artifact.filePath),
+    ).toEqual(["src/App.tsx", "README.md"]);
+  });
+
+  // The demo provider's whole reason to produce a patch: without one, apply,
+  // post-apply verification, and rollback are unreachable without a paid OpenAI
+  // key, so the product cannot demonstrate its own core loop.
+  //
+  // These bytes are not a guess. They were proven against real git in a
+  // disposable repository before this test was written: `git apply --check`
+  // ACCEPTS this exact text, `git apply` creates the file, and re-applying it
+  // after the file is deleted succeeds again. The same text WITHOUT the
+  // `new file mode 100644` line is REJECTED by git --
+  // "error: dev/null: No such file or directory" -- because git will not read
+  // `--- /dev/null` as a creation without it. That line is load-bearing; do not
+  // "tidy" it away.
+  it("generates one create patch whose diff git itself accepts", async () => {
+    const result = await executeMockAgentRun({
+      id: "run-demo",
+      repositoryId: "repo-test",
+      repositoryName: "workspace",
+      task: "Show me the demo",
+      context: { branch: "main", indexedFilePaths: ["src/App.tsx"] },
+      startedAt: "Today, 12:00",
+      createdAt: "2026-07-14T06:30:00.000Z",
+    });
+
+    const artifact = result.proposedChange.patchArtifacts.find(
+      (candidate) => candidate.filePath === "airlock-demo.md",
+    );
+
+    expect(artifact?.status).toBe("generated");
+    expect(artifact?.rawDiff).toBe(
+      [
+        "diff --git a/airlock-demo.md b/airlock-demo.md",
+        "new file mode 100644",
+        "--- /dev/null",
+        "+++ b/airlock-demo.md",
+        "@@ -0,0 +1,3 @@",
+        "+# Airlock demo file",
+        "+This file was created by the Airlock demo provider, not a real model.",
+        "+It exists to exercise apply and rollback. It is safe to delete.",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("generates a demo patch that passes the structure validator", async () => {
+    const result = await executeMockAgentRun({
+      id: "run-demo",
+      repositoryId: "repo-test",
+      repositoryName: "workspace",
+      task: "Show me the demo",
+      context: { branch: "main", indexedFilePaths: ["src/App.tsx"] },
+      startedAt: "Today, 12:00",
+      createdAt: "2026-07-14T06:30:00.000Z",
+    });
+
+    const artifact = result.proposedChange.patchArtifacts.find(
+      (candidate) => candidate.filePath === "airlock-demo.md",
+    );
+    const file = result.proposedChange.files.find(
+      (candidate) => candidate.path === "airlock-demo.md",
+    );
+
+    expect(file?.operation).toBe("create");
+    expect(artifact).toBeDefined();
+    expect(file).toBeDefined();
+    expect(validatePatchArtifactStructure(artifact!, file!)).toMatchObject({
+      status: "valid_structure",
+    });
+  });
+
+  // The demo must survive its own success. After a rollback deletes
+  // airlock-demo.md, a fresh run has to produce the same applyable patch --
+  // proven against git in a temp repository, and pinned here as determinism:
+  // nothing in the patch may depend on run id, time, or previous runs.
+  it("produces the identical patch on a second run, so the loop repeats", async () => {
+    const run = (id: string) =>
+      executeMockAgentRun({
+        id,
+        repositoryId: "repo-test",
+        repositoryName: "workspace",
+        task: "Show me the demo",
+        context: { branch: "main", indexedFilePaths: ["src/App.tsx"] },
+        startedAt: "Today, 12:00",
+        createdAt: "2026-07-14T06:30:00.000Z",
+      });
+
+    const first = await run("run-demo-1");
+    const second = await run("run-demo-2");
+
+    const diffOf = (result: Awaited<ReturnType<typeof run>>) =>
+      result.proposedChange.patchArtifacts.find(
+        (candidate) => candidate.filePath === "airlock-demo.md",
+      )?.rawDiff;
+
+    expect(diffOf(first)).toBe(diffOf(second));
+    expect(diffOf(second)).toContain("+# Airlock demo file");
+  });
+
+  it("still says plainly that it is a demo and not a real model", async () => {
+    const result = await executeMockAgentRun({
+      id: "run-demo",
+      repositoryId: "repo-test",
+      repositoryName: "workspace",
+      task: "Show me the demo",
+      context: { branch: "main", indexedFilePaths: [] },
+      startedAt: "Today, 12:00",
+      createdAt: "2026-07-14T06:30:00.000Z",
+    });
+
+    // The patch is real; the provider is not a model. Both must stay true.
+    expect(result.run.providerId).toBe("mock");
+    expect(result.proposedChange.summary.toLowerCase()).toContain("demo");
+    const artifact = result.proposedChange.patchArtifacts.find(
+      (candidate) => candidate.filePath === "airlock-demo.md",
+    );
+    expect(artifact?.rawDiff).toContain("not a real model");
   });
 
   it("rejects an empty task without creating review records", async () => {

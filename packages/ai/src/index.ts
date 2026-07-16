@@ -761,13 +761,71 @@ function createMockRunTitle(task: string) {
   return `${normalizedTask.slice(0, 65)}...`;
 }
 
+/**
+ * The demo provider's file. Created at the repository root, named so it is
+ * obvious on sight what it is and where it came from.
+ */
+export const DEMO_PATCH_FILE_PATH = "airlock-demo.md";
+
+/**
+ * Three fixed lines that say what the file is and that deleting it is safe.
+ * The content is part of the honesty of the fixture, not decoration: anyone who
+ * finds this file in their tree learns from the file itself where it came from.
+ */
+const DEMO_PATCH_CONTENT_LINES = [
+  "# Airlock demo file",
+  "This file was created by the Airlock demo provider, not a real model.",
+  "It exists to exercise apply and rollback. It is safe to delete.",
+];
+
+/**
+ * A canonical create-patch, and every line of it was proven against real git in
+ * a disposable repository rather than reasoned about:
+ *
+ *   git apply --check  ACCEPTS this exact text
+ *   git apply          creates the file with this exact content
+ *   delete + re-apply  succeeds again, so the demo survives its own rollback
+ *   apply while present REFUSES ("already exists in working directory")
+ *
+ * `new file mode 100644` is **load-bearing and must not be tidied away**. The
+ * same diff without it is rejected by git with "error: dev/null: No such file
+ * or directory": git will not read `--- /dev/null` as a creation unless the mode
+ * line marks the file as new. This is #18's pattern exactly -- what git emits
+ * and what git accepts are different sets, and neither matches an assumption --
+ * so it was probed, and the probe is what this constant records. The `index`
+ * line git's own generator emits is deliberately omitted: it carries a
+ * content-derived blob hash that would silently drift if these lines changed,
+ * and git apply does not require it.
+ */
+export const DEMO_PATCH_RAW_DIFF = [
+  `diff --git a/${DEMO_PATCH_FILE_PATH} b/${DEMO_PATCH_FILE_PATH}`,
+  "new file mode 100644",
+  "--- /dev/null",
+  `+++ b/${DEMO_PATCH_FILE_PATH}`,
+  `@@ -0,0 +1,${DEMO_PATCH_CONTENT_LINES.length} @@`,
+  ...DEMO_PATCH_CONTENT_LINES.map((line) => `+${line}`),
+  "",
+].join("\n");
+
 export function createMockAgentProviderAdapter(): AgentProviderAdapter {
   return {
     id: "mock",
     name: "Mock Provider",
     capabilities: {
       supportsPlanGeneration: true,
-      supportsPatchGeneration: false,
+      // The demo provider generates exactly one patch: a declared fixture that
+      // creates `airlock-demo.md` and says so in its own content. Before this,
+      // apply, post-apply verification, and rollback -- the safety machinery
+      // that is the product -- were unreachable without a paid OpenAI key, so
+      // everything a keyless evaluator could reach was the half the product is
+      // weakest at.
+      //
+      // This is not the fabrication #2 and slice 2 removed. Those wrote demo
+      // records into durable tables on launch with no user action and nothing
+      // marking them as invented. This produces a real, honest, verifiable patch
+      // only when a human asks for a run, is labelled a demo everywhere it
+      // surfaces, and the file it writes explains itself.
+      supportsPatchGeneration: true,
       supportsStreaming: false,
       supportsToolUse: false,
     },
@@ -783,23 +841,35 @@ export function createMockAgentProviderAdapter(): AgentProviderAdapter {
       const contextFilePaths = [...new Set(input.context.indexedFilePaths)]
         .filter((path) => path.trim().length > 0)
         .slice(0, 3);
-      const affectedFiles: ProposedChangeFile[] = contextFilePaths.map(
-        (path, index) => ({
+      // The demo file leads the list because it is the only file this provider
+      // actually generates a patch for; the context files below it remain
+      // review-only candidates, as they always were.
+      const affectedFiles: ProposedChangeFile[] = [
+        {
+          id: `${input.runId}-demo-file`,
+          path: DEMO_PATCH_FILE_PATH,
+          operation: "create",
+          reason:
+            "Demo file created by the demo provider so apply, verification, and rollback can be exercised without a real model. Safe to delete.",
+          riskLevel: "low",
+          patchArtifactStatus: "generated",
+        },
+        ...contextFilePaths.map((path, index) => ({
           id: `${input.runId}-provider-file-${index + 1}`,
           path,
-          operation: "unknown",
+          operation: "unknown" as const,
           reason:
             "Candidate file selected from indexed repository context for mock planning review.",
-          riskLevel: "medium",
-          patchArtifactStatus: "not_generated",
-        }),
-      );
+          riskLevel: "medium" as const,
+          patchArtifactStatus: "not_generated" as const,
+        })),
+      ];
 
       return {
         providerId: "mock",
         model: "mock-planner-v1",
         summary:
-          "The mock provider produced a review-only implementation plan from the submitted task and indexed repository context. No patch content was generated.",
+          "The demo provider produced a plan from the submitted task and indexed repository context, plus one demo patch that creates airlock-demo.md at the repository root. The demo patch is a fixed fixture, not model output, and the file it creates is safe to delete. Candidate context files below remain review-only.",
         approvalRequired: true,
         steps: [
           {
@@ -837,7 +907,14 @@ export function createMockAgentProviderAdapter(): AgentProviderAdapter {
           { label: "Confirm repository context", status: "planned" },
           { label: "Approve or reject request", status: "planned" },
         ],
-        patchArtifacts: [],
+        patchArtifacts: [
+          {
+            filePath: DEMO_PATCH_FILE_PATH,
+            status: "generated",
+            isBinary: false,
+            rawDiff: DEMO_PATCH_RAW_DIFF,
+          },
+        ],
       };
     },
   };

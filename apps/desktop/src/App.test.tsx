@@ -1447,9 +1447,11 @@ describe("App smoke tests", () => {
     expect(
       screen.queryByText("Generated patch artifact preview"),
     ).not.toBeInTheDocument();
-    // Provider context prose stays with the run on this surface.
+    // Provider context prose stays with the run on this surface. It used to
+    // read "Mock runs do not generate patch content", which the demo unlock
+    // made false.
     expect(
-      screen.getByText(/Mock runs do not generate patch content/),
+      screen.getByText(/does not author changes to your own code/),
     ).toBeInTheDocument();
     // The generated-artifact list is a read-only summary in Agent Runs; the
     // reviewable detail and every apply affordance now live in Approval Review.
@@ -2363,7 +2365,7 @@ describe("App smoke tests", () => {
     ).toBeTruthy();
   });
 
-  it("creates a persisted mock agent run with a review-only proposal and approval", async () => {
+  it("creates a persisted mock agent run with a proposal, approval, and the demo patch", async () => {
     const { user } = renderApp();
 
     await user.click(screen.getByRole("button", { name: "Agent Runs" }));
@@ -2405,11 +2407,25 @@ describe("App smoke tests", () => {
       }),
     );
 
+    // The demo patch reaches durable storage, which is what makes apply
+    // reachable at all: the artifact the apply gate reads is this row. Before
+    // this, every mock artifact persisted `not_generated`, the generation gate
+    // blocked, and Apply Patch could not be reached without a paid OpenAI key.
     const savedChange = vi.mocked(saveProposedChange).mock.calls[0][0];
+    const demoArtifact = savedChange.patchArtifacts.find(
+      (artifact) => artifact.filePath === "airlock-demo.md",
+    );
+
+    expect(demoArtifact?.status).toBe("generated");
+    expect(demoArtifact?.rawDiff).toContain(
+      "diff --git a/airlock-demo.md b/airlock-demo.md",
+    );
+    // The context candidates stay review-only: the demo provider generates one
+    // patch and does not claim to have authored this repository's real files.
     expect(
-      savedChange.patchArtifacts.every(
-        (artifact) => artifact.status === "not_generated",
-      ),
+      savedChange.patchArtifacts
+        .filter((artifact) => artifact.filePath !== "airlock-demo.md")
+        .every((artifact) => artifact.status === "not_generated"),
     ).toBe(true);
   });
 
@@ -4248,17 +4264,36 @@ describe("Slice G: the six distinctions as copy", () => {
     ).toBeInTheDocument();
   });
 
-  // 4. Demo vs real provider: Mock Provider plans only and can never reach the
-  //    apply/rollback path; that needs a real provider.
+  // 4. Demo vs real provider. This test used to pin "Mock Provider is a demo
+  //    that plans only; applying and rolling back a patch needs a real provider
+  //    such as OpenAI." The demo unlock made that sentence false -- the demo
+  //    provider now generates a real, applyable patch -- and this test would
+  //    have stayed green over the lie, because a string assertion cannot tell
+  //    that the world moved underneath it. The distinction survives; the claim
+  //    that carries it had to change.
   it("distinguishes the demo provider from a real one at Provider Context", async () => {
     const { user } = renderApp();
     await user.click(screen.getByRole("button", { name: "Agent Runs" }));
 
     expect(
       await screen.findByText(
-        "Mock Provider is a demo that plans only; applying and rolling back a patch needs a real provider such as OpenAI.",
+        "Demo Provider is a demo, not a model. It returns one fixed patch that creates airlock-demo.md so you can exercise apply and rollback for real; proposing changes to your own code needs a real provider such as OpenAI.",
       ),
     ).toBeInTheDocument();
+  });
+
+  // The old sentence must not survive anywhere: it is now a false statement
+  // about what this product can do, and it is exactly the sentence a reader
+  // would trust.
+  it("no longer claims the demo provider cannot apply or roll back", async () => {
+    const { user } = renderApp();
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await screen.findByText(/Demo Provider is a demo, not a model/);
+
+    expect(screen.queryByText(/plans only/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Mock runs do not generate patch content/),
+    ).not.toBeInTheDocument();
   });
 
   // 5. Quarantine vs failed: a quarantine blocks every further apply to the

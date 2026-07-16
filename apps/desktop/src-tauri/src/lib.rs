@@ -6891,6 +6891,47 @@ mod tests {
         assert!(validate_generated_patch_structure(&too_many_lines).is_err());
     }
 
+    /// The demo provider's patch must clear THIS validator, not merely `git
+    /// apply --check`. This gate is what stands between the demo and the apply
+    /// path, so the demo being reachable at all is exactly this assertion.
+    ///
+    /// The bytes are duplicated from `DEMO_PATCH_RAW_DIFF` in `packages/ai`
+    /// deliberately: there is no shared source between TypeScript and Rust, and
+    /// a comment claiming they agree would be the assumption this project keeps
+    /// getting caught by. If the provider's diff changes and this test is not
+    /// updated, it fails -- which is the point. It fails here, in the validator
+    /// that matters, rather than in a packaged demo in front of someone.
+    #[test]
+    fn demo_provider_patch_passes_generated_structure_validation() {
+        let repository_path = Path::new("/tmp/repository");
+        let demo_diff = "diff --git a/airlock-demo.md b/airlock-demo.md\nnew file mode 100644\n--- /dev/null\n+++ b/airlock-demo.md\n@@ -0,0 +1,3 @@\n+# Airlock demo file\n+This file was created by the Airlock demo provider, not a real model.\n+It exists to exercise apply and rollback. It is safe to delete.\n";
+        let demo =
+            test_patch_validation_input(repository_path, "airlock-demo.md", "create", demo_diff);
+
+        assert!(validate_generated_patch_structure(&demo).is_ok());
+
+        // `new file mode 100644` is load-bearing for git itself, which rejects
+        // the diff without it ("error: dev/null: No such file or directory").
+        // This validator is more permissive than git there -- it accepts the
+        // stripped form -- so the two disagree, and neither alone proves the
+        // patch applies. Pinned so that fact is recorded rather than rediscovered:
+        // passing this validator is necessary, never sufficient.
+        let without_mode_line = demo_diff.replace("new file mode 100644\n", "");
+        let stripped = test_patch_validation_input(
+            repository_path,
+            "airlock-demo.md",
+            "create",
+            &without_mode_line,
+        );
+        assert!(validate_generated_patch_structure(&stripped).is_ok());
+
+        // A create whose headers say modify is still refused, so the demo is not
+        // riding a hole in the operation check.
+        let wrong_operation =
+            test_patch_validation_input(repository_path, "airlock-demo.md", "modify", demo_diff);
+        assert!(validate_generated_patch_structure(&wrong_operation).is_err());
+    }
+
     #[test]
     fn safe_apply_rejects_an_artifact_left_in_an_unresolved_attempt_state() {
         tauri::async_runtime::block_on(async {
