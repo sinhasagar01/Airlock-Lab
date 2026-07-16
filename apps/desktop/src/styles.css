@@ -3067,6 +3067,11 @@ dd {
     height: auto;
     margin-left: 0;
     overflow: visible;
+    /* The base rule pins width to calc(100vw - sidebar) for the fixed-left
+       desktop sidebar. Once the sidebar stacks on top, that width leaves the
+       content column sidebar-width too narrow -- a grid child like
+       approval-review-workspace then crushes to ~70px. Reclaim the full row. */
+    width: auto;
   }
 
   .sidebar-nav {
