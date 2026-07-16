@@ -4262,3 +4262,49 @@ describe("Review draws no hero card duplicating the page header", () => {
     expect(screen.getByText("Pending approvals: 2")).toBeInTheDocument();
   });
 });
+
+// The artifact filename must break only at path separators, not mid-token, so a
+// long path in a narrow mobile column wraps readably instead of one char per
+// line. jsdom has no layout, so this pins the mechanism -- a <wbr> after each
+// "/" -- rather than the rendered wrapping, which is on the eyes-only list.
+describe("patch artifact filenames break at path separators", () => {
+  const withDiff = (): PersistedProposedChange[] => {
+    const proposal = defaultProposedChanges[0];
+    return [
+      {
+        ...proposal,
+        patchArtifacts: proposal.patchArtifacts.map((artifact) =>
+          artifact.filePath === "packages/ai/src/index.ts"
+            ? {
+                ...artifact,
+                rawDiff: [
+                  "diff --git a/packages/ai/src/index.ts b/packages/ai/src/index.ts",
+                  "--- a/packages/ai/src/index.ts",
+                  "+++ b/packages/ai/src/index.ts",
+                  "@@ -1 +1 @@",
+                  "-export type OldPlan = string;",
+                  "+export type NewPlan = string;",
+                ].join("\n"),
+              }
+            : artifact,
+        ),
+      },
+      ...defaultProposedChanges.slice(1),
+    ];
+  };
+
+  it("inserts a word-break opportunity after each slash, text intact", async () => {
+    const { user } = renderApp({ proposedChanges: withDiff() });
+
+    await openAgentRuns(user);
+    const row = await screen.findByRole("button", {
+      name: /generated packages\/ai\/src\/index\.ts/,
+    });
+    const strong = row.querySelector("strong");
+
+    // The full path is still readable as one string...
+    expect(strong?.textContent).toBe("packages/ai/src/index.ts");
+    // ...and the only break points are the three separators, nowhere else.
+    expect(strong?.querySelectorAll("wbr").length).toBe(3);
+  });
+});

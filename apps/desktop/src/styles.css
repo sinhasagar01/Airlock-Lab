@@ -1690,7 +1690,9 @@ dt {
   font-size: 13px;
   font-weight: 740;
   line-height: 1.3;
-  overflow-wrap: anywhere;
+  /* Prefer the <wbr> breaks after each path separator; only split a single
+     segment mid-token when it is too long to fit on its own line. */
+  overflow-wrap: break-word;
 }
 
 .patch-artifact-item span {

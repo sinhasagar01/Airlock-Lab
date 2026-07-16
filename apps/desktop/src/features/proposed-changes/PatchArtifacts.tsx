@@ -103,6 +103,19 @@ function checksStatusLabel(status: ChecksSummaryStatus) {
   return "checks incomplete";
 }
 
+// Render a path so it wraps only at its separators. A <wbr> after each "/" is
+// the sole break opportunity, so a narrow column breaks between segments
+// ("packages/ai/" | "src/index.ts") instead of mid-token, and `break-word` in
+// the stylesheet still splits a lone segment too long to fit as a last resort.
+function filePathWithBreaks(path: string) {
+  const segments = path.split("/");
+  return segments.flatMap((segment, index) =>
+    index < segments.length - 1
+      ? [`${segment}/`, <wbr key={index} />]
+      : [segment],
+  );
+}
+
 export function PatchArtifactList({
   artifacts,
   onSelectArtifact,
@@ -129,7 +142,7 @@ export function PatchArtifactList({
               {artifact.status.replaceAll("_", " ")}
             </StatusPill>
             <div>
-              <strong>{artifact.filePath}</strong>
+              <strong>{filePathWithBreaks(artifact.filePath)}</strong>
               <span>
                 {patchArtifactSummary(artifact)} · Validation:{" "}
                 {initialPatchValidationStatus(artifact).replaceAll("_", " ")} ·
