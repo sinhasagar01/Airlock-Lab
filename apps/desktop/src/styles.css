@@ -2242,26 +2242,6 @@ dt {
   width: 100%;
 }
 
-.approvals-hero-card {
-  padding: 24px 30px;
-}
-
-.approvals-hero-card h2 {
-  font-size: 24px;
-  font-weight: 760;
-  line-height: 1.2;
-  margin-top: 14px;
-}
-
-.approvals-hero-card p {
-  color: var(--color-text-secondary);
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 1.5;
-  margin-top: 16px;
-  max-width: 740px;
-}
-
 .approval-card-grid {
   display: grid;
   gap: 18px;

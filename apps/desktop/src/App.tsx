@@ -2509,21 +2509,6 @@ export function App() {
 
       {activeSection === "review" ? (
         <section className="approvals-dashboard">
-          <article className="overview-card approvals-hero-card">
-            <div className="overview-card__header">
-              <div>
-                <p className="card-eyebrow">Human Approval Review</p>
-                <h2>{visiblePendingApprovalCount} pending approvals</h2>
-              </div>
-              <StatusPill tone="warning">Review before execution</StatusPill>
-            </div>
-            <p>
-              Approving records your decision. It does not touch your files.
-              Compose a proposal below, inspect its plan and read-only checks,
-              then approve or reject it -- all on this one surface.
-            </p>
-          </article>
-
           {/*
             Compose lives on Review now (part 5). Agent Runs was a separate
             destination; the noun implied a loop that does not exist, so it was

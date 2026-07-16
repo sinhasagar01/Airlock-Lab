@@ -871,10 +871,24 @@ it did. Items are ordered by how much they protect or clarify that claim.
   **Not done, deliberately.** The literal per-proposal-card visual (each proposal
   a self-contained card rather than queue-select-detail), the checks *band* vs
   the current summary, and the per-card meta line remain a follow-up — they need
-  the architecture the fold declined. The in-section `approvals-hero-card` now
+  the architecture the fold declined. ~~The in-section `approvals-hero-card` now
   duplicates the page header's eyebrow/title/subtitle and is a candidate for
-  removal, but that is a card deletion, not a copy pass, so it was left. Dead
-  `agent-run-*` CSS still unswept.
+  removal, but that is a card deletion, not a copy pass, so it was left.~~ —
+  **the hero card was removed in the follow-up below.** Dead `agent-run-*` CSS
+  still unswept.
+
+- **Removed the `approvals-hero-card` that duplicated the page header.** After
+  the part-4 header work, Review's in-section hero repeated the page header
+  exactly: eyebrow ("Human Approval Review" beside the header's "Human
+  approval"), the pending count as an `<h2>`, and the same "does not touch your
+  files" sentence. The whole card is gone, and its own CSS (`.approvals-hero-card`
+  and descendants — three rules, exclusive to it) went with it, since removing a
+  card's dedicated rules is precise, not a stylesheet sweep. The count it carried
+  survives in the page header's "Pending approvals: N" pill, so seven existing
+  tests that used the `<h2>` as a count proxy were re-pointed to that pill rather
+  than deleted — the count/scoping assertions they make are unchanged. Frontend
+  184 → 185 (one absence guard, watched failing with the card present before
+  removal). AI 19 green; native not run (`cargo` not on PATH).
 
 ## Next
 

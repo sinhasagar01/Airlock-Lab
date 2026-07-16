@@ -883,7 +883,7 @@ describe("App smoke tests", () => {
       await screen.findByRole("heading", { level: 1, name: "Review" }),
     ).toBeInTheDocument();
     expect(
-      await screen.findByRole("heading", { name: "2 pending approvals" }),
+      await screen.findByText("Pending approvals: 2"),
     ).toBeInTheDocument();
     expect(screen.getByText("Provider Context")).toBeInTheDocument();
 
@@ -2656,7 +2656,7 @@ describe("App smoke tests", () => {
     await user.click(screen.getByRole("button", { name: "Review" }));
 
     expect(
-      await screen.findByRole("heading", { name: "2 pending approvals" }),
+      await screen.findByText("Pending approvals: 2"),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", {
@@ -2736,11 +2736,11 @@ describe("App smoke tests", () => {
       }),
     ]);
     expect(
-      await screen.findByRole("heading", { name: "1 pending approvals" }),
+      await screen.findByText("Pending approvals: 1"),
     ).toBeInTheDocument();
     // The workspace-total agent-run line lived on the deleted metrics strip.
-    // The "1 pending approvals" heading above still pins the count this test
-    // is named for.
+    // The page header's "Pending approvals: 1" pill above still pins the count
+    // this test is named for.
     expect(screen.getByText("Request approved")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Reject" })).toBeDisabled();
@@ -2765,7 +2765,7 @@ describe("App smoke tests", () => {
       }),
     ]);
     expect(
-      await screen.findByRole("heading", { name: "0 pending approvals" }),
+      await screen.findByText("Pending approvals: 0"),
     ).toBeInTheDocument();
   });
 
@@ -3571,10 +3571,10 @@ describe("repository-scoped agent runs and approvals", () => {
     await user.click(screen.getByRole("button", { name: "Review" }));
 
     expect(
-      await screen.findByRole("heading", { name: "1 pending approvals" }),
+      await screen.findByText("Pending approvals: 1"),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("heading", { name: "2 pending approvals" }),
+      screen.queryByText("Pending approvals: 2"),
     ).not.toBeInTheDocument();
   });
 });
@@ -3690,7 +3690,7 @@ describe("one apply entry point (#8 / #11 slice A)", () => {
     );
 
     expect(
-      await screen.findByRole("heading", { name: "2 pending approvals" }),
+      await screen.findByText("Pending approvals: 2"),
     ).toBeInTheDocument();
     // The selected approval's detail is shown, not the default one.
     expect(
@@ -4236,5 +4236,29 @@ describe("part 5: Review carries the design-spec copy", () => {
         "Plan only — the demo provider produced no patch",
       ),
     ).toBeInTheDocument();
+  });
+});
+
+// The in-section approvals-hero-card duplicated the page header: same eyebrow,
+// the same pending count, the same "does not touch your files" sentence. The
+// page header (AppHeader) is the one place that names the section now.
+describe("Review draws no hero card duplicating the page header", () => {
+  it("removes the duplicate hero and keeps the count in the page header", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Review" }));
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Review" }),
+    ).toBeInTheDocument();
+
+    // The hero's own markers, none of which the page header carries.
+    expect(screen.queryByText("Human Approval Review")).toBeNull();
+    expect(screen.queryByText("Review before execution")).toBeNull();
+    expect(
+      screen.queryByRole("heading", { name: "2 pending approvals" }),
+    ).toBeNull();
+
+    // The count it carried survives in the page header.
+    expect(screen.getByText("Pending approvals: 2")).toBeInTheDocument();
   });
 });
