@@ -4329,3 +4329,29 @@ describe("record timestamps are stored as sortable ISO values", () => {
     expect(saved?.createdAt).not.toMatch(/^Today,/);
   });
 });
+
+describe("approval decisions do not outrun their durable write", () => {
+  it("leaves an approval pending when the durable write rejects, not claimed approved", async () => {
+    // The one mutation path that updated UI state before (and without guarding)
+    // its persistence: a rejected write must not leave the surface asserting an
+    // approval SQLite does not hold.
+    vi.mocked(updateApprovalRequestStatus).mockRejectedValueOnce(
+      new Error("durable write failed"),
+    );
+    const { user } = renderApp();
+
+    await openAgentRuns(user);
+    const approve = await screen.findByRole("button", { name: "Approve" });
+    await user.click(approve);
+
+    // The write was attempted (storage was ready)...
+    expect(updateApprovalRequestStatus).toHaveBeenCalledWith(
+      "approval-provider-rfc",
+      "approved",
+    );
+    // ...and failed, so the decision is not claimed: the request stays pending
+    // and the control stays live for a retry.
+    expect(screen.queryByText("Request approved")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
+  });
+});

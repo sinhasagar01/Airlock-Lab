@@ -2049,6 +2049,25 @@ export function App() {
       }
     }
 
+    // Persist the decision before the UI claims it. This was the only mutation
+    // path that set UI state before -- and without guarding -- its write, so a
+    // rejected write left the surface asserting an "approved" that SQLite never
+    // held. When storage is unavailable the session is in-memory only, so there
+    // is nothing durable to fail and the UI update is the state.
+    if (storageStatus === "ready") {
+      try {
+        await updateApprovalRequestStatus(approvalId, status);
+        if (updatedProposal) {
+          await saveProposedChanges([updatedProposal]);
+        }
+      } catch {
+        // The durable write failed: leave the decision unrecorded. The request
+        // stays pending and its Approve/Reject controls stay live for a retry,
+        // rather than the UI claiming a decision that did not persist.
+        return;
+      }
+    }
+
     setApprovalRequests((currentRequests) =>
       currentRequests.map((request) =>
         request.id === approvalId ? { ...request, status } : request,
@@ -2070,10 +2089,6 @@ export function App() {
           change.id === updatedProposal.id ? updatedProposal : change,
         ),
       );
-    }
-    await updateApprovalRequestStatus(approvalId, status);
-    if (updatedProposal) {
-      await saveProposedChanges([updatedProposal]);
     }
   }
 

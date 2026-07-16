@@ -1009,13 +1009,19 @@ packaged QA that #6 exists to unblock.
 incidentally and shrank a third; the two data-shape findings remain live. Each
 entry below carries its current verdict.
 
-- **Approval durability. — LIVE (App.tsx:2031–2077).** `updateApprovalStatus`
-  writes UI state (`setApprovalRequests`/`setAgentRuns`/`setPersistedProposedChanges`)
-  before the `await updateApprovalRequestStatus` / `await saveProposedChanges`
+- **Approval durability. — FIXED 2026-07-16.** `updateApprovalStatus` used to
+  write UI state (`setApprovalRequests`/`setAgentRuns`/`setPersistedProposedChanges`)
+  before its `await updateApprovalRequestStatus` / `await saveProposedChanges`
   persistence, with no `storageStatus` guard and no `try`/`catch` — the only
-  mutation path lacking both. A rejected write leaves the UI claiming
-  "approved". Fails closed at the native boundary (apply re-reads SQLite), so it
-  misleads the user rather than endangering the repository.
+  mutation path lacking both — so a rejected write left the UI claiming
+  "approved". It now persists first, matching the codebase idiom (line ~892):
+  `if (storageStatus === "ready")` it writes inside a `try`, and a rejected write
+  `return`s before any UI update, leaving the request pending with its
+  Approve/Reject controls live for a retry. When storage is unavailable the
+  session is in-memory only, so the persist is skipped and the UI update is the
+  state (browser-verified: the preview can still approve). A test drives a
+  rejected write and pins that the UI does not claim the decision, watched
+  failing first (the old code showed "Request approved").
 - ~~**Provider pill reports the wrong provider.** The Agent Run "Provider Context"
   pill renders the mock provider's `status` with a hard-coded success tone, even
   for an OpenAI run, while the prose directly beneath it correctly branches on
