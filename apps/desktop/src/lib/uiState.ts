@@ -55,6 +55,32 @@ export function fileNameFromPath(path: string): string {
   return path.split("/").at(-1) ?? path;
 }
 
+// Record timestamps are stored as ISO 8601 strings so they sort chronologically
+// as plain strings and never assert a day they have no basis for. This formats
+// one for display: "Today, 10:44" when it is today, "Jul 15, 10:44" otherwise.
+// A value that is not a valid date -- a legacy "Today, ..." string persisted
+// before this, or a bare epoch -- is returned unchanged so old rows still render.
+export function formatRecordTimestamp(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  const time = parsed.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const now = new Date();
+  const sameDay =
+    parsed.getFullYear() === now.getFullYear() &&
+    parsed.getMonth() === now.getMonth() &&
+    parsed.getDate() === now.getDate();
+  if (sameDay) {
+    return `Today, ${time}`;
+  }
+  const date = parsed.toLocaleDateString([], { month: "short", day: "numeric" });
+  return `${date}, ${time}`;
+}
+
 export function agentRunTone(status: AgentRun["status"]) {
   if (status === "waiting_for_approval") {
     return "warning";

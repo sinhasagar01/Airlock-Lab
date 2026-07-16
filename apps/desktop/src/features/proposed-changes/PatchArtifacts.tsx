@@ -10,7 +10,7 @@ import {
   SecondaryButton,
   StatusPill,
 } from "@ai-dev/ui";
-import { patchArtifactTone } from "../../lib/uiState";
+import { formatRecordTimestamp, patchArtifactTone } from "../../lib/uiState";
 import {
   ACKNOWLEDGE_INSPECTION_CONFIRMATION,
   APPLY_PATCH_CONFIRMATION,
@@ -385,7 +385,11 @@ export function PatchArtifactDetail({
           </div>
           <div>
             <dt>Generated</dt>
-            <dd>{artifact.createdAt ?? "Not generated"}</dd>
+            <dd>
+              {artifact.createdAt
+                ? formatRecordTimestamp(artifact.createdAt)
+                : "Not generated"}
+            </dd>
           </div>
           <div>
             <dt>Apply state</dt>

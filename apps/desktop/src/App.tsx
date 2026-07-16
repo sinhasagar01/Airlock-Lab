@@ -83,6 +83,7 @@ import {
   changeKindTone,
   fileNameFromPath,
   formatGitRefreshedAt,
+  formatRecordTimestamp,
   patchArtifactTone,
   repositoryTone,
   riskTone,
@@ -682,10 +683,10 @@ export function App() {
 
     const createdAt = new Date();
     const runId = `run-${createdAt.getTime()}`;
-    const startedAt = `Today, ${createdAt.toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    })}`;
+    // ISO, not a "Today, ..." display string: this flows into the run's
+    // startedAt and the proposal's createdAt/updatedAt, which persist and must
+    // sort chronologically. The display layer formats it (formatRecordTimestamp).
+    const startedAt = createdAt.toISOString();
 
     try {
       const adapter =
@@ -2114,7 +2115,7 @@ export function App() {
           <strong>{approval.title}</strong>
           <small>
             {linkedRun?.title ?? "No linked run"} · {approval.files.length}{" "}
-            files · {approval.createdAt}
+            files · {formatRecordTimestamp(approval.createdAt)}
           </small>
         </span>
         <span className="approval-queue-item__status">
@@ -2735,7 +2736,7 @@ export function App() {
                   </div>
                   <div>
                     <dt>Created</dt>
-                    <dd>{selectedApprovalRequest.createdAt}</dd>
+                    <dd>{formatRecordTimestamp(selectedApprovalRequest.createdAt)}</dd>
                   </div>
                   <div>
                     <dt>Proposal Status</dt>

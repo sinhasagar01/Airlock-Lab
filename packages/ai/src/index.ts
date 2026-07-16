@@ -1648,7 +1648,7 @@ export function createMockApprovalRequests(): ApprovalRequest[] {
         "docs/specs/provider-api.md",
         "docs/rfcs/provider-abstraction.md",
       ],
-      createdAt: "Today, 10:42",
+      createdAt: "2026-07-15T10:42:00.000Z",
     },
     {
       id: "approval-indexing-job",
@@ -1663,7 +1663,7 @@ export function createMockApprovalRequests(): ApprovalRequest[] {
         "packages/indexing/src/index.ts",
         "apps/desktop/src/storage/indexingJobStore.ts",
       ],
-      createdAt: "Today, 10:46",
+      createdAt: "2026-07-15T10:46:00.000Z",
     },
   ];
 }
@@ -1680,7 +1680,7 @@ export function createMockAgentRuns(): AgentRun[] {
       model: "mock-planner-v1",
       status: "waiting_for_approval",
       nextStep: "Review proposed file edits before execution.",
-      startedAt: "Today, 10:34",
+      startedAt: "2026-07-15T10:34:00.000Z",
       elapsed: "8m",
       confidence: "medium",
       approvalRequired: true,
@@ -1695,7 +1695,7 @@ export function createMockAgentRuns(): AgentRun[] {
       model: "mock-context-v1",
       status: "running",
       nextStep: "Collect package boundaries and document references.",
-      startedAt: "Today, 10:46",
+      startedAt: "2026-07-15T10:46:00.000Z",
       elapsed: "3m",
       confidence: "high",
       approvalRequired: true,
@@ -1898,7 +1898,7 @@ export function createMockPersistedProposedChanges(): PersistedProposedChange[] 
           deletions: 1,
           rawDiff:
             "diff --git a/packages/ai/src/index.ts b/packages/ai/src/index.ts\n--- a/packages/ai/src/index.ts\n+++ b/packages/ai/src/index.ts\n@@ -1,2 +1,3 @@\n-export type OldPlan = string;\n+export type NewPlan = string;\n+export type PatchArtifact = string;",
-          createdAt: "Today, 10:44",
+          createdAt: "2026-07-15T10:44:00.000Z",
         },
         {
           id: "proposal-mvp-shell-provider-docs-patch-artifact",
@@ -1907,7 +1907,7 @@ export function createMockPersistedProposedChanges(): PersistedProposedChange[] 
           status: "failed",
           isBinary: false,
           isTooLarge: false,
-          createdAt: "Today, 10:45",
+          createdAt: "2026-07-15T10:45:00.000Z",
         },
         {
           id: "proposal-mvp-shell-provider-rfc-patch-artifact",
@@ -1918,8 +1918,8 @@ export function createMockPersistedProposedChanges(): PersistedProposedChange[] 
           isTooLarge: false,
         },
       ],
-      createdAt: "Today, 10:42",
-      updatedAt: "Today, 10:42",
+      createdAt: "2026-07-15T10:42:00.000Z",
+      updatedAt: "2026-07-15T10:42:00.000Z",
     },
     {
       id: "proposal-index-refresh",
@@ -1941,8 +1941,8 @@ export function createMockPersistedProposedChanges(): PersistedProposedChange[] 
         },
       ],
       patchArtifacts: [],
-      createdAt: "Today, 10:46",
-      updatedAt: "Today, 10:46",
+      createdAt: "2026-07-15T10:46:00.000Z",
+      updatedAt: "2026-07-15T10:46:00.000Z",
     },
   ];
 

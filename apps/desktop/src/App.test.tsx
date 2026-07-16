@@ -4308,3 +4308,24 @@ describe("patch artifact filenames break at path separators", () => {
     expect(strong?.querySelectorAll("wbr").length).toBe(3);
   });
 });
+
+describe("record timestamps are stored as sortable ISO values", () => {
+  it("persists a composed run's createdAt as ISO, not a 'Today, …' display string", async () => {
+    const { user } = renderApp();
+
+    await openAgentRuns(user);
+    await user.type(
+      screen.getByRole("textbox", { name: "Agent task request" }),
+      "Add a summary",
+    );
+    await user.click(screen.getByRole("button", { name: "Propose" }));
+    await screen.findByRole("heading", { name: "Review Add a summary" });
+
+    const saved = vi.mocked(saveProposedChange).mock.calls.at(-1)?.[0];
+    expect(saved).toBeDefined();
+    // ISO 8601 sorts chronologically as a plain string; "Today, 10:44" cannot,
+    // and asserts a day it has no basis for once persisted.
+    expect(saved?.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+    expect(saved?.createdAt).not.toMatch(/^Today,/);
+  });
+});

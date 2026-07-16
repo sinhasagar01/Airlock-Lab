@@ -1057,8 +1057,20 @@ entry below carries its current verdict.
   not by reading the code. Recorded here because the list is where this class of
   finding belongs, and because it is evidence that the class is not exhausted.
 - **`createdAt` / `updatedAt` / `startedAt` are display strings, not timestamps.
-  — LIVE (re-verified 2026-07-16; line refs updated).** Found while implementing
-  the Active Work fix, which needed to order proposals and could not.
+  — FIXED 2026-07-16.** Records now store ISO 8601: `startedAt` is built as
+  `createdAt.toISOString()` (App.tsx), so the proposal's `createdAt`/`updatedAt`
+  and the run's `startedAt` are all sortable, and the demo fixtures were
+  converted from `"Today, HH:MM"` to fixed ISO. A UI-local `formatRecordTimestamp`
+  renders them ("Today, 10:44" only when it is actually today, else the date),
+  with legacy passthrough so rows written before this still display.
+  `executeAgentRun` was left untouched — its `createdAt: request.startedAt` now
+  receives ISO. Five tests: the formatter's same-day/other-day/passthrough/sort
+  behaviour and a behavioural test that a composed run persists an ISO
+  `createdAt`, watched failing first (`'Today, 06:23 PM'`). Original finding
+  below, kept for the reasoning.
+
+  Found while implementing the Active Work fix, which needed to order proposals
+  and could not.
   `AgentRun.startedAt` is built at `App.tsx:685` as
   `` `Today, ${createdAt.toLocaleTimeString(...)}` `` — **for real runs, not only
   fixtures** — and flows into the real proposal's `createdAt` via
