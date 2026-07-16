@@ -1772,6 +1772,48 @@ describe("App smoke tests", () => {
     expect(overview.textContent).toContain("No");
   });
 
+  // The Active Work card rendered its heading from the proposal and its pill
+  // from a fallback, so with no proposal the two halves disagreed inside one
+  // card: "No active work" beside "waiting for approval". A status pill for a
+  // proposal that does not exist is a status for nothing.
+  it("does not claim work is waiting for approval while reporting no active work", async () => {
+    const { user } = renderApp({ proposedChanges: [] });
+
+    // The app enters through Review; this guards Overview, so open it.
+    await user.click(screen.getByRole("button", { name: "Overview" }));
+    const heading = await screen.findByRole("heading", {
+      name: "No active work",
+      level: 2,
+    });
+    const card = heading.closest("article");
+    expect(card).not.toBeNull();
+
+    // "waiting for approval" is reachable only through the no-proposal
+    // fallback: a real status renders as its own id with underscores replaced
+    // ("ready for review"), never this phrase. So its presence here is the
+    // contradiction itself, not a coincidence of wording.
+    expect(card?.textContent).not.toContain("waiting for approval");
+    // The prose asserted a plan to review, with no plan to review.
+    expect(card?.textContent).not.toContain("Review the proposed plan");
+  });
+
+  // The other direction. Without this, deleting the pill outright -- or the
+  // whole card -- would satisfy the assertion above. A real proposal must
+  // still report its real status.
+  it("still reports the proposal's status when there is active work", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Overview" }));
+    const heading = await screen.findByRole("heading", {
+      name: "Draft app shell implementation plan",
+      level: 2,
+    });
+    const card = heading.closest("article");
+
+    expect(card?.textContent).toContain("ready for review");
+    expect(card?.textContent).not.toContain("No active work");
+  });
+
   it("does not offer an upgrade for a tier that does not exist", async () => {
     renderApp();
 

@@ -2363,23 +2363,29 @@ export function App() {
                 <p className="card-eyebrow card-eyebrow--dot">Active Work</p>
                 <h2>{demoWorkflowProposal?.title ?? "No active work"}</h2>
               </div>
-              <StatusPill
-                tone={proposedChangeStatusTone(
-                  demoWorkflowProposal?.status ?? "ready_for_review",
-                )}
-                size="sm"
-              >
-                {demoWorkflowProposal?.status.replaceAll("_", " ") ??
-                  "waiting for approval"}
-              </StatusPill>
+              {/*
+                No proposal means no status. The pill previously fell back to
+                the literal "waiting for approval", so a card whose own heading
+                read "No active work" contradicted itself an inch below.
+              */}
+              {demoWorkflowProposal ? (
+                <StatusPill
+                  tone={proposedChangeStatusTone(demoWorkflowProposal.status)}
+                  size="sm"
+                >
+                  {demoWorkflowProposal.status.replaceAll("_", " ")}
+                </StatusPill>
+              ) : null}
             </div>
 
             <p className="active-work-card__description">
-              {demoWorkflowProposal?.status === "approved"
-                ? "Approval is complete. No generated artifact has been applied."
-                : demoWorkflowProposal?.status === "rejected"
-                  ? "The proposal was rejected. No generated artifact was applied."
-                  : "Review the proposed plan and artifact states before any execution."}
+              {!demoWorkflowProposal
+                ? "Nothing is waiting for review."
+                : demoWorkflowProposal.status === "approved"
+                  ? "Approval is complete. No generated artifact has been applied."
+                  : demoWorkflowProposal.status === "rejected"
+                    ? "The proposal was rejected. No generated artifact was applied."
+                    : "Review the proposed plan and artifact states before any execution."}
             </p>
 
             <div className="active-work-card__divider" />
