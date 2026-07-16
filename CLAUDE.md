@@ -22,7 +22,9 @@ findings, and corrections. Update it when work lands.
 
 ## Git
 
-- Propose the commit sequence before any git commit.
+- State the commit sequence in your report, then commit it. You are running headless —
+  there is no human to approve a proposal. Work that stays uncommitted did not happen.
+- Every task ends with: commits made, --ff-only to main, main green, pushed.
 - Verify each commit in a throwaway worktree. Confirm @ai-dev/* resolves INSIDE it
   before trusting any result.
 - --ff-only to main, re-verify green, delete branch, push behind a SCRIPTED
