@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## airlock-v1 — 2026-07-16
+
+Airlock v1: the change-control airlock, with Safe Patch Application and Rollback
+behind native gates, a four-surface Review-first interface, and honest state.
+See [`docs/release-notes/airlock-v1.md`](docs/release-notes/airlock-v1.md). (This
+is the first changelog cut; entries below accumulated across the mvp-demo-v1 and
+airlock-v1 checkpoints, which the log had not previously sectioned.)
+
 - The README now shows the app instead of describing an older one. It was
   rewritten around the current four-surface shape — Review as the front door,
   propose → check → decide → apply — and carries five screenshots captured from
