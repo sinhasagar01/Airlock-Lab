@@ -585,6 +585,79 @@ it did. Items are ordered by how much they protect or clarify that claim.
   and whether the copy tone matches its neighbours are all visual judgments this
   agent cannot make. Nearly all of G is eyes-only.
 
+- **Three visible UI breaks found by human packaged QA.** Reported from the
+  packaged app, which is the only surface that can find these: two are layout
+  collapses that no test in this project can see, and they were found by looking.
+
+  **Two of the three are the same defect — a grid template describing contents
+  that are not there** — and both were introduced by an earlier, correct change
+  that removed the contents and left the template.
+
+  1. **Overview's "Workspace state" card rendered a repository name vertically**,
+     one or two characters per line ("airl / oc / k- / dis / po / sa / ble /
+     -qa"). `.reference-activity-item` declared `24px minmax(0, 1fr) max-content`
+     — a marker track, a content track, a time track — from when this card was
+     the fabricated activity feed. **#2 deleted the marker `<span>` and the
+     `<time>` and left the template**, so the surviving content `<div>` is the
+     row's only child and auto-placement drops it into the **24px marker track**.
+     `overflow-wrap: anywhere` on `.overview-card h3` — added so long repository
+     paths wrap rather than overflow — then permits a break between any two
+     characters, so the name did not overflow its 24px box, it shattered down it.
+     Now one content column, because one child is rendered. The
+     `:not(:last-child)::after` rail went with it: a 1px spine at `left: 11px`,
+     the centre of the deleted marker track, joining markers that no longer
+     exist — with content starting at x=0 it would have struck through the text,
+     a new break introduced by the fix.
+  2. **Plan step badges clipped their own labels** — "completed" read as
+     "ompleted", "planned" as "lanned", on both Agent Runs and Approvals. The
+     number badge is `.plan-step-list li::before` with `position: absolute`, so
+     it is **not a grid item and contributes nothing to a `max-content` track**.
+     Both real children are pinned to column 2, so column 1 held no item at all
+     and `max-content` resolved to **0**: column 2 began at 26px while the badge
+     spans 14px–42px, painting over the pill's leading characters. The track is
+     now an explicit 28px sharing a custom property with the badge's own box, so
+     the two cannot drift. Wide-viewport only — the narrow override already
+     collapses the row and hides the badge with `display: none`.
+  3. **Overview's "Active work" card contradicted itself inside one card**:
+     "No active work" beside a pill reading "waiting for approval", over prose
+     inviting a review of a plan that did not exist. The halves had different
+     fallbacks — the heading from `demoWorkflowProposal?.title ?? "No active
+     work"`, the pill from `… ?? "waiting for approval"` — and with no proposal
+     both fire and disagree. **A status pill for a proposal that does not exist
+     is a status for nothing**; it now renders only when there is a proposal to
+     have a status. A #7 UI-truthfulness finding in shape, found by eye rather
+     than by audit.
+
+  **Only (3) was testable, and the pair of tests is the point.** "waiting for
+  approval" is reachable *only* through the removed fallback — a real status
+  renders as its own id with underscores replaced ("ready for review") — so its
+  presence in that card is the bug rather than a coincidence of wording. The
+  second test pins the other direction, that a real proposal still reports its
+  real status, because without it **deleting the pill outright would satisfy the
+  first**. Shown failing for the right reason first: the failure message carried
+  the contradiction verbatim. The second was green on arrival, so it was
+  neutralised by suppressing the pill and watched fail. Predicted 177 → 179
+  frontend; actual 179. Native 104 and AI 15 unchanged.
+
+  **(1) and (2) have no test pressure at all, and the green suite says nothing
+  about them.** jsdom has no layout engine: a collapsed grid track, a 24px
+  column, and a badge painted over a label are all invisible to every assertion
+  available here. Both were established by reading the template against the
+  rendered children — and, for (1), against the commit that removed them — not
+  by observation. **A human verifies them on screen.** This is the counterpart to
+  slice G's note: there, green meant a string was present; here, green means only
+  that nothing crashed.
+
+  **What this says about the restructure.** Both layout breaks are the residue of
+  a *correct* deletion — #2 removed fabricated content honestly and left the CSS
+  that was shaped around it. The lesson is not "#2 was wrong" but that removing
+  an element and removing the layout that reserved space for it are two changes,
+  and this project has now shipped the first without the second twice in one
+  card. Worth a sweep for other templates whose tracks outnumber their children;
+  `.reference-activity-marker` and `.reference-activity-item--neutral` are still
+  declared and no longer rendered, left in place rather than bundled into a fix
+  for a visible break.
+
 ## Next
 
 ### #4d No gate enforces refreshed validation before retrying a failed apply
@@ -662,6 +735,11 @@ packaged QA that #6 exists to unblock.
   control or do not draw it.
 - ~~Quarantine renders as a calm neutral pill~~ — landed with #1.
 - ~~Overview "✓ No" clean marker disagrees with Changes~~ — landed with #2.
+- ~~Overview "Active work" says "No active work" beside a "waiting for approval"
+  pill~~ — landed with the three-UI-breaks entry (see Done). A #7-shaped finding
+  in every respect except how it was found: by a human opening the packaged app,
+  not by reading the code. Recorded here because the list is where this class of
+  finding belongs, and because it is evidence that the class is not exhausted.
 
 ## Design Changes
 
