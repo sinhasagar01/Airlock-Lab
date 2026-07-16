@@ -2228,9 +2228,6 @@ export function App() {
                     <span>Local path</span>
                     <strong>{activeRepository.path}</strong>
                   </div>
-                  <button aria-label="Copy repository path" type="button">
-                    <Icon name="copy" size="sm" />
-                  </button>
                 </div>
 
                 <dl className="tab-fact-grid repository-overview-facts">

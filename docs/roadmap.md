@@ -1046,15 +1046,17 @@ entry below carries its current verdict.
   index asserted a previous one. Suspected part of what stalled the human packaged
   QA at its indexing step; the operator's own account is in
   `docs/qa/evidence/mvp-demo-v1-disposable-apply-qa.md`.
-- **Dead controls. — REDUCED to one (re-verified 2026-07-16).** ~~Two "Copy
-  repository path" buttons and a "View all" button render with no handler.~~
-  The parts rebuild removed "View all" and the second copy button; **one dead
-  "Copy repository path" button remains** (App.tsx:2215 — `<button>` with an
-  `aria-label` and no `onClick`). ~~Settings draws a "Clear caches" action that
-  cannot execute and a `RESET WORKSPACE` confirmation input whose button is
-  permanently `disabled`, so `resetConfirmationText` is write-only state.~~ —
-  **the two Settings controls landed with the part 2 deletion pass**, along with
-  `resetConfirmationText` itself. Ship a control or do not draw it.
+- **Dead controls. — FIXED 2026-07-16.** ~~Two "Copy repository path" buttons
+  and a "View all" button render with no handler.~~ The parts rebuild removed
+  "View all" and the second copy button; the last dead "Copy repository path"
+  button (a `<button>` with an `aria-label` and no `onClick`) is now removed too,
+  along with its `.active-path-box button` styling, and the path box collapsed
+  from three grid tracks to two. The local path is still shown, just not as a
+  fake affordance. ~~Settings draws a "Clear caches" action that cannot execute
+  and a `RESET WORKSPACE` confirmation input whose button is permanently
+  `disabled`, so `resetConfirmationText` is write-only state.~~ — **the two
+  Settings controls landed with the part 2 deletion pass**, along with
+  `resetConfirmationText` itself. Ship a control or do not draw it — all done.
 - ~~Quarantine renders as a calm neutral pill~~ — landed with #1.
 - ~~Overview "✓ No" clean marker disagrees with Changes~~ — landed with #2.
 - ~~Overview "Active work" says "No active work" beside a "waiting for approval"

@@ -4355,3 +4355,21 @@ describe("approval decisions do not outrun their durable write", () => {
     expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
   });
 });
+
+describe("no dead controls in Repository Intelligence", () => {
+  it("does not draw a Copy repository path button that has no handler", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Repositories" }));
+    expect(
+      await screen.findByRole("heading", { name: "AI-Developer-Workspace" }),
+    ).toBeInTheDocument();
+
+    // Ship a control or do not draw it: the copy button rendered with no
+    // onClick. The local path is still shown, just not as a fake affordance.
+    expect(
+      screen.queryByRole("button", { name: "Copy repository path" }),
+    ).toBeNull();
+    expect(screen.getByText(defaultRepositories[0].path)).toBeInTheDocument();
+  });
+});
