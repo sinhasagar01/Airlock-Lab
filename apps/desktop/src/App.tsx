@@ -3169,6 +3169,12 @@ export function App() {
                     ? "OpenAI produced validated review records from bounded repository context. Generated artifacts are proposals only and remain separate from local Git diffs."
                     : "The deterministic mock provider is connected for local planning and approval rehearsal. Mock runs do not generate patch content."}
                 </p>
+                {/* Demo vs real provider: Mock Provider plans only and can
+                    never reach the apply/rollback path; that needs a real one. */}
+                <p className="provider-context-card__distinction">
+                  Mock Provider is a demo that plans only; applying and rolling
+                  back a patch needs a real provider such as OpenAI.
+                </p>
               </div>
             </article>
           )}

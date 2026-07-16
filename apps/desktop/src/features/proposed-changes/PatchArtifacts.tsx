@@ -410,6 +410,11 @@ export function PatchArtifactDetail({
                 ? "Checks run once when this approval is opened."
                 : "Checks run in the native desktop app, not the browser preview."}
           </p>
+          {/* Checks vs apply: a green check is evidence, not permission. */}
+          <p className="patch-checks__boundary">
+            Checks are read-only evidence — they never modify your working tree,
+            and passing checks are not approval to apply.
+          </p>
         </div>
       ) : null}
 
@@ -513,6 +518,15 @@ export function PatchArtifactDetail({
             No patch was retried or rolled back. Inspect the working tree and
             backup evidence before taking any manual action.
           </p>
+          {/* Quarantine vs failed: a quarantine blocks the repository until
+              INSPECTED; a failed apply changes nothing and blocks nothing. */}
+          {isQuarantined ? (
+            <p className="patch-apply-recovery__quarantine-note">
+              A quarantine blocks every further apply to this repository until
+              you record an inspection — unlike a failed apply, which changes
+              nothing and blocks nothing.
+            </p>
+          ) : null}
 
           {requiresManualInspection && onAcknowledge ? (
             isConfirmingAcknowledge ? (
@@ -649,7 +663,9 @@ export function PatchArtifactDetail({
             )}
             <span>
               A bounded backup is required before the native command can modify
-              the selected target file.
+              the selected target file. The backup is only a receipt of the
+              original bytes; restoring them later is a separate, explicit
+              rollback.
             </span>
           </div>
           {isConfirmingApply && canApply && artifact ? (
@@ -950,6 +966,13 @@ export function PatchArtifactDetail({
         </div>
       ) : artifact.rawDiff ? (
         <div className="generated-patch-preview">
+          {/* Proposed vs actual: the diff is what the model suggested, not what
+              is on disk. Only post-apply verification reports the actual change. */}
+          <p className="generated-patch-preview__note">
+            This is the proposed change, not the actual one. Nothing is written
+            to disk until you apply; post-apply verification then reports what
+            actually changed.
+          </p>
           <div className="generated-patch-preview__label">
             Provider-generated proposal · not applied
           </div>

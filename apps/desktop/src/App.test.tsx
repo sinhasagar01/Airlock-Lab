@@ -4060,3 +4060,120 @@ describe("checks collapse into one line (#11 slice C)", () => {
     expect(dryRunGeneratedPatch).not.toHaveBeenCalled();
   });
 });
+
+// Slice G (#11 slice 5): the six distinctions as copy. Each names, at a surface
+// where the two ideas are easiest to confuse, the line between them. These tests
+// prove the string is PRESENT at the surface -- not that it reads well or lands
+// with the operator. That judgment is eyes-only and is recorded in the report.
+describe("Slice G: the six distinctions as copy", () => {
+  async function openGeneratedArtifact(
+    user: ReturnType<typeof userEvent.setup>,
+  ) {
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
+    await user.click(
+      await screen.findByRole("button", {
+        name: /generated packages\/ai\/src\/index\.ts/,
+      }),
+    );
+  }
+
+  // 1. Approve vs apply is already asserted at the Apply Readiness surface
+  //    ("approval alone never applies a patch") and pinned by
+  //    "keeps patch application disabled while safety gates are blocked". Not
+  //    re-pinned here.
+
+  // 2. Checks vs apply: a green check is evidence, not permission.
+  it("distinguishes checks as read-only evidence from apply at the Checks surface", async () => {
+    const { user } = renderApp();
+    await openGeneratedArtifact(user);
+
+    expect(
+      await screen.findByText(
+        "Checks are read-only evidence — they never modify your working tree, and passing checks are not approval to apply.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  // 3. Proposed vs actual: the diff is what the model suggested, not what is on
+  //    disk; only post-apply verification reports the actual change.
+  it("distinguishes the proposed diff from the actual change at the diff preview", async () => {
+    const { user } = renderApp();
+    await openGeneratedArtifact(user);
+
+    expect(
+      await screen.findByText(
+        "This is the proposed change, not the actual one. Nothing is written to disk until you apply; post-apply verification then reports what actually changed.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  // 4. Demo vs real provider: Mock Provider plans only and can never reach the
+  //    apply/rollback path; that needs a real provider.
+  it("distinguishes the demo provider from a real one at Provider Context", async () => {
+    const { user } = renderApp();
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+
+    expect(
+      await screen.findByText(
+        "Mock Provider is a demo that plans only; applying and rolling back a patch needs a real provider such as OpenAI.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  // 5. Quarantine vs failed: a quarantine blocks every further apply to the
+  //    repository until INSPECTED; a failed apply changes nothing and blocks
+  //    nothing. Both reach the recovery surface, so the line is drawn there.
+  it("distinguishes a blocking quarantine from a non-blocking failed apply", async () => {
+    const quarantinedChanges = defaultProposedChanges.map((change) =>
+      change.id === "proposal-mvp-shell"
+        ? {
+            ...change,
+            status: "quarantine_required" as const,
+            patchArtifacts: change.patchArtifacts.map((artifact) =>
+              artifact.id === "proposal-file-ai-patch-artifact"
+                ? { ...artifact, applyStatus: "quarantine_required" as const }
+                : artifact,
+            ),
+          }
+        : change,
+    );
+    vi.mocked(reconcileInterruptedPatchApplyAttempts).mockResolvedValue([
+      {
+        applyAttemptId: "apply-quarantine-1",
+        repositoryId: "repo-workspace",
+        proposedChangeId: "proposal-mvp-shell",
+        approvalRequestId: "approval-provider-rfc",
+        patchArtifactId: "proposal-file-ai-patch-artifact",
+        backupId: "backup-quarantine-1",
+        status: "quarantine_required",
+        startedAt: "1783532400",
+        completedAt: "1783532500",
+        sanitizedError: "Post-apply verification found an unexpected path.",
+        currentGitStatusChanged: true,
+        message: "Quarantined for manual inspection.",
+      },
+    ]);
+    const { user } = renderApp({ proposedChanges: quarantinedChanges });
+    await openGeneratedArtifact(user);
+
+    expect(
+      await screen.findByText(
+        "A quarantine blocks every further apply to this repository until you record an inspection — unlike a failed apply, which changes nothing and blocks nothing.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  // 6. Backup vs rollback: a backup is only a receipt of the pre-apply bytes;
+  //    restoring them is a separate, explicit rollback.
+  it("distinguishes the backup receipt from the rollback restore at Apply Readiness", async () => {
+    const { user } = renderApp();
+    await openGeneratedArtifact(user);
+
+    expect(
+      await screen.findByText(
+        /The backup is only a receipt of the original bytes; restoring them later is a separate, explicit rollback\./,
+      ),
+    ).toBeInTheDocument();
+  });
+});

@@ -1350,6 +1350,15 @@ dt {
   margin-bottom: 22px;
 }
 
+/* Demo vs real provider: a quieter, always-present clarification below the
+   run's own provider prose. */
+.provider-context-card__distinction {
+  color: var(--color-text-tertiary, var(--color-text-secondary));
+  font-size: 12px;
+  font-weight: 500;
+  margin-bottom: 0;
+}
+
 .repository-list,
 .run-list {
   display: grid;
@@ -2620,6 +2629,17 @@ dt {
   line-height: 1.4;
 }
 
+/* Checks vs apply: a quiet boundary line, separated from the observation. */
+.patch-checks__boundary {
+  border-top: 1px solid var(--color-border, rgba(17, 26, 45, 0.08));
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 520;
+  line-height: 1.45;
+  margin-top: 4px;
+  padding-top: 10px;
+}
+
 .patch-apply-recovery {
   background: var(--color-warning-soft);
   border: 1px solid rgba(236, 125, 84, 0.3);
@@ -2689,6 +2709,14 @@ dt {
 .patch-apply-recovery__boundary {
   border-top: 1px solid rgba(236, 125, 84, 0.2);
   padding-top: 12px;
+}
+
+/* Quarantine vs failed: names the blocking consequence a plain failure lacks. */
+.patch-apply-recovery__quarantine-note {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 560;
+  line-height: 1.5;
 }
 
 /* Rollback is a destructive working-tree write, so it reads as a deliberate,
@@ -3064,6 +3092,15 @@ dt {
 .generated-patch-preview {
   display: grid;
   gap: 0;
+}
+
+/* Proposed vs actual: a caption above the diff banner, not part of it. */
+.generated-patch-preview__note {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 520;
+  line-height: 1.5;
+  margin-bottom: 10px;
 }
 
 .generated-patch-preview__label {

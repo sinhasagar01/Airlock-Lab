@@ -8,7 +8,7 @@ lost.
 Every entry has been verified against the code rather than carried over from the
 review that produced it. Entries are reconciled as work lands.
 
-Last reconciled: 2026-07-15.
+Last reconciled: 2026-07-16.
 
 ## Product Boundary
 
@@ -538,6 +538,53 @@ it did. Items are ordered by how much they protect or clarify that claim.
   Reordering the sidebar so Review sits at the top was left out as a visual
   change with no structural assertion.
 
+- **IA restructure slice G — the six distinctions as copy.** The product's
+  vocabulary overloads six pairs that a careful operator must keep apart, and #11
+  records the overload as the finding. Each distinction now names the line between
+  the two ideas as text, at the surface where they are easiest to confuse:
+
+  1. **Approve vs apply** — *already* asserted at Apply Readiness ("Applying
+     modifies files in your working tree. It does not commit or stage changes,
+     and approval alone never applies a patch") and pinned by an existing test.
+     Left unchanged and not re-pinned; recorded here so the set is complete.
+  2. **Checks vs apply** — a new boundary line on the Checks panel: "Checks are
+     read-only evidence — they never modify your working tree, and passing checks
+     are not approval to apply." A green check is evidence, not permission.
+  3. **Proposed vs actual** — a new caption above the generated-diff banner: "This
+     is the proposed change, not the actual one. Nothing is written to disk until
+     you apply; post-apply verification then reports what actually changed." The
+     diff is what the model suggested; only the Changes verification (slice E)
+     reports what landed.
+  4. **Demo vs real provider** — a new, always-present line in Provider Context:
+     "Mock Provider is a demo that plans only; applying and rolling back a patch
+     needs a real provider such as OpenAI." It states in one sentence the product
+     fact #11 records at length — the mock cannot reach the apply/rollback path.
+  5. **Quarantine vs failed** — a new line in the recovery panel, shown only when
+     the outcome is `quarantine_required`: "A quarantine blocks every further
+     apply to this repository until you record an inspection — unlike a failed
+     apply, which changes nothing and blocks nothing." Names the blocking
+     consequence a plain failure lacks.
+  6. **Backup vs rollback** — the Apply Readiness backup note is extended: "The
+     backup is only a receipt of the original bytes; restoring them later is a
+     separate, explicit rollback." #4's "a backup nobody can restore is a receipt,
+     not a safety net", stated where the backup is first named.
+
+  **Display and UI-local copy plus CSS only. No native, apply, or verification
+  logic changed; no types, tables, columns, or serde names touched** — the diff is
+  four frontend files (`App.tsx`, `PatchArtifacts.tsx`, `styles.css`, and the
+  test). Five new tests, each shown failing for the right reason first — the exact
+  string absent *after* navigation reached the surface, so the failure is a
+  missing line, not a broken path. Approve vs apply added no test (already pinned).
+  Predicted 172 → 177 frontend; actual 177. Native 104 and AI 15 unchanged.
+
+  **This is the slice where tests prove the least, and that is stated rather than
+  hidden.** A green test here means the string is present in the rendered tree at
+  the named surface — not that the distinction *reads* clearly, sits with the
+  right emphasis, or actually lands with an operator. Whether six clarifying lines
+  help or merely add words, whether each sits where a confused reader would look,
+  and whether the copy tone matches its neighbours are all visual judgments this
+  agent cannot make. Nearly all of G is eyes-only.
+
 ## Next
 
 ### #4d No gate enforces refreshed validation before retrying a failed apply
@@ -687,8 +734,12 @@ than the Overview dashboard, an empty workspace lands on Repositories (the
 next-action section), and "Repository Intelligence" is demoted from the
 Repositories headline to a sub-panel label within it; the six-item nav set is
 kept and pinned, with removing Overview deferred as an unbid surface removal (see
-the Done entry). Remaining:
-3 nav rename, 4 domain nouns, 5 the six distinctions, 6 demo-workflow copy.
+the Done entry). G (#11 slice 5): the six distinctions as copy — each of approve
+vs apply, checks vs apply, proposed vs actual, demo vs real provider, quarantine
+vs failed, and backup vs rollback now names the line between the two ideas as
+text at the surface where they are easiest to confuse (see the Done entry).
+Remaining:
+3 nav rename, 4 domain nouns, 6 demo-workflow copy.
 (The letter/number split is intentional: these lettered slices — order A, B, D, C,
 E, F, G — are the restructure's stable identifiers; the numbers above predate them
 and are kept for continuity.) The bound throughout is user-visible copy
