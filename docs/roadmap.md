@@ -916,12 +916,46 @@ it did. Items are ordered by how much they protect or clarify that claim.
   `-task-field`/`-execution-status*` (the fold moved that form onto Review), the
   shared `overview-card`/`overview-card__header` base, and the `record-list-*`
   rules that sat *interleaved* inside the dead `agent-run-list` block (they are
-  the approval queue's). **Out of scope, left standing:** other dead families the
+  the approval queue's). ~~**Out of scope, left standing:** other dead families the
   removals also stranded — `changes-feature-grid`, `framework-hints-card`,
   `patch-artifact-empty`, `proposed-plan-card`, `agent-detail-fact-grid`,
-  `maintenance-action--danger`, etc. — since the ask named `agent-run` and
-  `overview`. Braces balanced (662/662); 185 frontend / 19 AI green; native not
-  run (`cargo` not on PATH). CSS-only: no `.tsx` touched.
+  `maintenance-action--danger`, etc.~~ — **swept in the follow-up below.** Braces
+  balanced (662/662); 185 frontend / 19 AI green; native not run (`cargo` not on
+  PATH). CSS-only: no `.tsx` touched.
+
+- **Swept the remaining dead CSS across all families.** The follow-up to the
+  above: every other dead class the Overview / Agent-Runs / file-preview /
+  activity-feed / quick-start / framework-hints removals stranded. **~1870 lines
+  removed** from `styles.css` (662→434 brace-pairs); 103 classes gone entirely,
+  plus dead selectors trimmed out of grouped rules and dead-anchored compound
+  selectors (`.activity-item .status-pill--*`, `.sidebar-upgrade__icon .app-icon`,
+  the media-query `.workspace--feature .proposed-plan-card` group) removed.
+
+  **Method — deadness proven mechanically, because nothing catches a wrong CSS
+  removal** (jsdom applies no CSS; the build only checks syntax, and I can't see
+  pixels). A script matched every class token in the stylesheet against every
+  `className` in source, then — the load-bearing step — inspected every dynamic
+  `className={\`…\`}` in the codebase to separate the **eight real BEM-modifier
+  builders** (`icon-badge--`, `status-pill--`, `app-icon--`, `git-diff-line--`,
+  the three feedback ones, `agent-run-execution-status--`) from **ID
+  construction** (`run-${id}`, `approval-${id}`, `file-${id}` — strings, not
+  classes). The modifier bases were protected; the ID prefixes protect nothing.
+  Removal ran through a brace-matching parser that deletes whole rules and trims
+  grouped selectors, gated on four invariants checked after every pass: **braces
+  balanced, no `live()` class loses all its rules, no `}selector` glue, and no
+  invented declaration** (new property-lines ⊆ old — proving bodies were never
+  touched, only selectors).
+
+  Two false-live tokens the guard flagged and I cleared by hand: `full` and
+  `file-preview` — matched only by a variant string (`renderIndexedFileBrowser("full")`),
+  a `.md` path in test data, and prose in a comment; neither is a real class, and
+  `compact` (genuinely live via `.status-row.compact`) was correctly kept.
+
+  185 frontend / 19 AI green; typecheck, lint, `build:web`, `git diff --check`
+  all clean. CSS-only — no `.tsx` touched, and the invented-declaration check
+  proves no live rule's body changed, so nothing rendered can have changed unless
+  a removed selector matched a live element, which the deadness proof rules out.
+  Native not run (`cargo` not on PATH).
 
 ## Next
 
