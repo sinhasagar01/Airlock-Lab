@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- The README now shows the app instead of describing an older one. It was
+  rewritten around the current four-surface shape — Review as the front door,
+  propose → check → decide → apply — and carries five screenshots captured from
+  the running preview: Review, its checks/decision/artifacts detail, Working
+  tree, Repositories, and Settings (under `assets/images/`). The prior copy
+  still walked an "Agent Run" destination the fold removed and called rollback
+  unimplemented after it had shipped. The screenshots were verified pixel-exact
+  against the live UI at their capture viewport, so they reflect the current
+  build rather than a stale render.
+
 - Airlock no longer invents a repository. It shipped with a fixture repository —
   a real absolute home directory from a developer's machine, presented as saved,
   indexed, and on branch `main`. It was the app's starting state, and because a
