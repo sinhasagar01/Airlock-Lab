@@ -658,6 +658,61 @@ it did. Items are ordered by how much they protect or clarify that claim.
   declared and no longer rendered, left in place rather than bundled into a fix
   for a visible break.
 
+- **Overview's Active Work card points at real work.** The card resolved its
+  entire content through `persistedProposedChanges.find(c => c.id ===
+  demoWorkflow.proposedChangeId)` — **a hardcoded lookup for one fixture id**, so
+  every real provider-generated proposal was invisible to it and Overview
+  reported "No active work" while Approvals showed that proposal waiting. The
+  preceding UI-break fix removed the card's *self-contradiction* and left this
+  intact; worse, it made the falsehood confident, replacing a visible
+  contradiction with a clean "Nothing is waiting for review." A new pure
+  projection, `selectActiveWork`, reads the real proposals instead.
+
+  **Repository-scoped, and not as a coin flip.** #6 had to settle "workspace
+  total or active repository?" deliberately, and here the card's own body answers
+  it: Repository, Branch, Local path, Open Changes, and Clean Working Directory
+  are **all active-repository facts**, so a foreign proposal's title rendered
+  above them would print one repository's work over another's branch — the exact
+  lie #6 fixed at two other sites. The scope is now said out loud ("in this
+  repository"), because an unlabelled scoped claim sitting beside Overview's
+  labelled workspace totals ("across all repositories") is the shape #6 and #2
+  both had to correct.
+
+  **Active work is an allow-list of statuses, ranked by meaning, and the compiler
+  enforces its completeness.** `quarantine_required` (0) outranks
+  `ready_for_review` (1), which outranks `approved` (2); `draft`, `rejected`,
+  `superseded`, `applied`, and `rolled_back` are not active work. Quarantine is
+  first on #1's argument: it blocks every further apply until a human records an
+  inspection, so a card that excluded it would report "No active work" over a
+  repository that cannot accept a patch at all. It is a `Record` over the whole
+  union rather than a list of the active ones, so **adding a status to
+  `ProposedChangeStatus` is a compile error here until someone classifies it** —
+  proven by mutation (`error TS2741: Property 'draft' is missing`), not asserted.
+  This project has twice shipped a guard whose default was the defect; a display
+  has the same failure shape, and the compiler can close it, so it does.
+
+  **It does not order by `updatedAt`, because that field cannot order anything** —
+  see the finding under #7. The tie-break is list order, pinned by a test that
+  names why, so the next person reaching for a timestamp has to confront it. The
+  card therefore **does not claim** the proposal it shows is the newest or the
+  most urgent when ranks tie; it says how many are active and points at Approvals.
+
+  **The count exists so the card cannot understate the work.** Showing one of
+  several without saying so is a quieter version of the contradiction this card
+  already had. It counts the scoped list it labels, per #6.
+
+  `demoWorkflowProposal` is untouched and still serves the **Demo workflow** card,
+  which is explicitly labelled a demo — the fix removes the fixture's *privileged*
+  position on a surface making workspace claims, it does not delete the fixture.
+  Display and UI-local only: no types, tables, columns, or serde names changed.
+
+  Shown failing for the right reason first: with a real `ready_for_review`
+  proposal for the active repository in storage, the card rendered "No active
+  workNothing is waiting for review." Non-vacuity proven by mutation rather than
+  by construction — neutralising the repository filter failed 4 tests (2 unit, 2
+  App), and flattening the rank map failed 8. Predicted 179 → 198 frontend (+15
+  `selectActiveWork` unit, +4 App); actual 198. Native 104 and AI 15 unchanged.
+
 ## Next
 
 ### #4d No gate enforces refreshed validation before retrying a failed apply
@@ -740,8 +795,38 @@ packaged QA that #6 exists to unblock.
   in every respect except how it was found: by a human opening the packaged app,
   not by reading the code. Recorded here because the list is where this class of
   finding belongs, and because it is evidence that the class is not exhausted.
+- **`createdAt` / `updatedAt` / `startedAt` are display strings, not timestamps.**
+  Found while implementing the Active Work fix, which needed to order proposals
+  and could not. `AgentRun.startedAt` is built at `App.tsx:772` as
+  `` `Today, ${createdAt.toLocaleTimeString(...)}` `` — **for real runs, not only
+  fixtures** — and flows into the real proposal's `createdAt` and `updatedAt` via
+  `createdAt: request.startedAt`. `updateApprovalStatus` then writes
+  `new Date().toISOString()` into `updatedAt`. So one field holds two
+  incompatible formats, and **neither can order anything**: lexicographically
+  every `"Today, ..."` sorts after every ISO string, and `"Today, 9:05"` sorts
+  after `"Today, 10:44"`. Three consequences, none yet fixed:
+
+  1. **No surface can sort by time.** The Active Work card wanted "the most
+     recently updated active proposal" and had to rank by what each status
+     *means* instead. That ranking is defensible on its own, but it was chosen
+     because the data cannot answer the obvious question.
+  2. **`"Today, ..."` persists.** It is written to SQLite and read back, so a
+     proposal created yesterday still renders "Today, 10:44" after a restart. A
+     #7 truthfulness finding: the field asserts a day it has no basis for.
+  3. **A future sort would look right and be wrong.** Nothing fails loudly —
+     `updatedAt` is a `string` and comparing strings compiles. This is #18's
+     pattern outside git: **a field named like a timestamp, modelled as one, and
+     never probed.** `selectActiveWork` pins the tie-break with a test naming
+     this so the next person to reach for `updatedAt` has to confront it.
+
+  Not fixed here because it is a data-shape change reaching the persisted
+  columns, and the standing bound is that types, tables, columns, and serde
+  names keep their identifiers.
+
 - **Overview "Active work" is hardwired to one fixture id — the contradiction is
-  fixed, the card is still not true.** Found reviewing that fix, and open. The
+  fixed, the card is still not true.** ~~Open.~~ **Landed — see the Done entry
+  for the Active Work rebuild.** Kept because its reasoning is the rationale for
+  that fix. The
   card's whole content is `persistedProposedChanges.find(c => c.id ===
   demoWorkflow.proposedChangeId)` — a hardcoded lookup for `proposal-mvp-shell`.
   A workspace holding a **real** OpenAI-generated proposal has no such id, so
@@ -762,7 +847,8 @@ packaged QA that #6 exists to unblock.
   gitignored, so the finding is recorded **here** as well rather than only on one
   machine: retire the card (per slice F's deferred Overview removal), point it at
   real work with an explicit scope label, or rename it to the demo workflow's
-  proposal so it stops claiming workspace truth.
+  proposal so it stops claiming workspace truth. **Resolved by the second
+  option** — see below.
 
 ## Design Changes
 
