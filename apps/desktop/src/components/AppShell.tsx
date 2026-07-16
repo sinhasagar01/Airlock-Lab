@@ -51,7 +51,7 @@ export function Sidebar({
       <nav aria-label="Primary navigation" className="sidebar-nav">
         {primaryNavigation.map((item) => (
           <SidebarNavItem
-            count={item.id === "approvals" ? pendingApprovalCount : 0}
+            count={item.id === "review" ? pendingApprovalCount : 0}
             icon={navigationIcons[item.id]}
             isActive={activeSection === item.id}
             key={item.id}

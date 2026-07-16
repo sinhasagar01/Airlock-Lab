@@ -45,7 +45,6 @@ import {
 import { AppHeader, AppShell, Sidebar } from "./components/AppShell";
 import { GitDiffPreviewPanel } from "./features/changes/GitDiffPreviewPanel";
 import { demoWorkflow } from "./features/demo-workflow/demoWorkflow";
-import { selectActiveWork } from "./features/overview/activeWork";
 import {
   isSeededRecordId,
   isSeededRunId,
@@ -63,7 +62,6 @@ import {
   mockProposedChanges,
   proposedChangePlans as mockProposedChangePlans,
   provider,
-  quickStartItems,
   sectionEyebrows,
   sectionHeaders,
   settingsRows,
@@ -172,7 +170,7 @@ export function App() {
   // redirect only fires while the user is still on this initial landing, so a
   // click during a slow hydrate is respected.
   const [activeSection, setActiveSection] =
-    useState<NavigationSection>("approvals");
+    useState<NavigationSection>("review");
   // Empty, not a fixture. Hydration's `catch` never calls `setRepositories`, so
   // whatever starts here survives a storage failure for the entire session --
   // and what used to start here was a fabricated repository with a real
@@ -636,11 +634,11 @@ export function App() {
         attempt.proposedChangeId === selectedApprovalProposedChange?.id,
     ) ?? null;
   const selectedReadinessArtifact =
-    activeSection === "approvals"
+    activeSection === "review"
       ? selectedApprovalPatchArtifact
       : selectedAgentPatchArtifact;
   const selectedReadinessChange =
-    activeSection === "approvals"
+    activeSection === "review"
       ? selectedApprovalProposedChange
       : activePersistedProposedChange;
   const selectedReadinessRepositorySnapshot =
@@ -658,15 +656,6 @@ export function App() {
     persistedProposedChanges.find(
       (change) => change.id === demoWorkflow.proposedChangeId,
     ) ?? null;
-  // Overview's Active Work card. Scoped to the active repository because the
-  // card's own body is active-repository facts; see `selectActiveWork`.
-  const activeWork = useMemo(
-    () =>
-      hasActiveRepository
-        ? selectActiveWork(persistedProposedChanges, activeRepository.id)
-        : null,
-    [activeRepository.id, hasActiveRepository, persistedProposedChanges],
-  );
   const demoWorkflowGeneratedArtifactCount =
     demoWorkflowProposal?.patchArtifacts.filter(
       (artifact) => artifact.status === "generated",
@@ -1096,7 +1085,7 @@ export function App() {
           appliedAt: result.appliedAt,
           backupId: result.backupId,
         });
-        setActiveSection("changes");
+        setActiveSection("working-tree");
       }
 
       try {
@@ -1402,7 +1391,7 @@ export function App() {
   function openDemoApprovalReview() {
     setSelectedAgentRunId(demoWorkflow.runId);
     setSelectedApprovalRequestId(demoWorkflow.approvalRequestId);
-    setActiveSection("approvals");
+    setActiveSection("review");
   }
 
   function openDemoChangeReview() {
@@ -1416,7 +1405,7 @@ export function App() {
       setSelectedGitFilePath(firstMatchingFile.path);
     }
 
-    setActiveSection("changes");
+    setActiveSection("working-tree");
   }
 
   useEffect(() => {
@@ -1585,7 +1574,7 @@ export function App() {
 
     async function loadCurrentFingerprintSnapshot() {
       if (
-        !["agents", "approvals"].includes(activeSection) ||
+        !["agents", "review"].includes(activeSection) ||
         !hasActiveRepository ||
         !selectedReadinessArtifact?.artifactDigest ||
         !selectedReadinessArtifact.validationRepositorySnapshot
@@ -1641,7 +1630,7 @@ export function App() {
 
     async function loadSelectedApprovalDiff() {
       if (
-        activeSection !== "approvals" ||
+        activeSection !== "review" ||
         !selectedApprovalChangedFile ||
         !hasActiveRepository
       ) {
@@ -1724,7 +1713,7 @@ export function App() {
   // must not be yanked back.
   function redirectEmptyWorkspaceToRepositories() {
     setActiveSection((current) =>
-      current === "approvals" ? "repositories" : current,
+      current === "review" ? "repositories" : current,
     );
   }
 
@@ -1885,7 +1874,7 @@ export function App() {
     if (
       !hasNativeRuntime ||
       storageStatus !== "ready" ||
-      !["agents", "approvals"].includes(activeSection)
+      !["agents", "review"].includes(activeSection)
     ) {
       return;
     }
@@ -2263,11 +2252,9 @@ export function App() {
 
   return (
     <AppShell
-      workspaceClassName={
-        activeSection === "overview"
-          ? "workspace--overview"
-          : "workspace--feature"
-      }
+      // Every surviving section is a feature surface. `workspace--overview`
+      // existed for the one dashboard section, which part 4 deleted.
+      workspaceClassName="workspace--feature"
       sidebar={
         <Sidebar
           activeSection={activeSection}
@@ -2277,7 +2264,7 @@ export function App() {
       }
     >
       <AppHeader
-        compact={activeSection !== "overview"}
+        compact
         description={sectionHeaders[activeSection].description}
         eyebrow={sectionEyebrows[activeSection]}
         onChooseRepository={selectRepositories}
@@ -2285,204 +2272,6 @@ export function App() {
         providerName={agentProviderName(selectedAgentProviderId)}
         title={sectionHeaders[activeSection].title}
       />
-
-      {activeSection === "overview" ? (
-        <section className="overview-lower-grid">
-          <article className="overview-card active-work-card">
-            <div className="active-work-card__header">
-              <div>
-                <p className="card-eyebrow card-eyebrow--dot">Active Work</p>
-                {/*
-                  Real work, scoped to the active repository -- not a hardcoded
-                  lookup for the demo fixture's id, which left every real
-                  proposal invisible here while Approvals showed it waiting.
-                */}
-                <h2>{activeWork?.proposal.title ?? "No active work"}</h2>
-              </div>
-              {/*
-                No proposal means no status. The pill previously fell back to
-                the literal "waiting for approval", so a card whose own heading
-                read "No active work" contradicted itself an inch below.
-              */}
-              {activeWork ? (
-                <StatusPill
-                  tone={proposedChangeStatusTone(activeWork.proposal.status)}
-                  size="sm"
-                >
-                  {activeWork.proposal.status.replaceAll("_", " ")}
-                </StatusPill>
-              ) : null}
-            </div>
-
-            {/*
-              "in this repository", said out loud. This card is repository-scoped
-              and it sits on a dashboard whose other numbers are workspace totals
-              that say so ("across all repositories"). An unlabelled scoped claim
-              beside a labelled total is the shape #6 had to settle deliberately.
-            */}
-            <p className="active-work-card__description">
-              {!activeWork
-                ? "Nothing is waiting for review in this repository."
-                : activeWork.proposal.status === "quarantine_required"
-                  ? "This repository is blocked until you record an inspection. No further patch can be applied here until then."
-                  : activeWork.proposal.status === "approved"
-                    ? "Approval is complete. No generated artifact has been applied."
-                    : "Review the proposed plan and artifact states before any execution."}
-            </p>
-
-            {/*
-              Showing one of several without saying so would understate the work
-              waiting -- a quieter version of the contradiction this card already
-              had. The count counts the scoped list it describes, per #6, and it
-              deliberately does not rank: with two proposals both at
-              `ready_for_review` neither needs attention first, and `updatedAt`
-              cannot break the tie (see `selectActiveWork`).
-            */}
-            {activeWork && activeWork.activeCount > 1 ? (
-              <p className="active-work-card__description">
-                {activeWork.activeCount} proposals are active in this
-                repository. Approvals lists them all.
-              </p>
-            ) : null}
-
-            <div className="active-work-card__divider" />
-
-            <dl className="active-work-meta">
-              <div className="active-work-meta__item">
-                <Icon name="repository" />
-                <div>
-                  <dt>Repository</dt>
-                  <dd>{activeRepository.name}</dd>
-                </div>
-              </div>
-
-              <div className="active-work-meta__item">
-                <Icon name="branch" />
-                <div>
-                  <dt>Branch</dt>
-                  <dd>{activeRepository.branch}</dd>
-                </div>
-              </div>
-            </dl>
-
-            <div className="active-path-box">
-              <Icon name="folder" />
-              <div>
-                <span>Local path</span>
-                <strong>{activeRepository.path}</strong>
-              </div>
-              <button aria-label="Copy repository path" type="button">
-                <Icon name="copy" size="sm" />
-              </button>
-            </div>
-
-            <dl className="active-work-stats" aria-label="Active work">
-              <div>
-                <dt>Open Changes</dt>
-                <dd>{effectiveChangedFileCount}</dd>
-              </div>
-              <div>
-                <dt>Clean Working Directory</dt>
-                <dd>
-                  {/*
-                    Read live Git state, the same source Changes reads. This
-                    previously read the persisted openChanges snapshot and drew
-                    the marker unconditionally, so a dirty tree rendered "✓ No".
-                  */}
-                  {isWorkingDirectoryClean ? (
-                    <span className="check-marker" aria-hidden="true">
-                      ✓
-                    </span>
-                  ) : null}
-                  {isWorkingDirectoryClean ? "Yes" : "No"}
-                </dd>
-              </div>
-            </dl>
-          </article>
-
-          <div className="overview-side-column">
-            <article className="overview-card recent-activity-card">
-              <div className="overview-card__header">
-                <p className="card-eyebrow">Workspace State</p>
-              </div>
-
-              <div className="reference-activity-list">
-                {hasActiveRepository ? (
-                  <>
-                    <div className="reference-activity-item reference-activity-item--neutral">
-                      <div>
-                        <h3>{activeRepository.name}</h3>
-                        <p>
-                          {activeRepository.lastIndexedAt
-                            ? `Indexed ${activeRepository.lastIndexedAt}`
-                            : "Not indexed yet"}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="reference-activity-item reference-activity-item--neutral">
-                      <div>
-                        <h3>
-                          {pendingApprovalCount} pending approval
-                          {pendingApprovalCount === 1 ? "" : "s"}
-                        </h3>
-                        <p>
-                          {pendingApprovalCount > 0
-                            ? "Across all repositories. Review them before any patch can be applied."
-                            : "Nothing is waiting on you, in any repository."}
-                        </p>
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <div className="reference-activity-item reference-activity-item--neutral">
-                    <div>
-                      <h3>No workspace state yet</h3>
-                      <p>Choose a repository to begin.</p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </article>
-
-            <article className="overview-card quick-start-card">
-              <p className="card-eyebrow">Quick Start</p>
-              <div className="quick-start-list">
-                {quickStartItems.map((item) => (
-                  <button
-                    className="quick-start-item"
-                    key={item.title}
-                    onClick={() => {
-                      if (item.title === "Import repository") {
-                        void selectRepositories();
-                        return;
-                      }
-
-                      if (item.title === "Start mock agent run") {
-                        setActiveSection("agents");
-                        return;
-                      }
-
-                      setActiveSection("approvals");
-                    }}
-                    type="button"
-                  >
-                    <span
-                      className={`quick-start-icon quick-start-icon--${item.tone}`}
-                    >
-                      <Icon name={item.icon} size="sm" />
-                    </span>
-                    <span>
-                      <strong>{item.title}</strong>
-                      <small>{item.description}</small>
-                    </span>
-                    <Icon name="chevron" size="sm" />
-                  </button>
-                ))}
-              </div>
-            </article>
-          </div>
-        </section>
-      ) : null}
 
       {activeSection === "repositories" ? (
         <section className="repository-intelligence-dashboard">
@@ -2677,7 +2466,7 @@ export function App() {
                   <div className="repository-entry-actions">
                     <PrimaryButton
                       icon="file"
-                      onClick={() => setActiveSection("changes")}
+                      onClick={() => setActiveSection("working-tree")}
                     >
                       Browse indexed files
                     </PrimaryButton>
@@ -2695,7 +2484,7 @@ export function App() {
                     </SecondaryButton>
                     <SecondaryButton
                       icon="changes"
-                      onClick={() => setActiveSection("changes")}
+                      onClick={() => setActiveSection("working-tree")}
                     >
                       View changes
                     </SecondaryButton>
@@ -3376,7 +3165,7 @@ export function App() {
                       setSelectedApprovalRequestId(activeRunApproval.id);
                     }
 
-                    setActiveSection("approvals");
+                    setActiveSection("review");
                   }}
                 >
                   Review approval
@@ -3395,7 +3184,7 @@ export function App() {
         </section>
       ) : null}
 
-      {activeSection === "approvals" ? (
+      {activeSection === "review" ? (
         <section className="approvals-dashboard">
           <article className="overview-card approvals-hero-card">
             <div className="overview-card__header">
@@ -3853,7 +3642,7 @@ export function App() {
         </section>
       ) : null}
 
-      {activeSection === "changes" ? (
+      {activeSection === "working-tree" ? (
         <section className="changes-dashboard">
           {activeVerifiedApply ? (
             <article
@@ -4128,7 +3917,7 @@ export function App() {
                         void runMaintenanceReindex();
                       }
                     : row.title === "Approval defaults"
-                      ? () => setActiveSection("approvals")
+                      ? () => setActiveSection("review")
                       : undefined;
                 const providerStatus =
                   openAiConnectionTestState === "running"

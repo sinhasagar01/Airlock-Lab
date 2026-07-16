@@ -583,6 +583,26 @@ async function goToTab(name: string) {
   await user.click(screen.getByRole("button", { name }));
 }
 
+/*
+ * Agent Runs left the navigation with part 4: the noun implies a loop that does
+ * not exist, and it is the destination part 5 folds into Review. The section
+ * itself still renders, so every test that drove a run keeps its subject rather
+ * than being deleted.
+ *
+ * It is reached through Working tree, and that route is the finding, not a
+ * convenience. The Repositories entry point renders only when a repository is
+ * already saved, so an empty workspace could not reach the composer through it
+ * at all. Working tree's hero renders unconditionally, which makes it the ONLY
+ * surviving door -- and "the only way to start a run is buried two clicks deep
+ * on the page about Git status" is precisely why part 5 must follow part 4.
+ */
+async function openAgentRuns(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "Working tree" }));
+  await user.click(
+    await screen.findByRole("button", { name: "Start mock agent run" }),
+  );
+}
+
 const defaultApprovals = [...mockState.approvals];
 const defaultFiles = [...mockState.files];
 const defaultGitDiff = mockState.gitDiff;
@@ -704,25 +724,7 @@ describe("Slice F: Review front door and Repository Intelligence demotion", () =
     ).toBeInTheDocument();
     // Not the Review front door: there is nothing to review yet.
     expect(
-      screen.getByRole("button", { name: "Approvals" }),
-    ).not.toHaveAttribute("aria-current", "page");
-  });
-
-  it("lands a populated workspace on Review, the front door", async () => {
-    renderApp();
-
-    const approvalsNav = await screen.findByRole("button", {
-      name: "Approvals",
-    });
-    await waitFor(() =>
-      expect(approvalsNav).toHaveAttribute("aria-current", "page"),
-    );
-    expect(
-      screen.getByRole("heading", { level: 1, name: "Approval Review" }),
-    ).toBeInTheDocument();
-    // Overview is no longer the surface the app enters through.
-    expect(
-      screen.getByRole("button", { name: "Overview" }),
+      screen.getByRole("button", { name: "Review" }),
     ).not.toHaveAttribute("aria-current", "page");
   });
 
@@ -760,13 +762,11 @@ describe("Slice F: Review front door and Repository Intelligence demotion", () =
   });
 
   it("keeps the agreed primary navigation set with Repository Intelligence demoted out of it", () => {
-    expect(primaryNavigation).toHaveLength(6);
+    expect(primaryNavigation).toHaveLength(4);
     expect(primaryNavigation.map((item) => item.id)).toEqual([
-      "overview",
+      "review",
+      "working-tree",
       "repositories",
-      "agents",
-      "approvals",
-      "changes",
       "settings",
     ]);
     expect(primaryNavigation.map((item) => item.label)).not.toContain(
@@ -775,20 +775,98 @@ describe("Slice F: Review front door and Repository Intelligence demotion", () =
   });
 });
 
+/*
+ * Part 4: the navigation collapses from six items to four. Overview is deleted
+ * (its job is Review's job), Agent Runs leaves the nav (the noun implies a loop
+ * that does not exist), and the two surviving work surfaces are renamed to what
+ * they actually are: Review and Working tree.
+ *
+ * Nav order is asserted by index on purpose. An earlier slice called ordering
+ * "purely visual" and declined to touch it; that was wrong. The order encodes
+ * which surface the product claims is the front door, and it is as assertable
+ * as any other structure in the DOM.
+ */
+describe("Part 4: four-item navigation", () => {
+  const RETIRED_NAV_LABELS = ["Overview", "Agent Runs", "Approvals", "Changes"];
+
+  it("renders exactly four nav items, in order, by index", async () => {
+    renderApp();
+
+    const nav = await screen.findByRole("navigation", {
+      name: "Primary navigation",
+    });
+    const items = within(nav).getAllByRole("button");
+
+    // By accessible name, not textContent: the Review item also renders a
+    // pending-approval count, so its text is "Review2".
+    expect(items.map((item) => item.getAttribute("aria-label"))).toEqual([
+      "Review",
+      "Working tree",
+      "Repositories",
+      "Settings",
+    ]);
+  });
+
+  it("has no nav element named for any retired destination", async () => {
+    renderApp();
+
+    const nav = await screen.findByRole("navigation", {
+      name: "Primary navigation",
+    });
+
+    for (const label of RETIRED_NAV_LABELS) {
+      expect(within(nav).queryByRole("button", { name: label })).toBeNull();
+    }
+  });
+
+  it("lands a populated workspace on Review, nav item one", async () => {
+    renderApp();
+
+    const nav = await screen.findByRole("navigation", {
+      name: "Primary navigation",
+    });
+    const first = within(nav).getAllByRole("button")[0];
+
+    expect(first).toHaveAccessibleName("Review");
+    await waitFor(() => expect(first).toHaveAttribute("aria-current", "page"));
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Review" }),
+    ).toBeInTheDocument();
+  });
+
+  it("redirects an empty workspace to Repositories and names the next action", async () => {
+    renderApp({ repositories: [] });
+
+    const nav = await screen.findByRole("navigation", {
+      name: "Primary navigation",
+    });
+    const repositoriesNav = within(nav).getByRole("button", {
+      name: "Repositories",
+    });
+    await waitFor(() =>
+      expect(repositoriesNav).toHaveAttribute("aria-current", "page"),
+    );
+    // The next action, named: choose a repository.
+    expect(
+      screen.getByRole("heading", { level: 2, name: "No repository selected" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: "Choose repository" }).length,
+    ).toBeGreaterThan(0);
+    // Not Review: there is nothing to review yet.
+    expect(
+      within(nav).getByRole("button", { name: "Review" }),
+    ).not.toHaveAttribute("aria-current", "page");
+  });
+});
+
 describe("App smoke tests", () => {
-  it("renders all six tabs and updates the active surface from sidebar navigation", async () => {
+  it("renders all four tabs and updates the active surface from sidebar navigation", async () => {
     const { user } = renderApp();
 
     // The front door is Review: a populated workspace enters here.
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Approval Review" }),
-    ).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Overview" }));
-    expect(
-      await screen.findByRole("heading", {
-        name: "Draft app shell implementation plan",
-      }),
+      await screen.findByRole("heading", { level: 1, name: "Review" }),
     ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Repositories" }));
@@ -804,25 +882,25 @@ describe("App smoke tests", () => {
       ),
     ).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     expect(
       await screen.findByRole("heading", { level: 1, name: "Agent Runs" }),
     ).toBeInTheDocument();
     expect(await screen.findByText("Provider Context")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Approvals" }));
+    await user.click(screen.getByRole("button", { name: "Review" }));
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Approval Review" }),
+      await screen.findByRole("heading", { level: 1, name: "Review" }),
     ).toBeInTheDocument();
     expect(
       await screen.findByRole("heading", { name: "2 pending approvals" }),
     ).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Changes" }));
+    await user.click(screen.getByRole("button", { name: "Working tree" }));
     expect(
       await screen.findByRole("heading", {
         level: 1,
-        name: "Workspace Changes",
+        name: "Working tree",
       }),
     ).toBeInTheDocument();
     expect(
@@ -845,18 +923,13 @@ describe("App smoke tests", () => {
     ).toBeInTheDocument();
   });
 
-  it("opens the clearly labeled mock-provider composer from Overview", async () => {
+  it("opens the clearly labeled mock-provider composer from Repositories", async () => {
     const { user } = renderApp();
 
-    // The app now enters through Review; the Overview quick-start shortcut is
-    // reached by navigating to Overview first.
-    await user.click(screen.getByRole("button", { name: "Overview" }));
-
-    await user.click(
-      await screen.findByRole("button", {
-        name: /Start mock agent run/,
-      }),
-    );
+    // Overview and its quick-start shortcut are gone with part 4. The composer
+    // is reached from the Repositories entry point, which is now the only way
+    // in until part 5 puts it on Review.
+    await openAgentRuns(user);
 
     expect(
       await screen.findByRole("heading", { name: "Start with Mock Provider" }),
@@ -1272,7 +1345,7 @@ describe("App smoke tests", () => {
   it("renders real Git status changes in the Changes tab", async () => {
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Changes" }));
+    await user.click(screen.getByRole("button", { name: "Working tree" }));
 
     expect(
       await screen.findByRole("heading", {
@@ -1320,7 +1393,7 @@ describe("App smoke tests", () => {
     );
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Changes" }));
+    await user.click(screen.getByRole("button", { name: "Working tree" }));
 
     expect(
       await screen.findByText("Git status unavailable"),
@@ -1372,7 +1445,7 @@ describe("App smoke tests", () => {
   it("shows an honest untracked diff state when a changed file has no tracked baseline", async () => {
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Changes" }));
+    await user.click(screen.getByRole("button", { name: "Working tree" }));
     await screen.findByText("Local Git diff");
 
     await user.click(
@@ -1396,7 +1469,7 @@ describe("App smoke tests", () => {
   it("renders selected agent run detail with structured proposed plan and approval handoff", async () => {
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
 
     expect(
       await screen.findByRole("heading", {
@@ -1491,7 +1564,7 @@ describe("App smoke tests", () => {
       proposedChanges: [validProposal, ...defaultProposedChanges.slice(1)],
     });
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     // Checks run on review-open, behind Approval Review.
     await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
@@ -1518,7 +1591,7 @@ describe("App smoke tests", () => {
   it("keeps patch application disabled while safety gates are blocked", async () => {
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     // Apply Readiness renders on the sole apply surface: Approval Review.
     await user.click(screen.getByRole("button", { name: "Review approval" }));
 
@@ -1562,7 +1635,7 @@ describe("App smoke tests", () => {
   it("keeps the eighteen readiness gates out of the document until Advanced is activated", async () => {
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     await user.click(screen.getByRole("button", { name: "Review approval" }));
 
     // The readiness section is on screen...
@@ -1588,7 +1661,7 @@ describe("App smoke tests", () => {
   it("names the first blocking gate's reason without listing every gate", async () => {
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     await user.click(screen.getByRole("button", { name: "Review approval" }));
 
     await screen.findByRole("heading", { name: "Apply Readiness" });
@@ -1693,7 +1766,7 @@ describe("App smoke tests", () => {
   it("marks a retained demo record where it is displayed", async () => {
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Approvals" }));
+    await user.click(screen.getByRole("button", { name: "Review" }));
 
     // Retention is only honest if the row declares itself at the point of
     // display. A marker in Settings would leave this row reading as real.
@@ -1718,7 +1791,7 @@ describe("App smoke tests", () => {
       ],
     });
 
-    await user.click(screen.getByRole("button", { name: "Approvals" }));
+    await user.click(screen.getByRole("button", { name: "Review" }));
 
     // The row renders at all -- the screen did not blank -- and it reports the
     // missing link instead of an empty title.
@@ -1729,175 +1802,30 @@ describe("App smoke tests", () => {
     expect(row.textContent).toContain("No linked run");
   });
 
-  it("agrees with Changes about whether the working tree is clean", async () => {
-    const dirtyGitStatus: GitStatusSummary = {
-      ...defaultGitStatus,
-      isClean: false,
-      changedFileCount: 3,
-      unstagedCount: 3,
-    };
-    const { user } = renderApp({ gitStatus: dirtyGitStatus });
-
-    // Overview read the persisted openChanges snapshot while Changes read live
-    // Git, so Overview could report a clean tree while Changes reported three
-    // changed files. Clean-tree state is an apply gate; the two must not
-    // disagree. The app now enters through Review, so open Overview explicitly.
-    await user.click(screen.getByRole("button", { name: "Overview" }));
-    const overview = await screen.findByLabelText("Active work");
-    // The `await` above synchronises with nothing: "Active work" renders on the
-    // first frame regardless of Git. This assertion used to be read straight
-    // off it, and passed only because a fixture repository existed before
-    // hydration, so live Git happened to arrive first. Wait for the Git-derived
-    // number itself, not for a container that was always there.
-    await waitFor(() => expect(overview.textContent).toContain("3"));
-    expect(overview.textContent).not.toContain("✓");
-    expect(overview.textContent).toContain("No");
-  });
-
-  // The Active Work card rendered its heading from the proposal and its pill
-  // from a fallback, so with no proposal the two halves disagreed inside one
-  // card: "No active work" beside "waiting for approval". A status pill for a
-  // proposal that does not exist is a status for nothing.
-  it("does not claim work is waiting for approval while reporting no active work", async () => {
-    const { user } = renderApp({ proposedChanges: [] });
-
-    // The app enters through Review; this guards Overview, so open it.
-    await user.click(screen.getByRole("button", { name: "Overview" }));
-    const heading = await screen.findByRole("heading", {
-      name: "No active work",
-      level: 2,
-    });
-    const card = heading.closest("article");
-    expect(card).not.toBeNull();
-
-    // "waiting for approval" is reachable only through the no-proposal
-    // fallback: a real status renders as its own id with underscores replaced
-    // ("ready for review"), never this phrase. So its presence here is the
-    // contradiction itself, not a coincidence of wording.
-    expect(card?.textContent).not.toContain("waiting for approval");
-    // The prose asserted a plan to review, with no plan to review.
-    expect(card?.textContent).not.toContain("Review the proposed plan");
-  });
-
-  // The other direction. Without this, deleting the pill outright -- or the
-  // whole card -- would satisfy the assertion above. A real proposal must
-  // still report its real status.
-  it("still reports the proposal's status when there is active work", async () => {
-    const { user } = renderApp();
-
-    await user.click(screen.getByRole("button", { name: "Overview" }));
-    const heading = await screen.findByRole("heading", {
-      name: "Draft app shell implementation plan",
-      level: 2,
-    });
-    const card = heading.closest("article");
-
-    expect(card?.textContent).toContain("ready for review");
-    expect(card?.textContent).not.toContain("No active work");
-  });
-
-  // A real proposal, shaped like one a provider run persists: its id is NOT the
-  // demo workflow's `proposal-mvp-shell`. That is the whole discriminator. The
-  // card used to resolve its content through a hardcoded lookup for that one
-  // fixture id, so every real proposal was invisible to it and Overview
-  // reported "No active work" while Approvals showed the proposal waiting.
-  function realProposal(
-    overrides: Partial<PersistedProposedChange> = {},
-  ): PersistedProposedChange {
-    return {
-      id: "proposal-openai-timeout",
-      runId: "run-openai-timeout",
-      approvalRequestId: "approval-openai-timeout",
-      repositoryId: "repo-workspace",
-      title: "Bound the provider request timeout",
-      summary: "A real provider run's proposal, not the demo fixture.",
-      status: "ready_for_review",
-      files: [],
-      patchArtifacts: [],
-      createdAt: "Today, 11:20",
-      updatedAt: "Today, 11:20",
-      ...overrides,
-    };
-  }
-
-  it("reports a real proposal as active work, not only the demo fixture", async () => {
-    const { user } = renderApp({ proposedChanges: [realProposal()] });
-
-    await user.click(screen.getByRole("button", { name: "Overview" }));
-    const card = (
-      await screen.findByText("Active Work")
-    ).closest("article");
-
-    expect(card?.textContent).toContain("Bound the provider request timeout");
-    expect(card?.textContent).not.toContain("No active work");
-  });
-
-  it("never reports another repository's proposal as this repository's active work", async () => {
-    // The card's own meta rows -- Repository, Branch, Local path, Open Changes
-    // -- are all active-repository facts. A foreign proposal's title above them
-    // would print one repository's work over another's branch: the exact lie #6
-    // fixed at two other sites.
-    const { user } = renderApp({
-      proposedChanges: [realProposal({ repositoryId: "repo-somewhere-else" })],
-    });
-
-    await user.click(screen.getByRole("button", { name: "Overview" }));
-    const card = (
-      await screen.findByText("Active Work")
-    ).closest("article");
-
-    expect(card?.textContent).not.toContain("Bound the provider request timeout");
-    expect(card?.textContent).toContain("No active work");
-  });
-
-  it("says how many proposals are active rather than implying the one shown is all", async () => {
-    const { user } = renderApp({
-      proposedChanges: [
-        realProposal(),
-        realProposal({
-          id: "proposal-openai-retry",
-          runId: "run-openai-retry",
-          approvalRequestId: "approval-openai-retry",
-          title: "Retry the failed apply",
-        }),
-      ],
-    });
-
-    await user.click(screen.getByRole("button", { name: "Overview" }));
-    const card = (await screen.findByText("Active Work")).closest("article");
-
-    // The count counts the scoped list it describes, per #6 -- two here, both
-    // this repository's. It must not silently show one of two.
-    expect(card?.textContent).toContain("2 proposals are active in this repository");
-  });
-
-  it("does not count another repository's proposal in this repository's active work", async () => {
-    const { user } = renderApp({
-      proposedChanges: [
-        realProposal(),
-        realProposal({
-          id: "proposal-foreign",
-          repositoryId: "repo-somewhere-else",
-          title: "Someone else's work",
-        }),
-      ],
-    });
-
-    await user.click(screen.getByRole("button", { name: "Overview" }));
-    const card = (await screen.findByText("Active Work")).closest("article");
-
-    // One active proposal here, so no count line at all -- and certainly not
-    // "2", which is the number a workspace-wide count would print above this
-    // repository's own branch.
-    expect(card?.textContent).toContain("Bound the provider request timeout");
-    expect(card?.textContent).not.toContain("2 proposals are active");
-    expect(card?.textContent).not.toContain("Someone else's work");
-  });
+  /*
+   * Seven tests lived here and are deleted, not re-routed, because part 4
+   * deleted their subject: Overview.
+   *
+   * Six drove the Active Work card -- the card the commit two before this one
+   * rebuilt to read real proposals instead of a hardcoded fixture id. That work
+   * is not wasted (it proved the card had been lying since it was written), but
+   * the card is gone and a test for a surface that does not render has nothing
+   * to assert. `features/overview/activeWork.ts` and its 15 unit tests went with
+   * it.
+   *
+   * The seventh, "agrees with Changes about whether the working tree is clean",
+   * was #2's cross-surface agreement guard. It cannot be re-pointed because it
+   * needs two surfaces to disagree and there is now exactly one: Working tree is
+   * the only place the clean-tree fact is displayed. The class of bug it caught
+   * is not fixed here so much as made unreachable by deletion -- which is worth
+   * saying out loud, because if a second display of that fact ever returns, this
+   * guard does not.
+   */
 
   it("does not offer an upgrade for a tier that does not exist", async () => {
     renderApp();
 
-    await screen.findByRole("button", { name: "Approvals" });
+    await screen.findByRole("button", { name: "Review" });
 
     expect(screen.queryByText("Pro Intelligence")).not.toBeInTheDocument();
     expect(
@@ -1908,7 +1836,7 @@ describe("App smoke tests", () => {
   it("does not present fabricated activity as workspace history", async () => {
     renderApp();
 
-    await screen.findByRole("button", { name: "Approvals" });
+    await screen.findByRole("button", { name: "Review" });
 
     // These three entries were static copy with invented timestamps rendered as
     // though they were a real event feed.
@@ -1920,17 +1848,20 @@ describe("App smoke tests", () => {
   });
 
   it("tells an empty workspace what to do instead of showing invented numbers", async () => {
-    const { user } = renderApp({ repositories: [], files: [] });
+    renderApp({ repositories: [], files: [] });
 
-    // An empty workspace lands on Repositories (the next action); this guards
-    // Overview's honest empty state, so open it explicitly.
-    await user.click(screen.getByRole("button", { name: "Overview" }));
-
+    // Re-pointed, not deleted: the subject is that an empty workspace is told
+    // what to do rather than shown invented numbers. Overview carried that
+    // empty state and is gone; Repositories -- where an empty workspace now
+    // lands -- carries it instead.
     expect(
-      await screen.findByText("No workspace state yet"),
+      await screen.findByRole("heading", {
+        level: 2,
+        name: "No repository selected",
+      }),
     ).toBeInTheDocument();
     expect(
-      screen.getAllByText(/Choose a repository to begin/i).length,
+      screen.getAllByText(/Choose a local repository/i).length,
     ).toBeGreaterThan(0);
     // The fabricated index time was shipped as a constant regardless of state.
     expect(
@@ -1944,7 +1875,7 @@ describe("App smoke tests", () => {
     // Anchor on the read: hydration no longer writes, so a write can never be
     // the barrier for hydration having finished.
     await waitFor(() => expect(loadProposedChanges).toHaveBeenCalled());
-    await screen.findByRole("button", { name: "Approvals" });
+    await screen.findByRole("button", { name: "Review" });
 
     // Hydration is the covert path: it ran on every launch with no user action
     // and upserted seeds into the same tables as real records, where nothing
@@ -2000,7 +1931,7 @@ describe("App smoke tests", () => {
     await waitFor(() =>
       expect(reconcileInterruptedPatchApplyAttempts).toHaveBeenCalledTimes(1),
     );
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     // Apply, and its recovery evidence, live only behind Approval Review now.
     await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
@@ -2083,7 +2014,7 @@ describe("App smoke tests", () => {
     ]);
     const { user } = renderApp({ proposedChanges: quarantinedChanges });
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
@@ -2118,7 +2049,7 @@ describe("App smoke tests", () => {
     });
     const { user } = renderApp({ proposedChanges: quarantinedProposedChanges });
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
@@ -2166,7 +2097,7 @@ describe("App smoke tests", () => {
     ]);
     const { user } = renderApp({ proposedChanges: quarantinedProposedChanges });
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
@@ -2273,7 +2204,7 @@ describe("App smoke tests", () => {
       );
     const { user } = renderApp({ gitStatus: cleanGitStatus });
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
@@ -2348,7 +2279,7 @@ describe("App smoke tests", () => {
   it("creates a persisted mock agent run with a proposal, approval, and the demo patch", async () => {
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     await user.type(
       screen.getByRole("textbox", { name: "Agent task request" }),
       "Add a repository context summary",
@@ -2412,7 +2343,7 @@ describe("App smoke tests", () => {
   it("shows OpenAI as unavailable when native credentials are not configured", async () => {
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
 
     const openAiOption = await screen.findByRole("option", {
       name: /OpenAI · gpt-5\.6-luna/,
@@ -2471,7 +2402,7 @@ describe("App smoke tests", () => {
     });
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     const providerSelect = screen.getByRole("combobox", {
       name: "Agent provider",
     });
@@ -2597,7 +2528,7 @@ describe("App smoke tests", () => {
     vi.mocked(requestOpenAiPlan).mockResolvedValue({ summary: "Incomplete" });
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     await waitFor(() => {
       expect(
         screen.getByRole("option", { name: "OpenAI · test-model" }),
@@ -2635,7 +2566,7 @@ describe("App smoke tests", () => {
     );
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     await waitFor(() => {
       expect(
         screen.getByRole("option", { name: "OpenAI · test-model" }),
@@ -2683,7 +2614,7 @@ describe("App smoke tests", () => {
     );
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     await user.type(
       screen.getByRole("textbox", { name: "Agent task request" }),
       "Document the repository entry points",
@@ -2709,7 +2640,7 @@ describe("App smoke tests", () => {
   it("switches the selected agent run from the run list", async () => {
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     await user.click(
       await screen.findByRole("button", {
         name: "Open agent run Refresh repository context index",
@@ -2733,7 +2664,7 @@ describe("App smoke tests", () => {
   it("keeps approval actions visible, wired, and reflected in pending count", async () => {
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Approvals" }));
+    await user.click(screen.getByRole("button", { name: "Review" }));
 
     expect(
       await screen.findByRole("heading", { name: "2 pending approvals" }),
@@ -2855,7 +2786,7 @@ describe("App smoke tests", () => {
     );
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Approvals" }));
+    await user.click(screen.getByRole("button", { name: "Review" }));
 
     expect(await screen.findByText("Loading diff safely")).toBeInTheDocument();
     expect(screen.getByText("Local repository diffs")).toBeInTheDocument();
@@ -2867,7 +2798,7 @@ describe("App smoke tests", () => {
     });
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Approvals" }));
+    await user.click(screen.getByRole("button", { name: "Review" }));
 
     expect(
       await screen.findByText("Diff could not be loaded"),
@@ -2961,7 +2892,7 @@ describe("rollback surface", () => {
       proposedChanges: appliedProposedChange(),
     });
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     // Rollback lives with apply, behind Approval Review.
     await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
@@ -3166,16 +3097,18 @@ describe("repository-scoped facts", () => {
   it("never reports another repository's changed-file count as this one's", async () => {
     const { user } = renderApp({ gitStatus: otherRepositoryStatus });
 
-    // The app enters through Review; this guards the Overview Active Work card,
-    // so open Overview explicitly.
-    await user.click(screen.getByRole("button", { name: "Overview" }));
-    const overview = await screen.findByLabelText("Active work");
+    // Re-pointed, not deleted: the subject is #6's fail-closed guard on derived
+    // Git facts, and the Overview card was only the display it was read
+    // through. Working tree renders the same `effectiveChangedFileCount`, so
+    // the guard still has a surface.
+    await user.click(screen.getByRole("button", { name: "Working tree" }));
+    const hero = (await screen.findByText("Change Review")).closest("article");
 
     // The foreign repository has 7 changes and is dirty; this one's own saved
     // record says 0 and clean. Falling back to this repository's own record is
-    // correct — reporting the other one's 7 is the lie.
-    expect(overview.textContent).not.toContain("7");
-    expect(overview.textContent).toContain("0");
+    // correct -- reporting the other one's 7 is the lie.
+    expect(hero?.textContent).not.toContain("7");
+    expect(hero?.textContent).toContain("No local changes waiting for review");
   });
 
   // The derived Git facts are not only rendered — they are sent to the provider
@@ -3200,7 +3133,7 @@ describe("repository-scoped facts", () => {
     });
     const { user } = renderApp({ gitStatus: otherRepositoryStatus });
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     const providerSelect = screen.getByRole("combobox", {
       name: "Agent provider",
     });
@@ -3260,9 +3193,9 @@ describe("repository-scoped facts", () => {
   it("keeps apply readiness unknown rather than trusting another repository's tree", async () => {
     renderApp({ gitStatus: otherRepositoryStatus });
 
-    await screen.findByRole("button", { name: "Agent Runs" });
+    await screen.findByRole("button", { name: "Review" });
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
@@ -3409,7 +3342,7 @@ describe("repository switching", () => {
     // what discriminates, the leak assertion below never gets evaluated.
     await screen.findByText("/tmp/disposable");
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     const providerSelect = screen.getByRole("combobox", {
       name: "Agent provider",
     });
@@ -3467,7 +3400,7 @@ describe("repository switching", () => {
 
     // Drive a real apply to a real in-flight state: `Apply Patch` only appears
     // once validation, approval, and every readiness gate have passed.
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
@@ -3558,7 +3491,7 @@ describe("repository-scoped agent runs and approvals", () => {
       proposedChanges: proposalsFor(activeRepository.id),
     });
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
 
     const unlinkedGroup = await screen.findByRole("group", {
       name: "Not linked to a saved repository",
@@ -3590,7 +3523,7 @@ describe("repository-scoped agent runs and approvals", () => {
       proposedChanges: proposalsFor(activeRepository.id, otherRepository.id),
     });
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
 
     expect(
       await screen.findByRole("button", {
@@ -3615,7 +3548,7 @@ describe("repository-scoped agent runs and approvals", () => {
       proposedChanges: proposalsFor(activeRepository.id),
     });
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     await user.click(
       await screen.findByRole("button", {
         name: /Open agent run Refresh repository context index/,
@@ -3646,7 +3579,7 @@ describe("repository-scoped agent runs and approvals", () => {
       proposedChanges: proposalsFor(otherRepository.id, otherRepository.id),
     });
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
 
     expect(
       await screen.findByRole("heading", { name: "No agent run selected" }),
@@ -3662,7 +3595,7 @@ describe("repository-scoped agent runs and approvals", () => {
       proposedChanges: proposalsFor(activeRepository.id),
     });
 
-    await user.click(screen.getByRole("button", { name: "Approvals" }));
+    await user.click(screen.getByRole("button", { name: "Review" }));
 
     const unlinkedGroup = await screen.findByRole("group", {
       name: "Not linked to a saved repository",
@@ -3691,7 +3624,7 @@ describe("repository-scoped agent runs and approvals", () => {
       proposedChanges: proposalsFor(activeRepository.id, otherRepository.id),
     });
 
-    await user.click(screen.getByRole("button", { name: "Approvals" }));
+    await user.click(screen.getByRole("button", { name: "Review" }));
 
     expect(
       await screen.findByRole("button", {
@@ -3714,7 +3647,7 @@ describe("repository-scoped agent runs and approvals", () => {
       proposedChanges: proposalsFor(activeRepository.id),
     });
 
-    await user.click(screen.getByRole("button", { name: "Approvals" }));
+    await user.click(screen.getByRole("button", { name: "Review" }));
     await user.click(
       await screen.findByRole("button", {
         name: /Review approval Approve indexing job persistence follow-up/,
@@ -3745,7 +3678,7 @@ describe("repository-scoped agent runs and approvals", () => {
       proposedChanges: proposalsFor(activeRepository.id, otherRepository.id),
     });
 
-    await user.click(screen.getByRole("button", { name: "Approvals" }));
+    await user.click(screen.getByRole("button", { name: "Review" }));
 
     expect(
       await screen.findByRole("heading", { name: "1 pending approvals" }),
@@ -3797,7 +3730,7 @@ describe("no fabricated repository", () => {
     failStorage();
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
 
     const unlinkedGroup = await screen.findByRole("group", {
       name: "Not linked to a saved repository",
@@ -3828,7 +3761,7 @@ describe("one apply entry point (#8 / #11 slice A)", () => {
 
     // Drive the artifact all the way to a live apply: validated and approved,
     // entirely inside Approvals, which is now the sole apply surface.
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
@@ -3852,7 +3785,7 @@ describe("one apply entry point (#8 / #11 slice A)", () => {
 
     // The same approved, validated run seen from Agent Runs offers no apply
     // affordance and renders no patch artifact detail at all.
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     expect(
       screen.queryByRole("button", { name: "Apply Patch" }),
     ).not.toBeInTheDocument();
@@ -3864,7 +3797,7 @@ describe("one apply entry point (#8 / #11 slice A)", () => {
   it("navigates from an Agent Run to its linked approval, with that approval selected", async () => {
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     // Pick the run whose linked approval is NOT the Approvals default, so the
     // control must actually set the selection rather than land on it by chance.
     await user.click(
@@ -3902,7 +3835,7 @@ describe("checks collapse into one line (#11 slice C)", () => {
   const AI_ARTIFACT_ID = "proposal-file-ai-patch-artifact";
 
   async function openGeneratedArtifact(user: ReturnType<typeof userEvent.setup>) {
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
@@ -4047,7 +3980,7 @@ describe("Slice G: the six distinctions as copy", () => {
   async function openGeneratedArtifact(
     user: ReturnType<typeof userEvent.setup>,
   ) {
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
@@ -4095,7 +4028,7 @@ describe("Slice G: the six distinctions as copy", () => {
   //    that carries it had to change.
   it("distinguishes the demo provider from a real one at Provider Context", async () => {
     const { user } = renderApp();
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
 
     expect(
       await screen.findByText(
@@ -4109,7 +4042,7 @@ describe("Slice G: the six distinctions as copy", () => {
   // would trust.
   it("no longer claims the demo provider cannot apply or roll back", async () => {
     const { user } = renderApp();
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     await screen.findByText(/Demo Provider is a demo, not a model/);
 
     expect(screen.queryByText(/plans only/)).not.toBeInTheDocument();
@@ -4191,15 +4124,13 @@ describe("part 2: duplicated and empty cards are not drawn", () => {
   };
 
   const everySection = [
-    "Overview",
+    "Review",
+    "Working tree",
     "Repositories",
-    "Agent Runs",
-    "Approvals",
-    "Changes",
     "Settings",
   ];
 
-  it("draws no workspace metrics strip on any of the six sections", async () => {
+  it("draws no workspace metrics strip on any of the four sections", async () => {
     const { user } = renderApp();
 
     for (const section of everySection) {
@@ -4212,7 +4143,7 @@ describe("part 2: duplicated and empty cards are not drawn", () => {
   it("draws no explainer cards on Changes", async () => {
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Changes" }));
+    await user.click(screen.getByRole("button", { name: "Working tree" }));
 
     expect(screen.queryByLabelText("Change review readiness")).toBeNull();
     expect(screen.queryByText("Generated artifacts")).toBeNull();
@@ -4222,12 +4153,12 @@ describe("part 2: duplicated and empty cards are not drawn", () => {
   it("names no invented check strategy on Agent Runs or Approvals", async () => {
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await openAgentRuns(user);
     expect(screen.queryByText("Check strategy")).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: "Approvals" }));
+    await user.click(screen.getByRole("button", { name: "Review" }));
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Approval Review" }),
+      await screen.findByRole("heading", { level: 1, name: "Review" }),
     ).toBeInTheDocument();
     expect(screen.queryByText("Check strategy")).toBeNull();
   });
@@ -4235,9 +4166,9 @@ describe("part 2: duplicated and empty cards are not drawn", () => {
   it("does not repeat the plan and repository context blocks in Approvals", async () => {
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Approvals" }));
+    await user.click(screen.getByRole("button", { name: "Review" }));
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Approval Review" }),
+      await screen.findByRole("heading", { level: 1, name: "Review" }),
     ).toBeInTheDocument();
 
     expect(screen.queryByText("Proposed Plan Review")).toBeNull();
@@ -4247,9 +4178,9 @@ describe("part 2: duplicated and empty cards are not drawn", () => {
   it("draws no empty artifact panels", async () => {
     const { user } = renderApp({ proposedChanges: [] });
 
-    await user.click(screen.getByRole("button", { name: "Approvals" }));
+    await user.click(screen.getByRole("button", { name: "Review" }));
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Approval Review" }),
+      await screen.findByRole("heading", { level: 1, name: "Review" }),
     ).toBeInTheDocument();
 
     expect(screen.queryByText("No patch artifact records yet")).toBeNull();
@@ -4275,7 +4206,7 @@ describe("part 2: duplicated and empty cards are not drawn", () => {
   it("says the working tree is clean exactly once", async () => {
     const { user } = renderApp({ gitStatus: cleanGitStatus });
 
-    await user.click(screen.getByRole("button", { name: "Changes" }));
+    await user.click(screen.getByRole("button", { name: "Working tree" }));
 
     expect(
       await screen.findAllByText("No local changes waiting for review"),
@@ -4285,7 +4216,7 @@ describe("part 2: duplicated and empty cards are not drawn", () => {
   it("draws no second file explorer on Changes", async () => {
     const { user } = renderApp();
 
-    await user.click(screen.getByRole("button", { name: "Changes" }));
+    await user.click(screen.getByRole("button", { name: "Working tree" }));
 
     expect(screen.queryByLabelText("Indexed file browser")).toBeNull();
   });

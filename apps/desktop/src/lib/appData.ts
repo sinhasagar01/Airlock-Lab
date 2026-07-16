@@ -30,27 +30,6 @@ export const proposedChangePlans = createMockProposedChangePlans();
 export const mockApprovalRequests = createMockApprovalRequests();
 export const mockProposedChanges = createMockPersistedProposedChanges();
 
-export const quickStartItems = [
-  {
-    description: "Add a repository to begin",
-    icon: "repository" as IconName,
-    tone: "agent",
-    title: "Import repository",
-  },
-  {
-    description: "Create a review-only plan with Mock Provider",
-    icon: "play" as IconName,
-    tone: "context",
-    title: "Start mock agent run",
-  },
-  {
-    description: "Review and approve pending changes",
-    icon: "approval" as IconName,
-    tone: "agent",
-    title: "Review approvals",
-  },
-];
-
 export const settingsRows = [
   {
     action: "Manage",
@@ -100,20 +79,18 @@ export const maintenanceActions = [
 ];
 
 export const navigationIcons: Record<NavigationSection, IconName> = {
-  overview: "grid",
+  review: "approval",
   repositories: "repository",
   agents: "play",
-  approvals: "approval",
-  changes: "changes",
+  "working-tree": "changes",
   settings: "settings",
 };
 
 export const sectionEyebrows: Record<NavigationSection, string> = {
-  overview: "Workspace overview",
+  review: "Human approval",
   repositories: "Workspace repositories",
   agents: "Agent runs",
-  approvals: "Human approval",
-  changes: "Workspace changes",
+  "working-tree": "Workspace changes",
   settings: "Workspace settings",
 };
 
@@ -121,10 +98,6 @@ export const sectionHeaders: Record<
   NavigationSection,
   { title: string; description: string }
 > = {
-  overview: {
-    title: workspace.summary.name,
-    description: workspace.summary.description,
-  },
   repositories: {
     // "Repository Intelligence" is demoted out of the headline -- it names a
     // file-tree summary with extension counts, not the section. It survives as
@@ -138,13 +111,15 @@ export const sectionHeaders: Record<
     description:
       "Inspect requested work, repository context, proposed plans, and the approval handoff.",
   },
-  approvals: {
-    title: "Approval Review",
+  review: {
+    title: "Review",
+    // Approve vs apply, stated where the section names itself. Approval is a
+    // recorded decision; only an explicit apply touches the working tree.
     description:
-      "Review proposed work, risks, artifacts, and matching local changes before making a decision.",
+      "Approving records your decision. It does not touch your files.",
   },
-  changes: {
-    title: "Workspace Changes",
+  "working-tree": {
+    title: "Working tree",
     description:
       "Inspect read-only Git status and file diffs without mutating repository state.",
   },

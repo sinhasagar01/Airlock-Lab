@@ -102,20 +102,32 @@ export function createWorkspaceSummary(
   return summary;
 }
 
+/*
+ * UI-local section identifiers. Renaming these is a display change, not a
+ * migration: no table, column, or serde name is derived from them.
+ *
+ * `agents` is a section that is deliberately NOT in `primaryNavigation`. Agent
+ * Runs left the nav with part 4 -- the noun implies a loop that does not exist
+ * -- while the destination is still reachable from Repositories and Working
+ * tree. Part 5 folds it into Review and removes it from this union.
+ */
 export type NavigationSection =
-  "overview" | "repositories" | "agents" | "approvals" | "changes" | "settings";
+  "review" | "repositories" | "agents" | "working-tree" | "settings";
 
 export type NavigationItem = {
   id: NavigationSection;
   label: string;
 };
 
+/*
+ * Four items, and the order is structural rather than decorative: item one is
+ * the surface the product claims is its front door. Review is first because
+ * approving is the decision the whole product exists to hold.
+ */
 export const primaryNavigation: NavigationItem[] = [
-  { id: "overview", label: "Overview" },
+  { id: "review", label: "Review" },
+  { id: "working-tree", label: "Working tree" },
   { id: "repositories", label: "Repositories" },
-  { id: "agents", label: "Agent Runs" },
-  { id: "approvals", label: "Approvals" },
-  { id: "changes", label: "Changes" },
   { id: "settings", label: "Settings" },
 ];
 
