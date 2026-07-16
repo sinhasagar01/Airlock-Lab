@@ -2642,7 +2642,12 @@ dt {
 .diff-metadata-grid {
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* Respond to the card's own width, not the viewport: this grid sits in a
+     column that narrows to ~290px at mid widths (the two-up side column) as
+     well as on phones. Fixed 3-up left each tile ~90px -- too narrow for the
+     18px value "Not generated", which broke mid-word ("genera ted"). auto-fit
+     keeps tiles >=120px so a value wraps between its words, never mid-token. */
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
 }
 
 .diff-metadata-grid div {
