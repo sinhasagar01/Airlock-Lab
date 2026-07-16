@@ -1783,9 +1783,19 @@ dt {
   padding: 14px;
 }
 
+/*
+  The number badge is absolutely positioned, so it is not a grid item and
+  contributes nothing to a `max-content` track. Both real children are pinned to
+  column 2 below, which left column 1 with no item at all: `max-content`
+  resolved to 0 and the status pill was laid out underneath the badge, clipping
+  the first characters of its own label ("completed" reading as "ompleted").
+  An explicit track reserves the width the out-of-flow badge occupies. The size
+  is shared with the badge itself so the two cannot drift apart.
+*/
 .plan-step-list li {
+  --plan-step-badge-size: 28px;
   counter-increment: plan-step;
-  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-columns: var(--plan-step-badge-size) minmax(0, 1fr);
   position: relative;
 }
 
@@ -1799,12 +1809,12 @@ dt {
   display: inline-flex;
   font-size: 12px;
   font-weight: 760;
-  height: 28px;
+  height: var(--plan-step-badge-size);
   justify-content: center;
   left: 14px;
   position: absolute;
   top: 14px;
-  width: 28px;
+  width: var(--plan-step-badge-size);
 }
 
 .plan-step-list .status-pill {
