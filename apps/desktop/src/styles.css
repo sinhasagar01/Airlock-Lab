@@ -706,57 +706,6 @@ p {
   background: var(--color-primary-action-hover);
 }
 
-.overview-grid {
-  display: grid;
-  gap: 24px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  max-width: var(--layout-page-max);
-  width: 100%;
-}
-
-.overview-grid--compact {
-  gap: 16px;
-}
-
-.overview-grid--compact .summary-card {
-  gap: 5px 14px;
-  grid-template-columns: 48px minmax(0, 1fr);
-  min-height: 106px;
-  padding: 18px 20px;
-}
-
-.overview-grid--compact .summary-card > .icon-badge {
-  grid-row: 1 / 4;
-  height: 44px;
-  width: 44px;
-}
-
-.overview-grid--compact .summary-card > .icon-badge .app-icon {
-  height: 20px;
-  transform: none;
-  width: 20px;
-}
-
-.overview-grid--compact .summary-card strong {
-  font-size: 24px;
-}
-
-.overview-grid--compact .summary-card__label,
-.overview-grid--compact .summary-card__detail {
-  font-size: 11px;
-}
-
-.overview-grid--compact .summary-card__detail {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.overview-grid--compact .summary-card__chevron {
-  display: none;
-}
-
 .summary-card,
 .dashboard-card,
 .panel,
@@ -870,20 +819,6 @@ dt {
   grid-row: 1 / 4;
   opacity: 0.55;
   position: static;
-}
-
-.overview-lower-grid {
-  align-items: start;
-  display: grid;
-  gap: 22px;
-  grid-template-columns: minmax(0, 1.38fr) minmax(390px, 0.92fr);
-  max-width: var(--layout-page-max);
-  width: 100%;
-}
-
-.overview-side-column {
-  display: grid;
-  gap: 16px;
 }
 
 .overview-card {
@@ -1451,15 +1386,6 @@ dt {
   position: relative;
 }
 
-.agent-run-workspace {
-  align-items: start;
-  display: grid;
-  gap: 18px;
-  grid-template-columns: minmax(280px, 0.72fr) minmax(0, 1fr);
-  max-width: var(--layout-page-max);
-  width: 100%;
-}
-
 .agent-run-create-card {
   grid-column: 1 / -1;
   padding: 26px;
@@ -1563,35 +1489,11 @@ dt {
   color: var(--color-danger);
 }
 
-.agent-run-list-card,
-.agent-run-detail-card,
-.proposed-plan-card,
-.run-repository-context-card,
-.approval-handoff-card {
-  padding: 26px;
-}
-
-.agent-run-list-card h2,
-.agent-run-detail-card h2,
-.proposed-plan-card h2 {
-  color: var(--color-text-primary);
-  font-size: 24px;
-  font-weight: 760;
-  line-height: 1.18;
-  margin-top: 12px;
-}
-
-.agent-run-list {
-  display: grid;
-  gap: 10px;
-  margin-top: 22px;
-}
-
 /*
- * Records the app cannot tie to a saved repository. Shared by the agent run
- * list and the approval queue: both group rather than drop, because hiding a
- * record is its own dishonesty. The rule and the label are the whole point --
- * an unlabelled group would read as more of the active repository's work.
+ * Records the app cannot tie to a saved repository. Now the approval queue's;
+ * it groups rather than drops, because hiding a record is its own dishonesty.
+ * The rule and the label are the whole point -- an unlabelled group would read
+ * as more of the active repository's work.
  */
 .record-list-group {
   border-top: 1px solid #e4eaf1;
@@ -1618,71 +1520,6 @@ dt {
   line-height: 1.45;
   margin: 0;
   padding: 10px 2px;
-}
-
-.agent-run-list-item {
-  align-items: start;
-  background: #fbfdff;
-  border: 1px solid #e4eaf1;
-  border-radius: var(--radius-md);
-  color: var(--color-text-primary);
-  display: grid;
-  gap: 10px;
-  grid-template-columns: 36px minmax(0, 1fr);
-  min-height: 136px;
-  padding: 16px;
-  text-align: left;
-  transition:
-    background-color 140ms ease,
-    border-color 140ms ease,
-    box-shadow 140ms ease,
-    transform 140ms ease;
-}
-
-.agent-run-list-item:hover {
-  background: #fffaf6;
-  border-color: rgba(236, 120, 85, 0.3);
-  transform: translateY(-1px);
-}
-
-.agent-run-list-item:focus-visible {
-  outline: 3px solid rgba(236, 120, 85, 0.32);
-  outline-offset: 3px;
-}
-
-.agent-run-list-item[aria-current="true"] {
-  background: var(--color-accent-soft);
-  border-color: rgba(236, 120, 85, 0.46);
-  box-shadow: 0 16px 32px rgba(236, 120, 85, 0.12);
-}
-
-.agent-run-list-item > span:nth-child(2) {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-}
-
-.agent-run-list-item strong,
-.agent-run-list-item small {
-  display: block;
-}
-
-.agent-run-list-item strong {
-  font-size: 14px;
-  font-weight: 760;
-  line-height: 1.25;
-}
-
-.agent-run-list-item small {
-  color: var(--color-text-secondary);
-  font-size: 12px;
-  font-weight: 560;
-  line-height: 1.4;
-}
-
-.agent-run-list-item > .status-pill,
-.agent-run-list-item > small {
-  grid-column: 2;
 }
 
 .agent-detail-fact-grid {
@@ -1867,11 +1704,6 @@ dt {
   font-size: 13px;
   font-weight: 680;
   line-height: 1.35;
-}
-
-.agent-run-side-column {
-  display: grid;
-  gap: 18px;
 }
 
 .run-repository-context-card h3,
@@ -4634,20 +4466,14 @@ dd {
     padding-right: 36px;
   }
 
-  .workspace--feature .agent-run-workspace,
   .workspace--feature .approval-review-workspace {
     grid-template-columns: minmax(270px, 0.58fr) minmax(0, 1.42fr);
   }
 
   .workspace--feature .proposed-plan-card,
   .workspace--feature .approval-plan-review-card,
-  .workspace--feature .agent-run-side-column,
   .workspace--feature .approval-side-column {
     grid-column: 1 / -1;
-  }
-
-  .workspace--feature .agent-run-side-column {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .workspace--feature .approval-side-column {
@@ -4785,10 +4611,7 @@ dd {
     justify-content: flex-start;
   }
 
-  .overview-grid,
-  .overview-lower-grid,
   .tab-dashboard-grid,
-  .agent-run-workspace,
   .approval-review-workspace,
   .repository-intelligence-grid,
   .repository-support-grid,
@@ -4796,10 +4619,6 @@ dd {
   .git-review-layout,
   .content-grid {
     grid-template-columns: 1fr;
-  }
-
-  .overview-grid--compact {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .proposed-plan-card {
@@ -4810,16 +4629,8 @@ dd {
     grid-column: auto;
   }
 
-  .agent-run-side-column {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .approval-side-column {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .overview-side-column {
-    grid-template-columns: 1fr;
   }
 }
 
@@ -4886,7 +4697,6 @@ dd {
   .proposed-plan-grid,
   .agent-run-create-form,
   .agent-detail-fact-grid,
-  .agent-run-side-column,
   .approval-detail-fact-grid,
   .approval-side-column,
   .approval-decision-card,
@@ -4949,10 +4759,6 @@ dd {
     padding: 24px;
   }
 
-  .overview-grid--compact {
-    grid-template-columns: 1fr;
-  }
-
   .summary-card {
     grid-template-columns: 56px minmax(0, 1fr) max-content;
   }
@@ -5009,7 +4815,6 @@ dd {
     grid-template-columns: 1fr;
   }
 
-  .agent-run-list-item,
   .approval-queue-item,
   .plan-step-list li,
   .plan-file-item,
@@ -5018,8 +4823,6 @@ dd {
     grid-template-columns: 1fr;
   }
 
-  .agent-run-list-item > .status-pill,
-  .agent-run-list-item > small,
   .approval-queue-item__status,
   .plan-step-list .status-pill,
   .plan-step-list li > div {

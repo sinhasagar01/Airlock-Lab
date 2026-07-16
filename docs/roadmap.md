@@ -874,8 +874,8 @@ it did. Items are ordered by how much they protect or clarify that claim.
   the architecture the fold declined. ~~The in-section `approvals-hero-card` now
   duplicates the page header's eyebrow/title/subtitle and is a candidate for
   removal, but that is a card deletion, not a copy pass, so it was left.~~ —
-  **the hero card was removed in the follow-up below.** Dead `agent-run-*` CSS
-  still unswept.
+  **the hero card was removed in the follow-up below.** ~~Dead `agent-run-*` CSS
+  still unswept.~~ — **swept; see the CSS entry below.**
 
 - **Removed the `approvals-hero-card` that duplicated the page header.** After
   the part-4 header work, Review's in-section hero repeated the page header
@@ -889,6 +889,39 @@ it did. Items are ordered by how much they protect or clarify that claim.
   than deleted — the count/scoping assertions they make are unchanged. Frontend
   184 → 185 (one absence guard, watched failing with the card present before
   removal). AI 19 green; native not run (`cargo` not on PATH).
+
+- **Swept the dead `agent-run-*` and `overview-*` CSS.** Parts 2/4/5 deleted the
+  Overview section, the workspace-metrics strip, and the Agent Runs destination,
+  and each recorded its CSS as "left, a stylesheet sweep is not a card deletion."
+  This is that sweep, scoped to the two families named. 171 lines removed from
+  `styles.css` (`overview-grid`, `overview-grid--compact` and its `.summary-card`
+  descendants, `overview-lower-grid`, `overview-side-column`; `agent-run-workspace`,
+  `agent-run-list`, `agent-run-list-card`, `agent-run-detail-card`,
+  `agent-run-list-item` and its variants, `agent-run-side-column`), including the
+  responsive rules that referenced them.
+
+  **Deadness was proven, not eyeballed** — the discipline for a change no test and
+  no typecheck can catch (jsdom applies no CSS; the build only checks syntax). A
+  script matched every `agent-run*`/`overview*` class token in the stylesheet
+  against every `className` in the source, and a second grep caught **dynamic**
+  construction — which is what saved `agent-run-execution-status--success/--error`
+  (built via `` `…--${agentExecutionState}` ``, invisible to a static token
+  search) and kept them. Only rules whose every selector referenced a
+  proven-dead class were removed; **grouped selectors mixing dead with live**
+  (e.g. `.agent-run-workspace, .approval-review-workspace`, or the `agent-run-list-item`
+  responsive group beside `.approval-queue-item`) had only the dead selector
+  dropped, never the rule.
+
+  **Kept, live:** the compose form's `agent-run-create-*`/`-provider-field`/
+  `-task-field`/`-execution-status*` (the fold moved that form onto Review), the
+  shared `overview-card`/`overview-card__header` base, and the `record-list-*`
+  rules that sat *interleaved* inside the dead `agent-run-list` block (they are
+  the approval queue's). **Out of scope, left standing:** other dead families the
+  removals also stranded — `changes-feature-grid`, `framework-hints-card`,
+  `patch-artifact-empty`, `proposed-plan-card`, `agent-detail-fact-grid`,
+  `maintenance-action--danger`, etc. — since the ask named `agent-run` and
+  `overview`. Braces balanced (662/662); 185 frontend / 19 AI green; native not
+  run (`cargo` not on PATH). CSS-only: no `.tsx` touched.
 
 ## Next
 
