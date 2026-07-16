@@ -264,6 +264,46 @@ it did. Items are ordered by how much they protect or clarify that claim.
   annotation was silently discarded and `strict` stayed green over a render that
   threw. `.at(0)` is what made the compiler produce the fourteen sites.
 
+- **#8 One apply entry point (IA restructure slice A).** `PatchArtifactDetail`
+  — the full readiness gates, typed confirmation, and the apply, validate,
+  rollback, and acknowledge actions — rendered in **both** Agent Runs and
+  Approval Review. Two surfaces on which "approval" and "apply" could blur, when
+  approval is the decision the product is built around. The detail now renders in
+  **exactly one** place: Approval Review. Agent Runs keeps the structured plan and
+  hands off to the linked approval through the existing "Review approval" control,
+  which sets the section to Approvals with that approval selected.
+
+  **What Agent Runs shows instead — the question #8 left open — is: the plan,
+  plus a read-only artifact summary, plus the handoff.** The generated-artifact
+  *list* stays (it is plan information — which files were proposed and each
+  artifact's status) but is now **non-interactive**: without a detail beneath it,
+  a selectable list would be a control that leads nowhere, which this project
+  files as a defect (#7 Dead controls). Making it a static summary keeps the
+  information and removes the dead affordance. Removing the list entirely was
+  considered and rejected as scope beyond the brief; keeping it clickable was
+  rejected as a dead control.
+
+  Pinned by two new tests and proven by exercise before the change: with a run
+  validated and approved, the apply affordance renders in Approvals and **not**
+  in Agent Runs (asserted by both the "Apply Patch" accessible name and the
+  `region` "Patch artifact detail" — the region assertion is the non-vacuous
+  discriminator, since Agent Runs' auto-selected artifact would not have shown
+  "Apply Patch" anyway); and the Agent Runs handoff control navigates to the
+  run's *own* linked approval, selected — tested against the second run, whose
+  approval is not the Approvals default, so the control must set the selection
+  rather than land on it by chance. Twelve existing tests that drove validate,
+  rollback, acknowledge, and apply from the Agent Runs detail were re-routed
+  through Approval Review (the surface that now hosts those actions), not
+  deleted. One count assertion on `reconcileInterruptedPatchApplyAttempts` was
+  loosened from `== 2` to `>= 2`: the extra navigation to reach the recovery
+  evidence drives an additional reconcile pass, and the guarantee was always
+  "it re-runs", never "exactly twice".
+
+  Bound respected: no types, tables, columns, or serde names changed. UI-local
+  only. The `PatchArtifactDetail` component and its Approvals render site are
+  untouched, so apply's safety surface is unchanged — this slice removes a
+  *second door to the same room*, it does not alter the room.
+
 ## Next
 
 ### #4d No gate enforces refreshed validation before retrying a failed apply
@@ -356,12 +396,11 @@ tasks, not bugs, and each needs a decision before implementation.
 
 ### #8 One apply entry point
 
-`PatchArtifactDetail` — including the full readiness gates, typed confirmation,
-and apply action — renders in both Agent Runs and Approval Review. Two entry
-points double the surface on which "approval" and "apply" can blur together, and
-approval is the decision the product is built around. The argument is that apply
-belongs only behind Approval Review. Requires deciding what Agent Runs shows
-instead.
+**Landed as IA restructure slice A — see the Done entry.** The apply detail now
+renders only behind Approval Review; Agent Runs shows the plan, a read-only
+artifact summary, and the "Review approval" handoff. Kept here as a stub because
+its argument — that apply belongs behind the approval decision, not beside it —
+is the rationale later slices build on.
 
 ### #9 Make post-apply verification loud
 
@@ -389,8 +428,12 @@ presented as workflow steps.
 **Slices landed so far.** 1: the product is Airlock, the bundle identifier moved
 once to `com.airlocklab.airlock` and is now pinned by a native test. 2: the mock
 repository fixture is retired — the last fabrication that could present itself as
-a saved repository. Remaining: 3 nav rename, 4 domain nouns, 5 the six
-distinctions, 6 demo-workflow copy. The bound throughout is user-visible copy
+a saved repository. A (#8): one apply entry point — the patch artifact detail
+renders only behind Approval Review, and Agent Runs hands off to the linked
+approval (see the Done entry). Remaining: 3 nav rename, 4 domain nouns, 5 the six
+distinctions, 6 demo-workflow copy. (The letter/number split is intentional:
+these lettered slices — order A, B, D, C, E, F, G — are the restructure's
+stable identifiers; the numbers above predate them and are kept for continuity.) The bound throughout is user-visible copy
 only: types, tables, columns, and serde names keep their identifiers, because
 renaming those is a migration wearing a rename's clothes.
 

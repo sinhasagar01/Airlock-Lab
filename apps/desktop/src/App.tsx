@@ -615,12 +615,6 @@ export function App() {
     ) ??
     selectedApprovalProposedChange?.patchArtifacts[0] ??
     null;
-  const selectedAgentPatchApplyAttempt =
-    patchApplyAttempts.find(
-      (attempt) =>
-        attempt.patchArtifactId === selectedAgentPatchArtifact?.id &&
-        attempt.proposedChangeId === activePersistedProposedChange?.id,
-    ) ?? null;
   const selectedApprovalPatchApplyAttempt =
     patchApplyAttempts.find(
       (attempt) =>
@@ -3212,118 +3206,18 @@ export function App() {
                     Missing records remain placeholders, while any applied
                     artifact is labeled explicitly.
                   </p>
+                  {/*
+                    Read-only here on purpose. Apply — with its readiness gates
+                    and typed confirmation — lives only behind Approval Review
+                    (#8 / #11 slice A). Agent Runs shows what a run proposed and
+                    hands off to the linked approval via the "Review approval"
+                    control in the side column; it never applies. Non-interactive
+                    so there is no selection that leads nowhere.
+                  */}
                   <PatchArtifactList
                     artifacts={
                       activePersistedProposedChange?.patchArtifacts ?? []
                     }
-                    onSelectArtifact={setSelectedAgentPatchArtifactId}
-                    selectedArtifactId={selectedAgentPatchArtifact?.id}
-                  />
-                </section>
-
-                <section className="plan-section patch-artifact-detail-section">
-                  <PatchArtifactDetail
-                    applyAttempt={selectedAgentPatchApplyAttempt}
-                    applyReadinessContext={{
-                      approvalStatus: activeRunApproval?.status ?? null,
-                      hasDurableStorage: storageStatus === "ready",
-                      hasSelectedRepository: hasActiveRepository,
-                      isNativeRuntime: hasNativeRuntime,
-                      repositoryMatches: Boolean(
-                        hasActiveRepository &&
-                        activePersistedProposedChange?.repositoryId ===
-                          activeRepository.id,
-                      ),
-                      currentRepositorySnapshot:
-                        selectedReadinessRepositorySnapshot,
-                      workingTreeState: applyReadinessWorkingTreeState,
-                    }}
-                    applyFeedback={
-                      patchApplyFeedback?.artifactId ===
-                      selectedAgentPatchArtifact?.id
-                        ? patchApplyFeedback
-                        : null
-                    }
-                    acknowledgeFeedback={
-                      acknowledgeFeedback?.artifactId ===
-                      selectedAgentPatchArtifact?.id
-                        ? acknowledgeFeedback
-                        : null
-                    }
-                    artifact={selectedAgentPatchArtifact}
-                    isAcknowledging={
-                      selectedAgentPatchApplyAttempt?.applyAttemptId ===
-                      acknowledgingApplyAttemptId
-                    }
-                    isApplying={
-                      selectedAgentPatchArtifact?.id === applyingPatchArtifactId
-                    }
-                    isRollingBack={
-                      selectedAgentPatchArtifact?.id ===
-                      rollingBackPatchArtifactId
-                    }
-                    rollbackEligibilityContext={rollbackEligibilityContextFor(
-                      activePersistedProposedChange,
-                      selectedAgentPatchArtifact,
-                      selectedAgentPatchApplyAttempt,
-                    )}
-                    rollbackFeedback={
-                      patchRollbackFeedback?.artifactId ===
-                      selectedAgentPatchArtifact?.id
-                        ? patchRollbackFeedback
-                        : null
-                    }
-                    onRollback={(confirmationPhrase) => {
-                      if (
-                        activePersistedProposedChange &&
-                        selectedAgentPatchArtifact
-                      ) {
-                        void rollbackPatchArtifact(
-                          activePersistedProposedChange,
-                          selectedAgentPatchArtifact,
-                          confirmationPhrase,
-                        );
-                      }
-                    }}
-                    onAcknowledge={
-                      selectedAgentPatchApplyAttempt
-                        ? (confirmationPhrase) => {
-                            void acknowledgeApplyAttempt(
-                              selectedAgentPatchApplyAttempt,
-                              confirmationPhrase,
-                            );
-                          }
-                        : undefined
-                    }
-                    isValidating={
-                      selectedAgentPatchArtifact?.id ===
-                      validatingPatchArtifactId
-                    }
-                    onApply={(confirmationPhrase) => {
-                      if (
-                        activePersistedProposedChange &&
-                        selectedAgentPatchArtifact &&
-                        activeRunApproval
-                      ) {
-                        void applyPatchArtifact(
-                          activePersistedProposedChange,
-                          selectedAgentPatchArtifact,
-                          activeRunApproval,
-                          confirmationPhrase,
-                        );
-                      }
-                    }}
-                    onValidate={() => {
-                      if (
-                        activePersistedProposedChange &&
-                        selectedAgentPatchArtifact
-                      ) {
-                        void validatePatchArtifact(
-                          activePersistedProposedChange,
-                          selectedAgentPatchArtifact,
-                        );
-                      }
-                    }}
                   />
                 </section>
 

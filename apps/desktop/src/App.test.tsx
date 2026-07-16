@@ -1309,33 +1309,19 @@ describe("App smoke tests", () => {
     expect(
       screen.getByText(/any applied artifact is labeled explicitly/),
     ).toBeInTheDocument();
-    expect(screen.getAllByText("Patch not generated").length).toBeGreaterThan(
-      0,
-    );
-    expect(
-      screen.getByText(
-        "Future agent execution will attach a reviewable generated patch here.",
-      ),
-    ).toBeInTheDocument();
+    // The read-only list still surfaces each artifact's status; the "Patch not
+    // generated" detail state and its copy moved to Approval Review with the
+    // rest of the patch artifact detail.
     expect(screen.getAllByText("not generated").length).toBeGreaterThan(0);
     expect(
       screen.queryByText("Generated patch artifact preview"),
     ).not.toBeInTheDocument();
-    await user.click(
-      screen.getByRole("button", {
-        name: /generated packages\/ai\/src\/index\.ts/,
-      }),
-    );
-    expect(screen.getByText("Generated patch artifact")).toBeInTheDocument();
-    expect(
-      screen.getByText("Provider-generated proposal · not applied"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("+export type PatchArtifact = string;"),
-    ).toBeInTheDocument();
+    // Provider context prose stays with the run on this surface.
     expect(
       screen.getByText(/Mock runs do not generate patch content/),
     ).toBeInTheDocument();
+    // The generated-artifact list is a read-only summary in Agent Runs; the
+    // reviewable detail and every apply affordance now live in Approval Review.
     expect(screen.getByText(String(defaultFiles.length))).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Review approval" }),
@@ -1348,6 +1334,19 @@ describe("App smoke tests", () => {
 
     expect(
       await screen.findByRole("heading", { name: "2 pending approvals" }),
+    ).toBeInTheDocument();
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: /generated packages\/ai\/src\/index\.ts/,
+      }),
+    );
+    expect(screen.getByText("Generated patch artifact")).toBeInTheDocument();
+    expect(
+      screen.getByText("Provider-generated proposal · not applied"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("+export type PatchArtifact = string;"),
     ).toBeInTheDocument();
   });
 
@@ -1380,8 +1379,10 @@ describe("App smoke tests", () => {
     });
 
     await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    // Validation lives with apply, behind Approval Review.
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
-      screen.getByRole("button", {
+      await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
       }),
     );
@@ -1406,23 +1407,16 @@ describe("App smoke tests", () => {
     const { user } = renderApp();
 
     await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    // Apply Readiness renders on the sole apply surface: Approval Review.
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
 
     expect(
-      screen.getByRole("heading", { name: "Apply Readiness" }),
+      await screen.findByRole("heading", { name: "Apply Readiness" }),
     ).toBeInTheDocument();
     expect(
       screen.getByText(
         "Applying modifies files in your working tree. It does not commit or stage changes, and approval alone never applies a patch.",
       ),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Apply unavailable" }),
-    ).toBeDisabled();
-
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
-
-    expect(
-      screen.getByRole("heading", { name: "Apply Readiness" }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Apply unavailable" }),
@@ -1664,8 +1658,10 @@ describe("App smoke tests", () => {
       expect(reconcileInterruptedPatchApplyAttempts).toHaveBeenCalledTimes(1),
     );
     await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    // Apply, and its recovery evidence, live only behind Approval Review now.
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
-      screen.getByRole("button", {
+      await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
       }),
     );
@@ -1683,8 +1679,14 @@ describe("App smoke tests", () => {
     expect(
       screen.getByRole("button", { name: "Apply unavailable" }),
     ).toBeDisabled();
+    // Reconciliation re-runs after the initial hydrate. The exact count is not
+    // the guarantee -- navigating to the linked approval to reach the recovery
+    // evidence drives an extra pass -- so assert it ran again, not that it ran
+    // exactly twice.
     await waitFor(() =>
-      expect(reconcileInterruptedPatchApplyAttempts).toHaveBeenCalledTimes(2),
+      expect(
+        vi.mocked(reconcileInterruptedPatchApplyAttempts).mock.calls.length,
+      ).toBeGreaterThanOrEqual(2),
     );
   });
 
@@ -1739,8 +1741,9 @@ describe("App smoke tests", () => {
     const { user } = renderApp({ proposedChanges: quarantinedChanges });
 
     await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
-      screen.getByRole("button", {
+      await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
       }),
     );
@@ -1773,8 +1776,9 @@ describe("App smoke tests", () => {
     const { user } = renderApp({ proposedChanges: quarantinedProposedChanges });
 
     await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
-      screen.getByRole("button", {
+      await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
       }),
     );
@@ -1820,8 +1824,9 @@ describe("App smoke tests", () => {
     const { user } = renderApp({ proposedChanges: quarantinedProposedChanges });
 
     await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
-      screen.getByRole("button", {
+      await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
       }),
     );
@@ -1926,8 +1931,9 @@ describe("App smoke tests", () => {
     const { user } = renderApp({ gitStatus: cleanGitStatus });
 
     await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
-      screen.getByRole("button", {
+      await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
       }),
     );
@@ -1935,12 +1941,6 @@ describe("App smoke tests", () => {
       screen.getByRole("button", { name: "Validate & dry-run" }),
     );
     await screen.findByText("dry run passed");
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
-    await user.click(
-      screen.getByRole("button", {
-        name: /generated packages\/ai\/src\/index\.ts/,
-      }),
-    );
     await user.click(screen.getByRole("button", { name: "Approve" }));
     await user.click(
       await screen.findByRole("button", { name: "Apply Patch" }),
@@ -2170,6 +2170,11 @@ describe("App smoke tests", () => {
     expect(saveApprovalRequest).toHaveBeenCalledWith(
       expect.objectContaining({ status: "pending" }),
     );
+    // Validation and the reviewable detail live behind Approval Review now.
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
+    await user.click(
+      await screen.findByRole("button", { name: /generated src\/App\.tsx/ }),
+    );
     expect(
       await screen.findByText("Provider-generated proposal · not applied"),
     ).toBeInTheDocument();
@@ -2220,12 +2225,6 @@ describe("App smoke tests", () => {
         }),
       );
     });
-
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
-    expect(
-      await screen.findByText("Provider-generated proposal · not applied"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("dry run passed")).toBeInTheDocument();
   });
 
   it("rejects malformed OpenAI output without creating review records", async () => {
@@ -2760,6 +2759,8 @@ describe("rollback surface", () => {
     });
 
     await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    // Rollback lives with apply, behind Approval Review.
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
         name: new RegExp(`generated ${AI_PATH.replace(/[/.]/g, "\\$&")}`),
@@ -3056,6 +3057,7 @@ describe("repository-scoped facts", () => {
     await screen.findByRole("button", { name: "Agent Runs" });
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
@@ -3215,6 +3217,7 @@ describe("repository switching", () => {
     // Drive a real apply to a real in-flight state: `Apply Patch` only appears
     // once validation, approval, and every readiness gate have passed.
     await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
     await user.click(
       await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
@@ -3222,12 +3225,6 @@ describe("repository switching", () => {
     );
     await user.click(screen.getByRole("button", { name: "Validate & dry-run" }));
     await screen.findByText("dry run passed");
-    await user.click(screen.getByRole("button", { name: "Review approval" }));
-    await user.click(
-      await screen.findByRole("button", {
-        name: /generated packages\/ai\/src\/index\.ts/,
-      }),
-    );
     await user.click(screen.getByRole("button", { name: "Approve" }));
     await user.click(await screen.findByRole("button", { name: "Apply Patch" }));
     await user.type(
@@ -3558,5 +3555,90 @@ describe("no fabricated repository", () => {
         name: /Open agent run Draft app shell implementation plan/,
       }),
     ).toBeInTheDocument();
+  });
+});
+
+describe("one apply entry point (#8 / #11 slice A)", () => {
+  // A clean tree lets the readiness gates reach the live apply affordance; a
+  // dirty tree would block it and make "no Apply Patch in Agent Runs" vacuous.
+  const cleanGitStatus: GitStatusSummary = {
+    ...defaultGitStatus,
+    isClean: true,
+    changedFileCount: 0,
+    stagedCount: 0,
+    unstagedCount: 0,
+    untrackedCount: 0,
+    files: [],
+  };
+
+  it("renders the apply affordance only in Approvals, never in Agent Runs", async () => {
+    const { user } = renderApp({ gitStatus: cleanGitStatus });
+
+    // Drive the artifact all the way to a live apply: validated and approved,
+    // entirely inside Approvals, which is now the sole apply surface.
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
+    await user.click(
+      await screen.findByRole("button", {
+        name: /generated packages\/ai\/src\/index\.ts/,
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Validate & dry-run" }),
+    );
+    await screen.findByText("dry run passed");
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+
+    // Exactly one apply affordance render site, and it is here in Approvals.
+    expect(
+      await screen.findByRole("button", { name: "Apply Patch" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: "Apply Patch" }),
+    ).toHaveLength(1);
+    expect(
+      screen.getAllByRole("region", { name: "Patch artifact detail" }),
+    ).toHaveLength(1);
+
+    // The same approved, validated run seen from Agent Runs offers no apply
+    // affordance and renders no patch artifact detail at all.
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    expect(
+      screen.queryByRole("button", { name: "Apply Patch" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "Patch artifact detail" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("navigates from an Agent Run to its linked approval, with that approval selected", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    // Pick the run whose linked approval is NOT the Approvals default, so the
+    // control must actually set the selection rather than land on it by chance.
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Open agent run Refresh repository context index",
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
+
+    // The section switched to Approvals...
+    expect(
+      await screen.findByRole("heading", { name: "2 pending approvals" }),
+    ).toBeInTheDocument();
+    // ...with the run's own linked approval selected, not the default one.
+    expect(
+      screen.getByRole("heading", {
+        name: "Approve indexing job persistence follow-up",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", {
+        name: "Approve provider abstraction patch plan",
+      }),
+    ).not.toBeInTheDocument();
   });
 });
