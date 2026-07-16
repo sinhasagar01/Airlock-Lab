@@ -1814,6 +1814,104 @@ describe("App smoke tests", () => {
     expect(card?.textContent).not.toContain("No active work");
   });
 
+  // A real proposal, shaped like one a provider run persists: its id is NOT the
+  // demo workflow's `proposal-mvp-shell`. That is the whole discriminator. The
+  // card used to resolve its content through a hardcoded lookup for that one
+  // fixture id, so every real proposal was invisible to it and Overview
+  // reported "No active work" while Approvals showed the proposal waiting.
+  function realProposal(
+    overrides: Partial<PersistedProposedChange> = {},
+  ): PersistedProposedChange {
+    return {
+      id: "proposal-openai-timeout",
+      runId: "run-openai-timeout",
+      approvalRequestId: "approval-openai-timeout",
+      repositoryId: "repo-workspace",
+      title: "Bound the provider request timeout",
+      summary: "A real provider run's proposal, not the demo fixture.",
+      status: "ready_for_review",
+      files: [],
+      patchArtifacts: [],
+      createdAt: "Today, 11:20",
+      updatedAt: "Today, 11:20",
+      ...overrides,
+    };
+  }
+
+  it("reports a real proposal as active work, not only the demo fixture", async () => {
+    const { user } = renderApp({ proposedChanges: [realProposal()] });
+
+    await user.click(screen.getByRole("button", { name: "Overview" }));
+    const card = (
+      await screen.findByText("Active Work")
+    ).closest("article");
+
+    expect(card?.textContent).toContain("Bound the provider request timeout");
+    expect(card?.textContent).not.toContain("No active work");
+  });
+
+  it("never reports another repository's proposal as this repository's active work", async () => {
+    // The card's own meta rows -- Repository, Branch, Local path, Open Changes
+    // -- are all active-repository facts. A foreign proposal's title above them
+    // would print one repository's work over another's branch: the exact lie #6
+    // fixed at two other sites.
+    const { user } = renderApp({
+      proposedChanges: [realProposal({ repositoryId: "repo-somewhere-else" })],
+    });
+
+    await user.click(screen.getByRole("button", { name: "Overview" }));
+    const card = (
+      await screen.findByText("Active Work")
+    ).closest("article");
+
+    expect(card?.textContent).not.toContain("Bound the provider request timeout");
+    expect(card?.textContent).toContain("No active work");
+  });
+
+  it("says how many proposals are active rather than implying the one shown is all", async () => {
+    const { user } = renderApp({
+      proposedChanges: [
+        realProposal(),
+        realProposal({
+          id: "proposal-openai-retry",
+          runId: "run-openai-retry",
+          approvalRequestId: "approval-openai-retry",
+          title: "Retry the failed apply",
+        }),
+      ],
+    });
+
+    await user.click(screen.getByRole("button", { name: "Overview" }));
+    const card = (await screen.findByText("Active Work")).closest("article");
+
+    // The count counts the scoped list it describes, per #6 -- two here, both
+    // this repository's. It must not silently show one of two.
+    expect(card?.textContent).toContain("2 proposals are active in this repository");
+  });
+
+  it("does not count another repository's proposal in this repository's active work", async () => {
+    const { user } = renderApp({
+      proposedChanges: [
+        realProposal(),
+        realProposal({
+          id: "proposal-foreign",
+          repositoryId: "repo-somewhere-else",
+          title: "Someone else's work",
+        }),
+      ],
+    });
+
+    await user.click(screen.getByRole("button", { name: "Overview" }));
+    const card = (await screen.findByText("Active Work")).closest("article");
+
+    // One active proposal here, so no count line at all -- and certainly not
+    // "2", which is the number a workspace-wide count would print above this
+    // repository's own branch.
+    expect(card?.textContent).toContain("Bound the provider request timeout");
+    expect(card?.textContent).not.toContain("2 proposals are active");
+    expect(card?.textContent).not.toContain("Someone else's work");
+  });
+
   it("does not offer an upgrade for a tier that does not exist", async () => {
     renderApp();
 

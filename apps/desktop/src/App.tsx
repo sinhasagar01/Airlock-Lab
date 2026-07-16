@@ -46,6 +46,7 @@ import {
 import { AppHeader, AppShell, Sidebar } from "./components/AppShell";
 import { GitDiffPreviewPanel } from "./features/changes/GitDiffPreviewPanel";
 import { demoWorkflow } from "./features/demo-workflow/demoWorkflow";
+import { selectActiveWork } from "./features/overview/activeWork";
 import {
   isSeededRecordId,
   isSeededRunId,
@@ -670,6 +671,15 @@ export function App() {
     persistedProposedChanges.find(
       (change) => change.id === demoWorkflow.proposedChangeId,
     ) ?? null;
+  // Overview's Active Work card. Scoped to the active repository because the
+  // card's own body is active-repository facts; see `selectActiveWork`.
+  const activeWork = useMemo(
+    () =>
+      hasActiveRepository
+        ? selectActiveWork(persistedProposedChanges, activeRepository.id)
+        : null,
+    [activeRepository.id, hasActiveRepository, persistedProposedChanges],
+  );
   const demoWorkflowGeneratedArtifactCount =
     demoWorkflowProposal?.patchArtifacts.filter(
       (artifact) => artifact.status === "generated",
@@ -2361,32 +2371,58 @@ export function App() {
             <div className="active-work-card__header">
               <div>
                 <p className="card-eyebrow card-eyebrow--dot">Active Work</p>
-                <h2>{demoWorkflowProposal?.title ?? "No active work"}</h2>
+                {/*
+                  Real work, scoped to the active repository -- not a hardcoded
+                  lookup for the demo fixture's id, which left every real
+                  proposal invisible here while Approvals showed it waiting.
+                */}
+                <h2>{activeWork?.proposal.title ?? "No active work"}</h2>
               </div>
               {/*
                 No proposal means no status. The pill previously fell back to
                 the literal "waiting for approval", so a card whose own heading
                 read "No active work" contradicted itself an inch below.
               */}
-              {demoWorkflowProposal ? (
+              {activeWork ? (
                 <StatusPill
-                  tone={proposedChangeStatusTone(demoWorkflowProposal.status)}
+                  tone={proposedChangeStatusTone(activeWork.proposal.status)}
                   size="sm"
                 >
-                  {demoWorkflowProposal.status.replaceAll("_", " ")}
+                  {activeWork.proposal.status.replaceAll("_", " ")}
                 </StatusPill>
               ) : null}
             </div>
 
+            {/*
+              "in this repository", said out loud. This card is repository-scoped
+              and it sits on a dashboard whose other numbers are workspace totals
+              that say so ("across all repositories"). An unlabelled scoped claim
+              beside a labelled total is the shape #6 had to settle deliberately.
+            */}
             <p className="active-work-card__description">
-              {!demoWorkflowProposal
-                ? "Nothing is waiting for review."
-                : demoWorkflowProposal.status === "approved"
-                  ? "Approval is complete. No generated artifact has been applied."
-                  : demoWorkflowProposal.status === "rejected"
-                    ? "The proposal was rejected. No generated artifact was applied."
+              {!activeWork
+                ? "Nothing is waiting for review in this repository."
+                : activeWork.proposal.status === "quarantine_required"
+                  ? "This repository is blocked until you record an inspection. No further patch can be applied here until then."
+                  : activeWork.proposal.status === "approved"
+                    ? "Approval is complete. No generated artifact has been applied."
                     : "Review the proposed plan and artifact states before any execution."}
             </p>
+
+            {/*
+              Showing one of several without saying so would understate the work
+              waiting -- a quieter version of the contradiction this card already
+              had. The count counts the scoped list it describes, per #6, and it
+              deliberately does not rank: with two proposals both at
+              `ready_for_review` neither needs attention first, and `updatedAt`
+              cannot break the tie (see `selectActiveWork`).
+            */}
+            {activeWork && activeWork.activeCount > 1 ? (
+              <p className="active-work-card__description">
+                {activeWork.activeCount} proposals are active in this
+                repository. Approvals lists them all.
+              </p>
+            ) : null}
 
             <div className="active-work-card__divider" />
 
