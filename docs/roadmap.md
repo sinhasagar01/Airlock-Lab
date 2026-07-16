@@ -1004,16 +1004,29 @@ packaged QA that #6 exists to unblock.
 
 ### #7 Frontend UI-truthfulness
 
-- **Approval durability.** `updateApprovalStatus` writes UI state before
-  persisting, with no `storageStatus` guard and no `try`/`catch` — the only
+**Re-verified 2026-07-16** against the post-parts-2/4/5 code. The parts rebuild
+(nav collapse, Review fold, Overview + card deletions) resolved two findings
+incidentally and shrank a third; the two data-shape findings remain live. Each
+entry below carries its current verdict.
+
+- **Approval durability. — LIVE (App.tsx:2031–2077).** `updateApprovalStatus`
+  writes UI state (`setApprovalRequests`/`setAgentRuns`/`setPersistedProposedChanges`)
+  before the `await updateApprovalRequestStatus` / `await saveProposedChanges`
+  persistence, with no `storageStatus` guard and no `try`/`catch` — the only
   mutation path lacking both. A rejected write leaves the UI claiming
   "approved". Fails closed at the native boundary (apply re-reads SQLite), so it
   misleads the user rather than endangering the repository.
-- **Provider pill reports the wrong provider.** The Agent Run "Provider Context"
+- ~~**Provider pill reports the wrong provider.** The Agent Run "Provider Context"
   pill renders the mock provider's `status` with a hard-coded success tone, even
   for an OpenAI run, while the prose directly beneath it correctly branches on
   `providerId`. An OpenAI run whose provider is unreachable still shows
-  "connected".
+  "connected".~~ — **STALE, resolved by the parts 2/4/5 rebuild (re-verified
+  2026-07-16).** Agent Runs folded into Review; the surviving Provider Context
+  block (App.tsx:2883–2900) is prose-only and branches on `providerId`, and the
+  compose status pill (App.tsx:2535–2543) shows "configured" / "not configured"
+  for OpenAI and the real `provider.status` for mock — no false "connected".
+  Residue, cosmetic only: a green provider-name chip (App.tsx:2603) styles the
+  provider *name* with a success tone, but it makes no status claim.
 - ~~**A never-indexed repository is indexed by a button that says "Reindex".**~~
   — **landed with #11 slice D (see the Done entry).** Selection now starts
   indexing on both selection surfaces, so the Reindex button is no longer a
@@ -1027,13 +1040,15 @@ packaged QA that #6 exists to unblock.
   index asserted a previous one. Suspected part of what stalled the human packaged
   QA at its indexing step; the operator's own account is in
   `docs/qa/evidence/mvp-demo-v1-disposable-apply-qa.md`.
-- **Dead controls.** Two "Copy repository path" buttons and a "View all" button
-  render with no handler. ~~Settings draws a "Clear caches" action that cannot
-  execute and a `RESET WORKSPACE` confirmation input whose button is
+- **Dead controls. — REDUCED to one (re-verified 2026-07-16).** ~~Two "Copy
+  repository path" buttons and a "View all" button render with no handler.~~
+  The parts rebuild removed "View all" and the second copy button; **one dead
+  "Copy repository path" button remains** (App.tsx:2215 — `<button>` with an
+  `aria-label` and no `onClick`). ~~Settings draws a "Clear caches" action that
+  cannot execute and a `RESET WORKSPACE` confirmation input whose button is
   permanently `disabled`, so `resetConfirmationText` is write-only state.~~ —
   **the two Settings controls landed with the part 2 deletion pass**, along with
-  `resetConfirmationText` itself. Ship a control or do not draw it. The two
-  "Copy repository path" buttons and "View all" are still open.
+  `resetConfirmationText` itself. Ship a control or do not draw it.
 - ~~Quarantine renders as a calm neutral pill~~ — landed with #1.
 - ~~Overview "✓ No" clean marker disagrees with Changes~~ — landed with #2.
 - ~~Overview "Active work" says "No active work" beside a "waiting for approval"
@@ -1041,12 +1056,15 @@ packaged QA that #6 exists to unblock.
   in every respect except how it was found: by a human opening the packaged app,
   not by reading the code. Recorded here because the list is where this class of
   finding belongs, and because it is evidence that the class is not exhausted.
-- **`createdAt` / `updatedAt` / `startedAt` are display strings, not timestamps.**
-  Found while implementing the Active Work fix, which needed to order proposals
-  and could not. `AgentRun.startedAt` is built at `App.tsx:772` as
+- **`createdAt` / `updatedAt` / `startedAt` are display strings, not timestamps.
+  — LIVE (re-verified 2026-07-16; line refs updated).** Found while implementing
+  the Active Work fix, which needed to order proposals and could not.
+  `AgentRun.startedAt` is built at `App.tsx:685` as
   `` `Today, ${createdAt.toLocaleTimeString(...)}` `` — **for real runs, not only
-  fixtures** — and flows into the real proposal's `createdAt` and `updatedAt` via
-  `createdAt: request.startedAt`. `updateApprovalStatus` then writes
+  fixtures** — and flows into the real proposal's `createdAt` via
+  `createdAt: request.startedAt` (`packages/ai/src/index.ts:1547`, `:1569`,
+  `:1582`). `updateApprovalStatus` then writes `new Date().toISOString()` into
+  `updatedAt`. `updateApprovalStatus` then writes
   `new Date().toISOString()` into `updatedAt`. So one field holds two
   incompatible formats, and **neither can order anything**: lexicographically
   every `"Today, ..."` sorts after every ISO string, and `"Today, 9:05"` sorts
@@ -1093,8 +1111,11 @@ packaged QA that #6 exists to unblock.
   gitignored, so the finding is recorded **here** as well rather than only on one
   machine: retire the card (per slice F's deferred Overview removal), point it at
   real work with an explicit scope label, or rename it to the demo workflow's
-  proposal so it stops claiming workspace truth. **Resolved by the second
-  option** — see below.
+  proposal so it stops claiming workspace truth. **First resolved by the second
+  option — then MOOT (re-verified 2026-07-16): part 4 deleted the Overview
+  section and `features/overview/activeWork.ts` entirely, so the card no longer
+  exists on any surface.** The first resolution stands in history; the card it
+  fixed is gone.
 
 ## Design Changes
 
