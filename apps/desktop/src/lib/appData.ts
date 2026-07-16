@@ -51,27 +51,6 @@ export const quickStartItems = [
   },
 ];
 
-export const changeFeatureBlocks = [
-  {
-    description:
-      "Current branch, Git cleanliness, and repository readiness are checked before review.",
-    icon: "repository" as IconName,
-    title: "Repository status",
-  },
-  {
-    description:
-      "Future generated patch artifacts stay separate from current local Git diffs.",
-    icon: "changes" as IconName,
-    title: "Generated artifacts",
-  },
-  {
-    description:
-      "Release checks summarize risk, approvals, and follow-up work before merge.",
-    icon: "approval" as IconName,
-    title: "Release readiness",
-  },
-];
-
 export const settingsRows = [
   {
     action: "Manage",

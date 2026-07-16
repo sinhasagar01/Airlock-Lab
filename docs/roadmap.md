@@ -713,6 +713,52 @@ it did. Items are ordered by how much they protect or clarify that claim.
   App), and flattening the rank map failed 8. Predicted 179 → 198 frontend (+15
   `selectActiveWork` unit, +4 App); actual 198. Native 104 and AI 15 unchanged.
 
+- **Part 2 deletion pass: duplicated and empty cards.** 18 stat cards asserting
+  3 facts (one "Workspace metrics" strip rendered above all six sections, so one
+  deletion took all 18), Changes' three explainer cards, the Validation "Check
+  strategy" card on both surfaces, the duplicated "Proposed Plan Review" and
+  "Repository Context" blocks in Approvals, the "Package / Framework Hints" card,
+  Changes' second "No local changes waiting for review", the indexed-file browser
+  in Changes, and the two Settings controls that could never enable. Frontend
+  199 -> 200 (9 added, 8 deleted); predicted 200, actual 200.
+
+  **Lint and typecheck are blind to dead code here, which is worth recording.**
+  After the deletions both were green while eight symbols were orphaned --
+  `SummaryCard`, `waitingAgentRunCount`, `indexedRepositoryCount`,
+  `changeFeatureBlocks`, `renderIndexedFileBrowser`, `resetConfirmationText`,
+  and the `IndexedFileBrowser` import. There is no `no-unused-vars` rule and
+  `noUnusedLocals` is off, so green meant only that nothing crashed. Each was
+  found by grep and removed by hand.
+
+  **Three consequences the brief did not predict, recorded rather than absorbed:**
+
+  1. **The file-preview feature lost its only UI.** The brief called the Changes
+     browser "a second file explorer" -- true of that screen, false of the app.
+     `renderIndexedFileBrowser`'s `"compact"` variant was already dead, so
+     Changes was the sole call site. Deleting it orphaned
+     `IndexedFileBrowser.tsx` (deleted) and **8 preview tests** (deleted), and
+     left `previewRepositoryFile` / `storage/filePreview.ts` live but
+     unreachable -- nothing sets `selectedFilePath` now, so the app fetches a
+     preview no surface renders. Options in `.loop/decisions.md`; (a) rehome in
+     Repository, where the unused `"compact"` variant suggests it was headed.
+  2. **The Package / Framework Hints card carried real facts.** The brief named
+     it by its dead "Package scripts unavailable" note, but the card also drew
+     path-derived TypeScript/Tauri hints, which two assertions pinned. The whole
+     card went, as instructed; the hints were real and are now gone.
+  3. **#6's honest survivor was a duplicate.** The Approvals "Repository
+     Context" side card was the one place #6 deliberately allowed the active
+     repository's branch to print, and its test asserted exactly 1 occurrence.
+     It duplicates the identical card on Agent Runs, so part 2 deleted it and
+     the assertion is now 0. Re-proven non-vacuous by reintroducing #6's
+     original bug and watching it fail.
+
+  Dead CSS was **not** swept: `overview-grid`, `changes-feature-grid`,
+  `framework-hints-card`, `patch-artifact-empty`, `file-browser-shell`,
+  `git-status-empty`, `approval-plan-review-card`, and the
+  `maintenance-action--danger` rules survive with no markup. Left deliberately --
+  the classes sit beside shared ones like `overview-card`, and a stylesheet sweep
+  is not a card deletion.
+
 ## Next
 
 ### #4d No gate enforces refreshed validation before retrying a failed apply
@@ -784,10 +830,12 @@ packaged QA that #6 exists to unblock.
   QA at its indexing step; the operator's own account is in
   `docs/qa/evidence/mvp-demo-v1-disposable-apply-qa.md`.
 - **Dead controls.** Two "Copy repository path" buttons and a "View all" button
-  render with no handler. Settings draws a "Clear caches" action that cannot
+  render with no handler. ~~Settings draws a "Clear caches" action that cannot
   execute and a `RESET WORKSPACE` confirmation input whose button is
-  permanently `disabled`, so `resetConfirmationText` is write-only state. Ship a
-  control or do not draw it.
+  permanently `disabled`, so `resetConfirmationText` is write-only state.~~ —
+  **the two Settings controls landed with the part 2 deletion pass**, along with
+  `resetConfirmationText` itself. Ship a control or do not draw it. The two
+  "Copy repository path" buttons and "View all" are still open.
 - ~~Quarantine renders as a calm neutral pill~~ — landed with #1.
 - ~~Overview "✓ No" clean marker disagrees with Changes~~ — landed with #2.
 - ~~Overview "Active work" says "No active work" beside a "waiting for approval"

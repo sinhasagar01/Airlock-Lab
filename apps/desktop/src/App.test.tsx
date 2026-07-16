@@ -998,12 +998,16 @@ describe("App smoke tests", () => {
     expect(screen.getByText("docs")).toBeInTheDocument();
     expect(screen.getAllByText("package.json").length).toBeGreaterThan(0);
     expect(screen.getAllByText("README.md").length).toBeGreaterThan(0);
-    expect(screen.getByText("TypeScript")).toBeInTheDocument();
-    expect(screen.getByText("Tauri")).toBeInTheDocument();
-    expect(screen.getByText("Package scripts unavailable")).toBeInTheDocument();
+    // The TypeScript/Tauri framework hints and the "Package scripts
+    // unavailable" note left with the Package / Framework Hints card in part 2.
+    // The hints were real path-derived facts, so their loss is recorded in the
+    // roadmap rather than silently absorbed here.
   });
 
-  it("renders confirmation-gated Settings maintenance actions", async () => {
+  // Retitled: the two confirmation-gated actions this covered could never
+  // enable, and part 2 deleted them. Reindex is the one maintenance action that
+  // does something, so it is what is left to assert.
+  it("renders the one Settings maintenance action that can run", async () => {
     const { user } = renderApp();
 
     await user.click(screen.getByRole("button", { name: "Settings" }));
@@ -1016,29 +1020,6 @@ describe("App smoke tests", () => {
     expect(
       screen.getByRole("button", { name: "Reindex repository" }),
     ).toBeEnabled();
-    expect(
-      screen.getByRole("button", { name: "Clear workspace caches" }),
-    ).toBeDisabled();
-    expect(
-      screen.getByText(
-        "Cache clearing is unavailable until cache boundaries are formalized.",
-      ),
-    ).toBeInTheDocument();
-
-    const resetButton = screen.getByRole("button", {
-      name: "Reset workspace",
-    });
-    expect(resetButton).toBeDisabled();
-    await user.type(
-      screen.getByLabelText("Type RESET WORKSPACE to confirm reset"),
-      "RESET WORKSPACE",
-    );
-    expect(resetButton).toBeDisabled();
-    expect(
-      screen.getByText(
-        /Reset is unavailable until app-local delete boundaries are formalized/,
-      ),
-    ).toBeInTheDocument();
   });
 
   it("keeps OpenAI connection testing disabled when credentials are unavailable", async () => {
@@ -1428,7 +1409,6 @@ describe("App smoke tests", () => {
     expect(screen.getByText("Ordered plan")).toBeInTheDocument();
     expect(screen.getByText("Affected files")).toBeInTheDocument();
     expect(screen.getByText("Known risks")).toBeInTheDocument();
-    expect(screen.getByText("Check strategy")).toBeInTheDocument();
     expect(
       screen.getAllByText("apps/desktop/src/App.tsx").length,
     ).toBeGreaterThan(0);
@@ -2774,7 +2754,6 @@ describe("App smoke tests", () => {
     expect(
       screen.getByText(/Mock Provider.*mock-planner-v1/),
     ).toBeInTheDocument();
-    expect(screen.getByText("Plan attached to approval")).toBeInTheDocument();
     expect(screen.getByText("Proposal Status")).toBeInTheDocument();
     expect(screen.getByText("Patch Artifacts")).toBeInTheDocument();
     expect(screen.getByText("Patch artifact review")).toBeInTheDocument();
@@ -2797,9 +2776,9 @@ describe("App smoke tests", () => {
     expect(screen.getAllByText("Patch unavailable").length).toBeGreaterThan(0);
     expect(screen.getAllByText("ready for review").length).toBeGreaterThan(0);
     expect(screen.getAllByText("not generated").length).toBeGreaterThan(0);
-    expect(screen.getByText("Ordered plan")).toBeInTheDocument();
-    expect(screen.getByText("Review risks")).toBeInTheDocument();
-    expect(screen.getByText("Check strategy")).toBeInTheDocument();
+    // Ordered plan / Review risks / Check strategy asserted the Proposed Plan
+    // Review card, which part 2 deleted as a duplicate of the Agent Runs plan
+    // block. Agent Runs still pins all three.
     expect(screen.getByText("Local repository diffs")).toBeInTheDocument();
     expect(
       screen.getByText(
@@ -2839,11 +2818,9 @@ describe("App smoke tests", () => {
     expect(
       await screen.findByRole("heading", { name: "1 pending approvals" }),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "0 runs are waiting for human approval across all repositories",
-      ),
-    ).toBeInTheDocument();
+    // The workspace-total agent-run line lived on the deleted metrics strip.
+    // The "1 pending approvals" heading above still pins the count this test
+    // is named for.
     expect(screen.getByText("Request approved")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Reject" })).toBeDisabled();
@@ -2897,162 +2874,6 @@ describe("App smoke tests", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled();
-  });
-
-  it("shows the no-file-selected preview state when no indexed files exist", async () => {
-    renderApp({ files: [] });
-
-    await goToTab("Changes");
-
-    expect(
-      await screen.findByText("Select a file after running indexing."),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("Loading preview...")).not.toBeInTheDocument();
-    expect(previewRepositoryFile).not.toHaveBeenCalled();
-  });
-
-  it("shows the loading preview state while safe preview data is pending", async () => {
-    const pendingPreview = new Promise<FileContentPreview>(() => undefined);
-    renderApp({ preview: pendingPreview });
-
-    await goToTab("Changes");
-
-    expect(await screen.findByText("Loading preview...")).toBeInTheDocument();
-  });
-
-  it("shows text preview content returned by the safe preview wrapper", async () => {
-    renderApp({
-      preview: {
-        path: "src/App.tsx",
-        status: "ready",
-        content: "const visiblePreview = true;",
-        sizeBytes: 24,
-        maxSizeBytes: 65536,
-      },
-    });
-
-    await goToTab("Changes");
-
-    expect(
-      await screen.findByText("const visiblePreview = true;"),
-    ).toBeInTheDocument();
-    expect(previewRepositoryFile).toHaveBeenCalledWith(
-      "/workspace",
-      "src/App.tsx",
-    );
-  });
-
-  it("shows binary file preview state", async () => {
-    renderApp({
-      preview: {
-        path: "src/App.tsx",
-        status: "binary",
-        content: null,
-        sizeBytes: 24,
-        maxSizeBytes: 65536,
-      },
-    });
-
-    await goToTab("Changes");
-
-    expect(
-      await screen.findByText("Preview skipped for binary content."),
-    ).toBeInTheDocument();
-  });
-
-  it("shows too-large file preview state", async () => {
-    renderApp({
-      preview: {
-        path: "src/App.tsx",
-        status: "too_large",
-        content: null,
-        sizeBytes: 1024 * 1024,
-        maxSizeBytes: 65536,
-      },
-    });
-
-    await goToTab("Changes");
-
-    expect(
-      await screen.findByText(
-        "Preview skipped because this file is 1.0 MB. The preview limit is 64.0 KB.",
-      ),
-    ).toBeInTheDocument();
-  });
-
-  it("shows outside-repository preview state", async () => {
-    renderApp({
-      preview: {
-        path: "src/App.tsx",
-        status: "outside_repository",
-        content: null,
-        sizeBytes: 24,
-        maxSizeBytes: 65536,
-      },
-    });
-
-    await goToTab("Changes");
-
-    expect(
-      await screen.findByText(
-        "Preview blocked because the resolved path is outside the repository.",
-      ),
-    ).toBeInTheDocument();
-  });
-
-  it("shows the preview error fallback when the safe preview wrapper rejects", async () => {
-    vi.mocked(previewRepositoryFile).mockRejectedValueOnce(
-      new Error("preview failed"),
-    );
-    renderApp();
-
-    await goToTab("Changes");
-
-    expect(
-      await screen.findByText("Preview unavailable for this file."),
-    ).toBeInTheDocument();
-  });
-
-  it("updates the preview panel when selecting a different indexed file", async () => {
-    const files: IndexedFileFact[] = [
-      ...defaultFiles,
-      {
-        repositoryId: "repo-workspace",
-        path: "docs/guide.md",
-        sizeBytes: 512,
-        extension: "md",
-        modifiedAt: "Today, 11:15",
-      },
-    ];
-
-    vi.mocked(previewRepositoryFile).mockImplementation(
-      async (_repositoryPath, filePath) => ({
-        path: filePath,
-        status: "ready",
-        content: `Preview for ${filePath}`,
-        sizeBytes: filePath === "docs/guide.md" ? 512 : 1280,
-        maxSizeBytes: 65536,
-      }),
-    );
-
-    const { user } = renderApp({ files });
-
-    await user.click(screen.getByRole("button", { name: "Changes" }));
-    expect(
-      await screen.findByText("Preview for src/App.tsx"),
-    ).toBeInTheDocument();
-
-    await user.click(
-      screen.getByRole("button", { name: "docs/guide.md, md, 512 B" }),
-    );
-
-    expect(
-      await screen.findByText("Preview for docs/guide.md"),
-    ).toBeInTheDocument();
-    expect(previewRepositoryFile).toHaveBeenLastCalledWith(
-      "/workspace",
-      "docs/guide.md",
-    );
   });
 });
 
@@ -3900,14 +3721,15 @@ describe("repository-scoped agent runs and approvals", () => {
       }),
     );
 
-    // Exactly one survivor, and it is the "Repository Context" side card, which
-    // prints the active repository's branch under the active repository's own
-    // name and is honest. The approval fact grid printed the same branch under
-    // the *approval's* repository name -- two rows, one lie. Without the fix
-    // this is 2 and the assertion fails.
-    expect(screen.getAllByText("release-2026-07", { selector: "dd" })).toHaveLength(
-      1,
-    );
+    // No survivors. The one honest printer of this branch was the "Repository
+    // Context" side card, which part 2 deleted as a duplicate of the identical
+    // card on Agent Runs. What #6 actually guards is unchanged and now stricter:
+    // the approval fact grid printed the same branch under the *approval's*
+    // repository name -- two rows, one lie. If that regresses, the branch
+    // reappears in a dd here and this is 1.
+    expect(
+      screen.queryAllByText("release-2026-07", { selector: "dd" }),
+    ).toHaveLength(0);
     expect(
       screen.getByText("Not linked to a saved repository", {
         selector: "dd",
@@ -4350,5 +4172,140 @@ describe("Slice G: the six distinctions as copy", () => {
         /The backup is only a receipt of the original bytes; restoring them later is a separate, explicit rollback\./,
       ),
     ).toBeInTheDocument();
+  });
+});
+
+// Part 2 is pure removal: 18 stat cards asserting 3 facts, explainer cards that
+// explain nothing a user asked about, invented planned steps, duplicated blocks,
+// and two controls that can never enable. Each assertion below is an absence, so
+// each was watched failing against the tree that still drew the card.
+describe("part 2: duplicated and empty cards are not drawn", () => {
+  const cleanGitStatus: GitStatusSummary = {
+    ...defaultGitStatus,
+    isClean: true,
+    changedFileCount: 0,
+    stagedCount: 0,
+    unstagedCount: 0,
+    untrackedCount: 0,
+    files: [],
+  };
+
+  const everySection = [
+    "Overview",
+    "Repositories",
+    "Agent Runs",
+    "Approvals",
+    "Changes",
+    "Settings",
+  ];
+
+  it("draws no workspace metrics strip on any of the six sections", async () => {
+    const { user } = renderApp();
+
+    for (const section of everySection) {
+      await user.click(screen.getByRole("button", { name: section }));
+      expect(screen.queryByLabelText("Workspace metrics")).toBeNull();
+      expect(screen.queryByText("Context mode")).toBeNull();
+    }
+  });
+
+  it("draws no explainer cards on Changes", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Changes" }));
+
+    expect(screen.queryByLabelText("Change review readiness")).toBeNull();
+    expect(screen.queryByText("Generated artifacts")).toBeNull();
+    expect(screen.queryByText("Release readiness")).toBeNull();
+  });
+
+  it("names no invented check strategy on Agent Runs or Approvals", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    expect(screen.queryByText("Check strategy")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Approvals" }));
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Approval Review" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Check strategy")).toBeNull();
+  });
+
+  it("does not repeat the plan and repository context blocks in Approvals", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Approvals" }));
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Approval Review" }),
+    ).toBeInTheDocument();
+
+    expect(screen.queryByText("Proposed Plan Review")).toBeNull();
+    expect(screen.queryByText("Repository Context")).toBeNull();
+  });
+
+  it("draws no empty artifact panels", async () => {
+    const { user } = renderApp({ proposedChanges: [] });
+
+    await user.click(screen.getByRole("button", { name: "Approvals" }));
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Approval Review" }),
+    ).toBeInTheDocument();
+
+    expect(screen.queryByText("No patch artifact records yet")).toBeNull();
+    // "Apply state" is the stat panel's own label and nothing else's. Broader
+    // handles were tried and rejected as over-broad: "Not generated" is a real
+    // fact in the approval grid, and Additions/Deletions label the real Git
+    // diff panel. Neither is part of this deletion.
+    expect(screen.queryByText("Apply state")).toBeNull();
+  });
+
+  it("draws no package metadata note on Repositories", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Repositories" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "AI-Developer-Workspace" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Package scripts unavailable")).toBeNull();
+    expect(screen.queryByText("Package / Framework Hints")).toBeNull();
+  });
+
+  it("says the working tree is clean exactly once", async () => {
+    const { user } = renderApp({ gitStatus: cleanGitStatus });
+
+    await user.click(screen.getByRole("button", { name: "Changes" }));
+
+    expect(
+      await screen.findAllByText("No local changes waiting for review"),
+    ).toHaveLength(1);
+  });
+
+  it("draws no second file explorer on Changes", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Changes" }));
+
+    expect(screen.queryByLabelText("Indexed file browser")).toBeNull();
+  });
+
+  it("draws no control that can never enable in Settings", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Keep local intelligence current",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Clear workspace caches" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reset workspace" })).toBeNull();
+    expect(
+      screen.queryByLabelText("Type RESET WORKSPACE to confirm reset"),
+    ).toBeNull();
   });
 });

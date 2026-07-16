@@ -108,19 +108,11 @@ export function PatchArtifactList({
   onSelectArtifact,
   selectedArtifactId,
 }: PatchArtifactListProps) {
+  // An empty list draws nothing. The panel it used to draw said only that a
+  // record might exist later, and Approvals drew it beside the artifact
+  // detail's own empty state -- two panels for one absence.
   if (artifacts.length === 0) {
-    return (
-      <div className="patch-artifact-empty">
-        <IconBadge icon="changes" tone="neutral" size="md" />
-        <div>
-          <h4>No patch artifact records yet</h4>
-          <p>
-            Placeholder artifacts will appear here before any generated patch
-            content is available.
-          </p>
-        </div>
-      </div>
-    );
+    return null;
   }
 
   return (
@@ -363,26 +355,31 @@ export function PatchArtifactDetail({
         </StatusPill>
       </div>
 
-      <dl className="diff-metadata-grid">
-        <div>
-          <dt>Additions</dt>
-          <dd>+{artifact?.additions ?? 0}</dd>
-        </div>
-        <div>
-          <dt>Deletions</dt>
-          <dd>-{artifact?.deletions ?? 0}</dd>
-        </div>
-        <div>
-          <dt>Generated</dt>
-          <dd>{artifact?.createdAt ?? "Not generated"}</dd>
-        </div>
-        <div>
-          <dt>Apply state</dt>
-          <dd>
-            {artifact?.applyStatus?.replaceAll("_", " ") ?? "Not applied"}
-          </dd>
-        </div>
-      </dl>
+      {/*
+        Stats describe an artifact. With no artifact selected this grid read
+        +0 / -0 / Not generated / Not applied -- four facts about nothing, which
+        a reader cannot tell from a real artifact that adds and removes no lines.
+      */}
+      {artifact ? (
+        <dl className="diff-metadata-grid">
+          <div>
+            <dt>Additions</dt>
+            <dd>+{artifact.additions ?? 0}</dd>
+          </div>
+          <div>
+            <dt>Deletions</dt>
+            <dd>-{artifact.deletions ?? 0}</dd>
+          </div>
+          <div>
+            <dt>Generated</dt>
+            <dd>{artifact.createdAt ?? "Not generated"}</dd>
+          </div>
+          <div>
+            <dt>Apply state</dt>
+            <dd>{artifact.applyStatus?.replaceAll("_", " ") ?? "Not applied"}</dd>
+          </div>
+        </dl>
+      ) : null}
 
       {artifact && checksSummary ? (
         <div className="patch-checks" aria-label="Checks">

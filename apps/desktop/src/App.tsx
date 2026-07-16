@@ -39,7 +39,6 @@ import {
   IconBadge,
   PrimaryButton,
   SecondaryButton,
-  SummaryCard,
   StatusBadge,
   StatusPill,
 } from "@ai-dev/ui";
@@ -53,14 +52,12 @@ import {
   isUntouchedSeededApproval,
   isUntouchedSeededProposal,
 } from "./lib/seedRecords";
-import { IndexedFileBrowser } from "./features/file-preview/IndexedFileBrowser";
 import {
   PatchArtifactDetail,
   PatchArtifactList,
 } from "./features/proposed-changes/PatchArtifacts";
 import {
   agentRuns as mockAgentRuns,
-  changeFeatureBlocks,
   emptyRepository,
   mockApprovalRequests,
   mockProposedChanges,
@@ -312,7 +309,6 @@ export function App() {
   );
   const [maintenanceReindexLastRunAt, setMaintenanceReindexLastRunAt] =
     useState<string | null>(null);
-  const [resetConfirmationText, setResetConfirmationText] = useState("");
 
   // In-memory only, defaulting to the first saved repository.
   //
@@ -333,12 +329,6 @@ export function App() {
     repositories.find((repository) => repository.id === activeRepositoryId) ??
     repositories[0] ??
     emptyRepository;
-  const indexedRepositoryCount = useMemo(
-    () =>
-      repositories.filter((repository) => repository.status === "indexed")
-        .length,
-    [repositories],
-  );
   const scanTarget = summarizeScanTarget({
     path: activeRepository?.path ?? workspace.summary.name,
     includeGitState: true,
@@ -468,9 +458,6 @@ export function App() {
   ).length;
   const visiblePendingApprovalCount = visibleApprovalRequests.filter(
     (approval) => approval.status === "pending",
-  ).length;
-  const waitingAgentRunCount = agentRuns.filter(
-    (run) => run.status === "waiting_for_approval",
   ).length;
   const extensionCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -2189,26 +2176,6 @@ export function App() {
     }
   }
 
-  function renderIndexedFileBrowser(variant: "compact" | "full") {
-    return (
-      <IndexedFileBrowser
-        activeRepository={activeRepository}
-        extensionCounts={extensionCounts}
-        extensionFilter={extensionFilter}
-        filePreview={filePreview}
-        fileSearch={fileSearch}
-        filteredIndexedFiles={filteredIndexedFiles}
-        indexedFiles={indexedFiles}
-        isPreviewLoading={isPreviewLoading}
-        onExtensionFilterChange={setExtensionFilter}
-        onFileSearchChange={setFileSearch}
-        onSelectedFilePathChange={setSelectedFilePath}
-        selectedIndexedFile={selectedIndexedFile}
-        variant={variant}
-      />
-    );
-  }
-
   // Shared by the scoped list and the unlinked group so the two cannot drift
   // into rendering a record differently depending on which one it landed in.
   function renderAgentRunRow(run: AgentRun) {
@@ -2318,52 +2285,6 @@ export function App() {
         providerName={agentProviderName(selectedAgentProviderId)}
         title={sectionHeaders[activeSection].title}
       />
-
-      <section
-        className={`overview-grid${
-          activeSection === "overview" ? "" : " overview-grid--compact"
-        }`}
-        aria-label="Workspace metrics"
-      >
-        <SummaryCard
-          detail={
-            hasActiveRepository
-              ? activeRepository.lastIndexedAt
-                ? `Last indexed ${activeRepository.lastIndexedAt}`
-                : "Not indexed yet"
-              : "Choose a repository to begin"
-          }
-          icon="database"
-          label="Repositories"
-          tone="accent"
-          value={repositories.length}
-        />
-        {/*
-          Workspace-level, sitting beside the workspace's repository count --
-          and it says so. Agent Runs itself is scoped to the active repository,
-          so an unlabelled total here would contradict the list it links to.
-        */}
-        <SummaryCard
-          detail={`${waitingAgentRunCount} ${
-            waitingAgentRunCount === 1 ? "run is" : "runs are"
-          } waiting for human approval across all repositories`}
-          icon="agent"
-          label="Agent runs"
-          tone="agent"
-          value={agentRuns.length}
-        />
-        <SummaryCard
-          detail={
-            activeIndexingJob
-              ? activeIndexingJob.step
-              : `${indexedRepositoryCount} indexed, ${scanTarget.includes.join(", ")}`
-          }
-          icon="index"
-          label="Context mode"
-          tone="context"
-          value={scanTarget.mode}
-        />
-      </section>
 
       {activeSection === "overview" ? (
         <section className="overview-lower-grid">
@@ -2744,42 +2665,6 @@ export function App() {
                       Not available yet. Key files appear after indexing.
                     </p>
                   )}
-                </article>
-
-                <article className="overview-card framework-hints-card">
-                  <div className="overview-card__header">
-                    <div>
-                      <p className="card-eyebrow">Package / Framework Hints</p>
-                      <h3>Path-derived hints</h3>
-                    </div>
-                    <IconBadge icon="spark" tone="context" size="md" />
-                  </div>
-
-                  {repositoryIntelligence.frameworkHints.length > 0 ? (
-                    <div className="framework-hint-list">
-                      {repositoryIntelligence.frameworkHints.map((hint) => (
-                        <div className="framework-hint-item" key={hint.name}>
-                          <strong>{hint.name}</strong>
-                          <span>{hint.evidence}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="intelligence-empty-copy">
-                      Not available yet. Hints are derived from indexed file
-                      paths and known config files.
-                    </p>
-                  )}
-
-                  <div className="package-metadata-note">
-                    <StatusPill tone="neutral" size="sm" showDot={false}>
-                      Package scripts unavailable
-                    </StatusPill>
-                    <p>
-                      Package.json contents are not parsed until a safe,
-                      explicit package metadata reader is added.
-                    </p>
-                  </div>
                 </article>
 
                 <article className="overview-card repository-entry-card">
@@ -3408,26 +3293,6 @@ export function App() {
                   </div>
                 </section>
 
-                <section className="plan-section plan-validation-section">
-                  <div className="plan-section__header">
-                    <IconBadge icon="search" tone="agent" size="md" />
-                    <div>
-                      <p className="card-eyebrow">Validation</p>
-                      <h3>Check strategy</h3>
-                    </div>
-                  </div>
-                  <div className="plan-validation-list">
-                    {activeProposedPlan.validation.map((check) => (
-                      <div className="plan-validation-item" key={check.label}>
-                        <Icon name="approval" size="sm" />
-                        <span>{check.label}</span>
-                        <StatusPill tone="neutral" size="sm" showDot={false}>
-                          {check.status.replaceAll("_", " ")}
-                        </StatusPill>
-                      </div>
-                    ))}
-                  </div>
-                </section>
               </div>
             ) : null}
           </article>
@@ -3746,149 +3611,7 @@ export function App() {
               </article>
             ) : null}
 
-            <article className="overview-card approval-plan-review-card">
-              <div className="overview-card__header">
-                <div>
-                  <p className="card-eyebrow">Proposed Plan Review</p>
-                  <h2>Plan attached to approval</h2>
-                </div>
-                <StatusPill
-                  tone={
-                    selectedApprovalProposedChange
-                      ? proposedChangeStatusTone(
-                          selectedApprovalProposedChange.status,
-                        )
-                      : selectedApprovalPlan?.approvalRequired
-                        ? "warning"
-                        : "neutral"
-                  }
-                >
-                  {selectedApprovalProposedChange?.status.replaceAll(
-                    "_",
-                    " ",
-                  ) ??
-                    (selectedApprovalPlan?.approvalRequired
-                      ? "approval required"
-                      : "no plan attached")}
-                </StatusPill>
-              </div>
-
-              <p className="tab-card-copy">
-                {selectedApprovalProposedChange?.summary ??
-                  selectedApprovalPlan?.summary ??
-                  "No structured proposed plan is linked to this approval yet."}
-              </p>
-
-              {selectedApprovalPlan ? (
-                <div className="proposed-plan-grid approval-plan-grid">
-                  <section className="plan-section plan-steps-section">
-                    <div className="plan-section__header">
-                      <IconBadge icon="index" tone="context" size="md" />
-                      <div>
-                        <p className="card-eyebrow">Implementation Steps</p>
-                        <h3>Ordered plan</h3>
-                      </div>
-                    </div>
-                    <ol className="plan-step-list">
-                      {selectedApprovalPlan.steps.map((step) => (
-                        <li key={step.id}>
-                          <StatusPill
-                            tone={stepStatusTone(step.status)}
-                            size="sm"
-                            showDot={false}
-                          >
-                            {step.status.replaceAll("_", " ")}
-                          </StatusPill>
-                          <div>
-                            <strong>{step.title}</strong>
-                            <p>{step.description}</p>
-                          </div>
-                        </li>
-                      ))}
-                    </ol>
-                  </section>
-
-                  <section className="plan-section">
-                    <div className="plan-section__header">
-                      <IconBadge icon="approval" tone="warning" size="md" />
-                      <div>
-                        <p className="card-eyebrow">Risk Summary</p>
-                        <h3>Review risks</h3>
-                      </div>
-                    </div>
-                    <div className="plan-risk-list">
-                      {selectedApprovalPlan.risks.map((risk) => (
-                        <div className="plan-risk-item" key={risk.title}>
-                          <StatusPill
-                            tone={riskTone(risk.level)}
-                            size="sm"
-                            showDot={false}
-                          >
-                            {risk.level}
-                          </StatusPill>
-                          <div>
-                            <strong>{risk.title}</strong>
-                            <span>{risk.description}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-
-                  <section className="plan-section">
-                    <div className="plan-section__header">
-                      <IconBadge icon="search" tone="agent" size="md" />
-                      <div>
-                        <p className="card-eyebrow">Validation</p>
-                        <h3>Check strategy</h3>
-                      </div>
-                    </div>
-                    <div className="plan-validation-list">
-                      {selectedApprovalPlan.validation.map((check) => (
-                        <div className="plan-validation-item" key={check.label}>
-                          <Icon name="approval" size="sm" />
-                          <span>{check.label}</span>
-                          <StatusPill tone="neutral" size="sm" showDot={false}>
-                            {check.status.replaceAll("_", " ")}
-                          </StatusPill>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                </div>
-              ) : null}
-            </article>
-
             <aside className="approval-side-column">
-              <article className="overview-card approval-repository-context-card">
-                <div className="overview-card__header">
-                  <div>
-                    <p className="card-eyebrow">Repository Context</p>
-                    <h3>{activeRepository.name}</h3>
-                  </div>
-                  <StatusPill
-                    tone={repositoryTone(activeRepository.status)}
-                    size="sm"
-                  >
-                    {activeRepository.status.replace("_", " ")}
-                  </StatusPill>
-                </div>
-                <dl className="agent-context-facts">
-                  <div>
-                    <dt>Indexed files</dt>
-                    <dd>{repositoryIntelligence.totalIndexedFiles}</dd>
-                  </div>
-                  <div>
-                    <dt>Open changes</dt>
-                    <dd>{activeRepository.openChanges}</dd>
-                  </div>
-                  <div>
-                    <dt>Branch</dt>
-                    <dd>{activeRepository.branch}</dd>
-                  </div>
-                </dl>
-              </article>
-
               <article className="overview-card patch-artifact-card">
                 <div className="overview-card__header">
                   <div>
@@ -4195,22 +3918,6 @@ export function App() {
             </div>
           </article>
 
-          <section
-            className="changes-feature-grid"
-            aria-label="Change review readiness"
-          >
-            {changeFeatureBlocks.map((block) => (
-              <article
-                className="overview-card changes-feature-card"
-                key={block.title}
-              >
-                <IconBadge icon={block.icon} tone="accent" size="md" />
-                <h3>{block.title}</h3>
-                <p>{block.description}</p>
-              </article>
-            ))}
-          </section>
-
           <article className="overview-card changes-status-card">
             <div className="overview-card__header">
               <div>
@@ -4379,23 +4086,8 @@ export function App() {
                   state={gitFileDiffState}
                 />
               </div>
-            ) : (
-              <div className="git-status-empty">
-                <IconBadge icon="approval" tone="success" size="md" />
-                <div>
-                  <h3>No local changes waiting for review</h3>
-                  <p>
-                    Git status reports a clean working directory for the
-                    selected repository.
-                  </p>
-                </div>
-              </div>
-            )}
+            ) : null}
           </article>
-
-          <section className="file-browser-shell">
-            {renderIndexedFileBrowser("full")}
-          </section>
         </section>
       ) : null}
 
@@ -4575,65 +4267,6 @@ export function App() {
                 </PrimaryButton>
               </div>
 
-              <div className="maintenance-action">
-                <IconBadge icon="database" tone="neutral" size="md" />
-                <div className="maintenance-action__body">
-                  <div className="maintenance-action__title-row">
-                    <h3>Clear workspace caches</h3>
-                    <StatusPill tone="neutral" size="sm">
-                      unavailable
-                    </StatusPill>
-                  </div>
-                  <p>
-                    Cache clearing is unavailable until cache boundaries are
-                    formalized.
-                  </p>
-                  <p className="maintenance-action__note">
-                    No local cache delete command exists yet, so this action
-                    stays disabled instead of guessing what data is safe to
-                    remove.
-                  </p>
-                </div>
-                <SecondaryButton disabled icon="database">
-                  Clear workspace caches
-                </SecondaryButton>
-              </div>
-
-              <div className="maintenance-action maintenance-action--danger">
-                <IconBadge icon="settings" tone="danger" size="md" />
-                <div className="maintenance-action__body">
-                  <div className="maintenance-action__title-row">
-                    <h3>Reset workspace</h3>
-                    <StatusPill tone="danger" size="sm">
-                      guarded
-                    </StatusPill>
-                  </div>
-                  <p>
-                    Reset workspace is destructive app-local maintenance only;
-                    it must never touch repository files or mutate Git state.
-                  </p>
-                  <label className="maintenance-confirmation">
-                    <span>Type RESET WORKSPACE to confirm</span>
-                    <input
-                      aria-label="Type RESET WORKSPACE to confirm reset"
-                      autoComplete="off"
-                      onChange={(event) =>
-                        setResetConfirmationText(event.target.value)
-                      }
-                      placeholder="RESET WORKSPACE"
-                      value={resetConfirmationText}
-                    />
-                  </label>
-                  <p className="maintenance-action__note">
-                    Reset is unavailable until app-local delete boundaries are
-                    formalized. The confirmation phrase is shown now so the
-                    future destructive path is explicitly gated.
-                  </p>
-                </div>
-                <SecondaryButton className="danger-action" disabled>
-                  Reset workspace
-                </SecondaryButton>
-              </div>
             </div>
           </article>
         </section>
