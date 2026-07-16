@@ -333,6 +333,53 @@ it did. Items are ordered by how much they protect or clarify that claim.
   `apps/desktop/src/features/proposed-changes/PatchArtifacts.tsx` (the path in
   the brief was stale, the line was right).
 
+- **IA restructure slice D — Index merged into Select.** `startIndexingJob` had
+  three call sites — its own definition, `runMaintenanceReindex`, and the
+  Repositories "Reindex repository" button — and **none was on the selection
+  path**. Selecting a repository never started indexing, so a never-indexed
+  repository could only reach its first index through a control labelled
+  "Reindex repository": a verb asserting a previous index that had never
+  happened, on a tab a first-run operator has no reason to open. This resolves
+  the #7 truthfulness finding of the same name.
+
+  **Selection now starts indexing, with no control between select and indexed.**
+  Two selection surfaces, both auto-index: choosing the first repository through
+  the native picker (`selectRepositories`) — which becomes the active repository
+  by fallback, so choosing it is selecting it — and selecting a saved repository
+  from the list (`switchActiveRepository`). The Reindex button is no longer a
+  first-index path, so its label stops asserting a history that never occurred.
+
+  **Deliberately conditional, not "always index on select."** Switching to an
+  **already-indexed** repository still restores its persisted facts through
+  `loadIndexedFileFacts` rather than re-scanning; only a repository whose status
+  is not `indexed` is indexed on selection. This keeps Reindex a meaningful
+  explicit action (refresh an already-indexed repository without re-selecting it)
+  and avoids a re-scan on every switch. Proven non-vacuous in **both** directions:
+  the new test fails when selection does not index a never-indexed repository, and
+  the two existing switch tests (`selects a saved repository…`, `never sends the
+  previous repository's indexed file paths…`) fail when the guard is neutralised
+  to always-index, because they depend on the indexed-repository path loading
+  persisted facts. One list cannot serve both; the `status !== "indexed"` check is
+  what makes select-indexes and reindex-refreshes coexist.
+
+  **A closure hazard the picker path forced out.** `startIndexingJob` mapped over
+  the `repositories` **state** to flip one repository to `indexed`. Called right
+  after `setRepositories(nextRepositories)` in the picker, that closure still held
+  the **pre-add** value — on a first-run install, `[]` — so the map produced an
+  empty list and would have dropped the very repository being indexed. Fixed by an
+  optional `baseRepositories` parameter (defaulting to the state) that the picker
+  passes the fresh list; switch and reindex keep the default, where no repositories
+  update is pending. Display only past that: no types, tables, columns, or serde
+  names changed; the indexing boundary (`scanRepositoryFileTree` →
+  `replaceIndexedFileFacts`) is unchanged, so this slice moves *when* an index runs,
+  not *what* it does.
+
+  The three reindex controls all survive and still work: the Repositories Entry
+  Points "Reindex repository" button, the Settings "Indexing policy" row action,
+  and the Settings Maintenance "Reindex repository" button. Pinned by two new tests
+  shown failing for the right reason (`scanRepositoryFileTree` never called) before
+  the change. Predicted 154 → 156 frontend; actual 156.
+
 ## Next
 
 ### #4d No gate enforces refreshed validation before retrying a failed apply
@@ -390,25 +437,19 @@ packaged QA that #6 exists to unblock.
   for an OpenAI run, while the prose directly beneath it correctly branches on
   `providerId`. An OpenAI run whose provider is unreachable still shows
   "connected".
-- **A never-indexed repository is indexed by a button that says "Reindex".**
-  Found while investigating #11's IA restructure, recorded here because it is a
-  truthfulness defect rather than an IA judgment. `startIndexingJob`
-  (`App.tsx:1898`) has exactly three call sites — its own definition,
-  `runMaintenanceReindex` (`App.tsx:1979`), and the Repositories "Reindex
-  repository" button (`App.tsx:2665`) — and **none of them is on the selection
-  path**. Selecting a repository therefore never starts indexing, and the only
-  control that performs a *first* index is labelled with a verb that asserts a
-  previous one. The other two indexing controls are both in Settings
-  (`App.tsx:4490`, `App.tsx:4430`), which is not where a first run looks.
-
-  The cost is not a wrong word. A first-time operator with a freshly selected
-  repository sees a control whose label says it is for something they have not
-  done, on a tab they have no reason to believe is mid-workflow. This is
-  suspected to be part of what stalled the human packaged QA at its indexing
-  step; the operator's own account is in
-  `docs/qa/evidence/mvp-demo-v1-disposable-apply-qa.md`. #11 slice D (merge Index
-  into Select) is the fix; the finding is recorded separately so it survives if
-  that slice is deferred.
+- ~~**A never-indexed repository is indexed by a button that says "Reindex".**~~
+  — **landed with #11 slice D (see the Done entry).** Selection now starts
+  indexing on both selection surfaces, so the Reindex button is no longer a
+  first-index path and its label stops asserting a history that never occurred.
+  The finding was recorded here separately from the IA judgment precisely so it
+  would survive if the slice were deferred; the slice was not deferred. Original
+  finding, kept for the record: `startIndexingJob` had exactly three call sites —
+  its own definition, `runMaintenanceReindex`, and the Repositories "Reindex
+  repository" button — and none was on the selection path, so selecting a
+  repository never started indexing and the only control that performed a *first*
+  index asserted a previous one. Suspected part of what stalled the human packaged
+  QA at its indexing step; the operator's own account is in
+  `docs/qa/evidence/mvp-demo-v1-disposable-apply-qa.md`.
 - **Dead controls.** Two "Copy repository path" buttons and a "View all" button
   render with no handler. Settings draws a "Clear caches" action that cannot
   execute and a `RESET WORKSPACE` confirmation input whose button is
@@ -464,10 +505,15 @@ workflow — they no longer render on arrival; an explicit Advanced control reve
 them, and when application is not ready a single summary line names the first
 blocking gate's reason instead. `applyReadiness.ts` was untouched (display only),
 so the apply button's disabled state is unchanged and its pinning tests stayed
-green unmodified (see the Done entry). Remaining: 3 nav rename, 4 domain nouns,
-5 the six distinctions, 6 demo-workflow copy. (The letter/number split is intentional:
-these lettered slices — order A, B, D, C, E, F, G — are the restructure's
-stable identifiers; the numbers above predate them and are kept for continuity.) The bound throughout is user-visible copy
+green unmodified (see the Done entry). D: Index merged into Select — selecting a
+repository starts indexing on both selection surfaces (native picker first-run and
+saved-list switch), with no control between select and indexed; Reindex survives as
+an explicit action for refreshing an already-indexed repository, and its label
+stops asserting a first index that never happened (see the Done entry). Remaining:
+C, then 3 nav rename, 4 domain nouns, 5 the six distinctions, 6 demo-workflow copy.
+(The letter/number split is intentional: these lettered slices — order A, B, D, C,
+E, F, G — are the restructure's stable identifiers; the numbers above predate them
+and are kept for continuity.) The bound throughout is user-visible copy
 only: types, tables, columns, and serde names keep their identifiers, because
 renaming those is a migration wearing a rename's clothes.
 
@@ -929,4 +975,7 @@ Recorded with reasons so they are not re-proposed.
 - **Merging indexing into repository selection, and demoting Repository
   Intelligence.** Both were raised as workflow simplifications. They are
   reasonable but they are IA decisions; they belong to #11 rather than being done
-  piecemeal.
+  piecemeal. **Merging indexing into selection has since landed as #11 slice D**
+  — done inside the IA restructure it was reserved for, not piecemeal, which is
+  exactly the condition this entry set. Demoting Repository Intelligence remains
+  unscheduled and stays here.

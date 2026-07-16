@@ -1130,6 +1130,21 @@ export function App() {
     setFileSearch("");
     setExtensionFilter("all");
 
+    const selectedRepository = repositories.find(
+      (repository) => repository.id === repositoryId,
+    );
+
+    // Selection is the only step between choosing a repository and its indexed
+    // facts. A repository that has never been indexed is indexed here -- no
+    // control sits between select and indexed. Reindex stays an explicit action
+    // for refreshing one that is already indexed, so an already-indexed
+    // repository restores its persisted facts rather than re-scanning on every
+    // switch.
+    if (selectedRepository && selectedRepository.status !== "indexed") {
+      await startIndexingJob(selectedRepository);
+      return;
+    }
+
     try {
       const savedFiles = await loadIndexedFileFacts(repositoryId);
       setIndexedFiles(savedFiles);
@@ -1865,22 +1880,30 @@ export function App() {
         selectedPaths.map((path) => createRepositorySummaryFromPath(path)),
       );
 
-      const nextRepositories = (() => {
-        const currentRepositories = repositories;
-        const existingPaths = new Set(
-          currentRepositories.map((repository) => repository.path),
-        );
-        const newRepositories = selectedRepositories.filter(
-          (repository) => !existingPaths.has(repository.path),
-        );
-
-        return [...currentRepositories, ...newRepositories];
-      })();
+      const currentRepositories = repositories;
+      const existingPaths = new Set(
+        currentRepositories.map((repository) => repository.path),
+      );
+      const addedRepositories = selectedRepositories.filter(
+        (repository) => !existingPaths.has(repository.path),
+      );
+      const nextRepositories = [...currentRepositories, ...addedRepositories];
 
       setRepositories(nextRepositories);
       await saveRepositories(nextRepositories);
       setStorageStatus("ready");
       setActiveSection("repositories");
+
+      // When the workspace had no repository, the one just chosen becomes the
+      // active repository by fallback, so choosing it *is* selecting it.
+      // Selection starts indexing, so its facts are built here with no control
+      // in between -- the same merge of select and index the saved-repository
+      // list performs on switch. Adding to an existing workspace does not change
+      // the active repository, so those repositories index when later selected.
+      const firstSelectedRepository = addedRepositories[0];
+      if (currentRepositories.length === 0 && firstSelectedRepository) {
+        await startIndexingJob(firstSelectedRepository, nextRepositories);
+      }
     } catch {
       setRepositoryPickerError(
         "The repository was selected, but the workspace could not save it. Check native storage access and try again.",
@@ -1889,7 +1912,15 @@ export function App() {
     }
   }
 
-  async function startIndexingJob(repository: RepositorySummary) {
+  // `baseRepositories` is the list the indexed-status update is applied to. It
+  // defaults to the `repositories` state, but a caller that has just added a
+  // repository (the picker) must pass the fresh list: the `repositories`
+  // closure still holds the pre-add value, and mapping over it would drop the
+  // repository this job is indexing.
+  async function startIndexingJob(
+    repository: RepositorySummary,
+    baseRepositories: RepositorySummary[] = repositories,
+  ) {
     const timestamp = new Date().toISOString();
     const job: IndexingJob = {
       ...createIndexingJob(repository),
@@ -1922,7 +1953,7 @@ export function App() {
         status: "indexed",
         lastIndexedAt: completedAt,
       };
-      const nextRepositories = repositories.map((currentRepository) =>
+      const nextRepositories = baseRepositories.map((currentRepository) =>
         currentRepository.id === repository.id
           ? indexedRepository
           : currentRepository,

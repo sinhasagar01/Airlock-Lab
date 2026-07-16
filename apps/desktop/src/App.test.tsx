@@ -788,6 +788,34 @@ describe("App smoke tests", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("indexes the first repository the moment it is chosen, with no control in between", async () => {
+    const { user } = renderApp({ files: [], repositories: [] });
+
+    vi.mocked(pickRepositoryDirectories).mockResolvedValue(["/fresh-clone"]);
+
+    // Choosing the first repository is the only interaction. Selection starts
+    // indexing directly -- no "Reindex repository" control stands between the
+    // choice and the indexed facts.
+    await user.click(screen.getByRole("button", { name: "Choose repository" }));
+
+    await waitFor(() =>
+      expect(scanRepositoryFileTree).toHaveBeenCalledWith(
+        "repo-/fresh-clone",
+        "/fresh-clone",
+      ),
+    );
+    // Exactly once: selection must not double-index, and nothing else indexes.
+    expect(scanRepositoryFileTree).toHaveBeenCalledTimes(1);
+    // The chosen repository reaches the indexed state from selection alone.
+    await waitFor(() =>
+      expect(saveRepositories).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({ path: "/fresh-clone", status: "indexed" }),
+        ]),
+      ),
+    );
+  });
+
   it("shows the web fallback only when the picker reports browser runtime", async () => {
     vi.mocked(pickRepositoryDirectories).mockRejectedValue(
       new RepositoryPickerError(
@@ -3216,6 +3244,46 @@ describe("repository switching", () => {
     // repository's.
     await waitFor(() =>
       expect(loadIndexedFileFacts).toHaveBeenCalledWith("repo-disposable"),
+    );
+  });
+
+  it("indexes an unindexed repository the moment it is selected, with no control in between", async () => {
+    const unindexedRepository: RepositorySummary = {
+      id: "repo-unindexed",
+      name: "Never-Indexed-Repo",
+      path: "/tmp/never-indexed",
+      isGitRepository: true,
+      branch: "main",
+      status: "not_indexed",
+      openChanges: 0,
+      lastIndexedAt: null,
+    };
+    const { user } = renderApp({
+      repositories: [mockState.repositories[0], unindexedRepository],
+    });
+
+    await user.click(screen.getByRole("button", { name: "Repositories" }));
+    // Selecting the repository is the only interaction. No "Reindex repository"
+    // control is touched between selection and the indexed state.
+    await user.click(
+      await screen.findByRole("button", { name: /Never-Indexed-Repo/ }),
+    );
+
+    await waitFor(() =>
+      expect(scanRepositoryFileTree).toHaveBeenCalledWith(
+        "repo-unindexed",
+        "/tmp/never-indexed",
+      ),
+    );
+    // Exactly once: selection must not double-index, and nothing else indexes.
+    expect(scanRepositoryFileTree).toHaveBeenCalledTimes(1);
+    // The repository reaches the indexed state from selection alone.
+    await waitFor(() =>
+      expect(saveRepositories).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "repo-unindexed", status: "indexed" }),
+        ]),
+      ),
     );
   });
 
