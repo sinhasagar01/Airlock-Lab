@@ -166,8 +166,15 @@ function formatProviderCheckTime(checkedAt: string) {
 }
 
 export function App() {
+  // Review is the front door: the app enters through the approval surface,
+  // where the product's decision lives, rather than a summary dashboard. The
+  // one exception is an empty workspace, which has nothing to review -- it is
+  // redirected to Repositories (the section that names the next action,
+  // choosing a repository) once hydration confirms no repository is saved. The
+  // redirect only fires while the user is still on this initial landing, so a
+  // click during a slow hydrate is respected.
   const [activeSection, setActiveSection] =
-    useState<NavigationSection>("overview");
+    useState<NavigationSection>("approvals");
   // Empty, not a fixture. Hydration's `catch` never calls `setRepositories`, so
   // whatever starts here survives a storage failure for the entire session --
   // and what used to start here was a fabricated repository with a real
@@ -1714,6 +1721,16 @@ export function App() {
     };
   }, []);
 
+  // The front door is Review, but an empty workspace has nothing to review, so
+  // it lands on the next-action section instead. Only redirect while the user
+  // is still on the initial Review landing: a navigation during a slow hydrate
+  // must not be yanked back.
+  function redirectEmptyWorkspaceToRepositories() {
+    setActiveSection((current) =>
+      current === "approvals" ? "repositories" : current,
+    );
+  }
+
   useEffect(() => {
     let isMounted = true;
 
@@ -1839,6 +1856,9 @@ export function App() {
           setRepositories([]);
           setIndexedFiles([]);
           setSelectedFilePath(null);
+          // Empty workspace: send the operator to the section that names the
+          // next action rather than the empty Review front door.
+          redirectEmptyWorkspaceToRepositories();
         }
 
         setStorageStatus("ready");
@@ -1848,6 +1868,9 @@ export function App() {
         }
 
         setStorageStatus("unavailable");
+        // A failed hydrate leaves the workspace empty (repositories stays []),
+        // so it too lands on the next-action section, not the Review door.
+        redirectEmptyWorkspaceToRepositories();
         setRepositoryPickerError(
           "Local repository storage is available in the native Tauri app. The web preview uses in-memory data.",
         );

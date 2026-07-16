@@ -476,6 +476,68 @@ it did. Items are ordered by how much they protect or clarify that claim.
   card, feature grid, status card, and file browser still below it — is a visual
   judgment this agent cannot make (eyes-only).
 
+- **IA restructure slice F — Review is the front door; Repository Intelligence
+  demoted.** The app entered through Overview, a summary dashboard, and the
+  Repositories section wore the headline "Repository Intelligence" — positioning
+  the product by a file-tree summary with extension counts (the claim #11 lists
+  for retirement) rather than by the change-control decision the product is built
+  around.
+
+  **Landing is now conditional on whether there is anything to review.** A
+  populated workspace enters through **Approval Review** (the front door);
+  `activeSection` initialises to `approvals` rather than `overview`. An empty
+  workspace has nothing to review, so once hydration confirms no saved
+  repository — both the ordinary empty path and the failed-hydrate `catch`, since
+  a failed hydrate also leaves the workspace empty — it is redirected to
+  **Repositories**, the section that names the next action (choosing a
+  repository). The redirect fires through a functional updater guarded on
+  `current === "approvals"`, so a navigation made during a slow native hydrate is
+  respected rather than yanked back to Repositories.
+
+  **Repository Intelligence is demoted out of the headline, not deleted.** The
+  Repositories section title changes from "Repository Intelligence" to
+  "Repositories" (and its eyebrow from "Repository intelligence" to "Workspace
+  repositories"); the phrase survives as a card-eyebrow sub-panel label *within*
+  the section, so it is reachable within Repositories but no longer names it. It
+  was never a nav item — the nav label was always "Repositories" — so the
+  demotion is the removal of a section *headline*, and a test pins that no
+  `level: 1` heading reads "Repository Intelligence" on any surface while the
+  sub-panel label still renders inside the section.
+
+  **The nav item set is deliberately unchanged (six), and a test pins it.**
+  Removing Overview was considered and **deferred**: post-#2 it is a derived
+  summary with no unique authority, but it is a whole surface with its own test
+  coverage — the #2 clean-marker-agreement and #6 foreign-count honesty tests
+  both assert on the Overview Active Work card — and this project defers unbid
+  surface removals to their own slice rather than bundling them into a landing
+  change (the same call slice E made for the indexed-file browser). "Review is
+  the front door" is realised by *where the app enters*, not by demolishing the
+  other rooms. The pinned set guards the demotion in the other direction too: it
+  fails if anyone re-promotes "Repository Intelligence" to a nav item instead of
+  demoting it (verified by mutation — adding it as a seventh item fails the
+  label check).
+
+  **Display and UI-local state only.** `NavigationSection` in `packages/core` was
+  in scope but needed no change — the union and `primaryNavigation` already
+  carried the six ids and the "Repositories" label; the demotion lives entirely
+  in `appData.ts` section copy, and the landing lives in `App.tsx` UI state. No
+  types, tables, columns, or serde names changed. Four new tests, all shown
+  failing for the right reason first (empty→Repositories and populated→Review
+  both landed on Overview before the change; the Repositories headline read
+  "Repository Intelligence"). Five existing tests that depended on the Overview
+  landing were re-pointed to navigate to Overview explicitly (it remains a nav
+  item): the six-tab smoke tour, the Overview mock-composer shortcut, the #2
+  clean-marker agreement, the #2 honest-empty-state, and the #6 foreign-count
+  test. Predicted 168 → 172 frontend (+4, none re-pointed test added or removed);
+  actual 172. Native 104 and AI 15 unchanged.
+
+  **Eyes-only:** whether Review, entered at position four in the sidebar with
+  Overview still above it, *reads* as a front door — and whether landing a
+  populated workspace on a possibly-empty Approvals surface feels like an
+  entrance rather than a dead end — is a visual judgment this agent cannot make.
+  Reordering the sidebar so Review sits at the top was left out as a visual
+  change with no structural assertion.
+
 ## Next
 
 ### #4d No gate enforces refreshed validation before retrying a failed apply
@@ -619,7 +681,13 @@ exposed is closed by `preserveInMemoryValidation` (see the Done entry). E (#9 +
 with the exact-path verification as a heading (naming the path, stating nothing
 was staged or committed) ahead of the file list, rather than a pill left on the
 approval surface; #10's second half — dropping the indexed-file browser Changes
-hosts — is deliberately deferred to its own slice (see the Done entry). Remaining:
+hosts — is deliberately deferred to its own slice (see the Done entry). F: Review
+is the front door — a populated workspace enters through Approval Review rather
+than the Overview dashboard, an empty workspace lands on Repositories (the
+next-action section), and "Repository Intelligence" is demoted from the
+Repositories headline to a sub-panel label within it; the six-item nav set is
+kept and pinned, with removing Overview deferred as an unbid surface removal (see
+the Done entry). Remaining:
 3 nav rename, 4 domain nouns, 5 the six distinctions, 6 demo-workflow copy.
 (The letter/number split is intentional: these lettered slices — order A, B, D, C,
 E, F, G — are the restructure's stable identifiers; the numbers above predate them
@@ -1087,5 +1155,8 @@ Recorded with reasons so they are not re-proposed.
   reasonable but they are IA decisions; they belong to #11 rather than being done
   piecemeal. **Merging indexing into selection has since landed as #11 slice D**
   — done inside the IA restructure it was reserved for, not piecemeal, which is
-  exactly the condition this entry set. Demoting Repository Intelligence remains
-  unscheduled and stays here.
+  exactly the condition this entry set. **Demoting Repository Intelligence has
+  since landed as #11 slice F** — the Repositories section headline stops reading
+  "Repository Intelligence" (the phrase survives as a sub-panel label within the
+  section), done inside the IA restructure it was reserved for rather than
+  piecemeal, which is the condition this entry set for it too.

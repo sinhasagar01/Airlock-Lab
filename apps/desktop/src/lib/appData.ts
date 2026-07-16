@@ -131,7 +131,7 @@ export const navigationIcons: Record<NavigationSection, IconName> = {
 
 export const sectionEyebrows: Record<NavigationSection, string> = {
   overview: "Workspace overview",
-  repositories: "Repository intelligence",
+  repositories: "Workspace repositories",
   agents: "Agent runs",
   approvals: "Human approval",
   changes: "Workspace changes",
@@ -147,9 +147,12 @@ export const sectionHeaders: Record<
     description: workspace.summary.description,
   },
   repositories: {
-    title: "Repository Intelligence",
+    // "Repository Intelligence" is demoted out of the headline -- it names a
+    // file-tree summary with extension counts, not the section. It survives as
+    // a sub-panel label within this section.
+    title: "Repositories",
     description:
-      "Understand the selected repository through indexed facts, project structure, and safe local context.",
+      "Choose a repository and understand it through indexed facts, project structure, and safe local context.",
   },
   agents: {
     title: "Agent Runs",

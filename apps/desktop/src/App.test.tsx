@@ -1,6 +1,7 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ApprovalRequest, PersistedProposedChange } from "@ai-dev/ai";
+import { primaryNavigation } from "@ai-dev/core";
 import type { GitFileDiff, GitStatusSummary } from "@ai-dev/core";
 import type {
   FileContentPreview,
@@ -682,10 +683,108 @@ beforeEach(() => {
   }));
 });
 
+describe("Slice F: Review front door and Repository Intelligence demotion", () => {
+  it("lands an empty workspace on the section that names the next action", async () => {
+    renderApp({ repositories: [] });
+
+    // An empty workspace has nothing to review, so the front door cannot be
+    // Review. The next action is choosing a repository, which lives in
+    // Repositories -- so that is where an empty workspace lands.
+    const repositoriesNav = await screen.findByRole("button", {
+      name: "Repositories",
+    });
+    await waitFor(() =>
+      expect(repositoriesNav).toHaveAttribute("aria-current", "page"),
+    );
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Repositories" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 2, name: "No repository selected" }),
+    ).toBeInTheDocument();
+    // Not the Review front door: there is nothing to review yet.
+    expect(
+      screen.getByRole("button", { name: "Approvals" }),
+    ).not.toHaveAttribute("aria-current", "page");
+  });
+
+  it("lands a populated workspace on Review, the front door", async () => {
+    renderApp();
+
+    const approvalsNav = await screen.findByRole("button", {
+      name: "Approvals",
+    });
+    await waitFor(() =>
+      expect(approvalsNav).toHaveAttribute("aria-current", "page"),
+    );
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Approval Review" }),
+    ).toBeInTheDocument();
+    // Overview is no longer the surface the app enters through.
+    expect(
+      screen.getByRole("button", { name: "Overview" }),
+    ).not.toHaveAttribute("aria-current", "page");
+  });
+
+  it("demotes Repository Intelligence to a panel within Repositories, not a nav item or headline", async () => {
+    const { user } = renderApp();
+    const nav = screen.getByRole("navigation", { name: "Primary navigation" });
+
+    // Not a nav item.
+    expect(
+      within(nav).queryByRole("button", { name: "Repository Intelligence" }),
+    ).toBeNull();
+    // Not a section headline on the front door either.
+    expect(
+      screen.queryByRole("heading", {
+        level: 1,
+        name: "Repository Intelligence",
+      }),
+    ).toBeNull();
+
+    // Reachable within Repositories, demoted to a sub-panel label under a
+    // "Repositories" headline.
+    await user.click(within(nav).getByRole("button", { name: "Repositories" }));
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Repositories" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", {
+        level: 1,
+        name: "Repository Intelligence",
+      }),
+    ).toBeNull();
+    expect(
+      screen.getAllByText("Repository Intelligence").length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("keeps the agreed primary navigation set with Repository Intelligence demoted out of it", () => {
+    expect(primaryNavigation).toHaveLength(6);
+    expect(primaryNavigation.map((item) => item.id)).toEqual([
+      "overview",
+      "repositories",
+      "agents",
+      "approvals",
+      "changes",
+      "settings",
+    ]);
+    expect(primaryNavigation.map((item) => item.label)).not.toContain(
+      "Repository Intelligence",
+    );
+  });
+});
+
 describe("App smoke tests", () => {
   it("renders all six tabs and updates the active surface from sidebar navigation", async () => {
     const { user } = renderApp();
 
+    // The front door is Review: a populated workspace enters here.
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Approval Review" }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Overview" }));
     expect(
       await screen.findByRole("heading", {
         name: "Draft app shell implementation plan",
@@ -696,7 +795,7 @@ describe("App smoke tests", () => {
     expect(
       await screen.findByRole("heading", {
         level: 1,
-        name: "Repository Intelligence",
+        name: "Repositories",
       }),
     ).toBeInTheDocument();
     expect(
@@ -748,6 +847,10 @@ describe("App smoke tests", () => {
 
   it("opens the clearly labeled mock-provider composer from Overview", async () => {
     const { user } = renderApp();
+
+    // The app now enters through Review; the Overview quick-start shortcut is
+    // reached by navigating to Overview first.
+    await user.click(screen.getByRole("button", { name: "Overview" }));
 
     await user.click(
       await screen.findByRole("button", {
@@ -1651,12 +1754,13 @@ describe("App smoke tests", () => {
       changedFileCount: 3,
       unstagedCount: 3,
     };
-    renderApp({ gitStatus: dirtyGitStatus });
+    const { user } = renderApp({ gitStatus: dirtyGitStatus });
 
     // Overview read the persisted openChanges snapshot while Changes read live
     // Git, so Overview could report a clean tree while Changes reported three
     // changed files. Clean-tree state is an apply gate; the two must not
-    // disagree.
+    // disagree. The app now enters through Review, so open Overview explicitly.
+    await user.click(screen.getByRole("button", { name: "Overview" }));
     const overview = await screen.findByLabelText("Active work");
     // The `await` above synchronises with nothing: "Active work" renders on the
     // first frame regardless of Git. This assertion used to be read straight
@@ -1694,7 +1798,11 @@ describe("App smoke tests", () => {
   });
 
   it("tells an empty workspace what to do instead of showing invented numbers", async () => {
-    renderApp({ repositories: [], files: [] });
+    const { user } = renderApp({ repositories: [], files: [] });
+
+    // An empty workspace lands on Repositories (the next action); this guards
+    // Overview's honest empty state, so open it explicitly.
+    await user.click(screen.getByRole("button", { name: "Overview" }));
 
     expect(
       await screen.findByText("No workspace state yet"),
@@ -3079,8 +3187,11 @@ describe("repository-scoped facts", () => {
   };
 
   it("never reports another repository's changed-file count as this one's", async () => {
-    renderApp({ gitStatus: otherRepositoryStatus });
+    const { user } = renderApp({ gitStatus: otherRepositoryStatus });
 
+    // The app enters through Review; this guards the Overview Active Work card,
+    // so open Overview explicitly.
+    await user.click(screen.getByRole("button", { name: "Overview" }));
     const overview = await screen.findByLabelText("Active work");
 
     // The foreign repository has 7 changes and is dirty; this one's own saved
