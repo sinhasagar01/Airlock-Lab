@@ -740,6 +740,29 @@ packaged QA that #6 exists to unblock.
   in every respect except how it was found: by a human opening the packaged app,
   not by reading the code. Recorded here because the list is where this class of
   finding belongs, and because it is evidence that the class is not exhausted.
+- **Overview "Active work" is hardwired to one fixture id — the contradiction is
+  fixed, the card is still not true.** Found reviewing that fix, and open. The
+  card's whole content is `persistedProposedChanges.find(c => c.id ===
+  demoWorkflow.proposedChangeId)` — a hardcoded lookup for `proposal-mvp-shell`.
+  A workspace holding a **real** OpenAI-generated proposal has no such id, so
+  Overview reports "No active work" while Approvals shows that proposal waiting.
+  The heading makes a workspace-level claim on the evidence of one fixture.
+
+  **The fix made the falsehood more confident, which is worth stating.** Before,
+  the card contradicted itself — a tell. It now reads "No active work" over
+  "Nothing is waiting for review.": cleaner, and false in exactly the same case.
+  Removing a contradiction can make a falsehood more persuasive; #2 and #3 both
+  record that a false account costs more than an obviously broken one.
+
+  Deliberately not fixed with the UI breaks: pointing the card at real work means
+  deciding whether "active work" is the workspace total or the active
+  repository's — the two-count question #6 settled deliberately — and #11 owns
+  whether the demo fixtures should exist at all. That is a product decision, not
+  a UI-break fix. Options and reasoning are in `.loop/decisions.md`, which is
+  gitignored, so the finding is recorded **here** as well rather than only on one
+  machine: retire the card (per slice F's deferred Overview removal), point it at
+  real work with an explicit scope label, or rename it to the demo workflow's
+  proposal so it stops claiming workspace truth.
 
 ## Design Changes
 
