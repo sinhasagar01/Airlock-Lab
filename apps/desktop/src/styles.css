@@ -3203,6 +3203,44 @@ dt {
   width: 100%;
 }
 
+.changes-verification-card {
+  align-items: start;
+  background: var(--color-success-soft);
+  border: 1px solid var(--color-success);
+  display: grid;
+  gap: 18px;
+  grid-template-columns: 58px minmax(0, 1fr);
+  padding: 30px;
+}
+
+.changes-verification-card__mark {
+  align-items: center;
+  background: var(--color-success);
+  border-radius: var(--radius-md);
+  color: var(--color-surface);
+  display: inline-flex;
+  height: 58px;
+  justify-content: center;
+  width: 58px;
+}
+
+.changes-verification-card h2 {
+  color: var(--color-text-primary);
+  font-size: 25px;
+  font-weight: 760;
+  line-height: 1.18;
+  margin-top: 14px;
+}
+
+.changes-verification-card p:not(.card-eyebrow) {
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.55;
+  margin-top: 14px;
+  max-width: 690px;
+}
+
 .changes-hero-card {
   align-items: center;
   display: flex;

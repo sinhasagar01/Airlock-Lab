@@ -2096,20 +2096,23 @@ describe("App smoke tests", () => {
         "APPLY PATCH",
       ),
     );
+    // A verified apply lands the operator in Changes with the proof as the
+    // primary content -- no manual navigation to reach it.
+    const verificationHeading = await screen.findByRole("heading", {
+      name: /Applied packages\/ai\/src\/index\.ts .* nothing was staged or committed/,
+    });
+    expect(verificationHeading).toBeInTheDocument();
+    // The proof is a heading, not the disabled "Patch applied and verified"
+    // pill it replaced -- and that pill lives on the approval surface we left.
     expect(
-      await screen.findByText(
-        /authoritative verification confirmed only the expected path changed.*No files were staged or committed/,
-      ),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "Patch applied and verified" }),
+    ).not.toBeInTheDocument();
+    // It precedes the changed-files list in DOM order.
+    const changedFiles = screen.getByLabelText("Changed files");
     expect(
-      screen.getByRole("button", { name: "Patch applied and verified" }),
-    ).toBeDisabled();
-    await user.click(screen.getByRole("button", { name: "Changes" }));
-    expect(
-      await screen.findByRole("heading", {
-        name: "1 local change waiting for review",
-      }),
-    ).toBeInTheDocument();
+      verificationHeading.compareDocumentPosition(changedFiles) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("creates a persisted mock agent run with a review-only proposal and approval", async () => {

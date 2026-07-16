@@ -435,6 +435,47 @@ it did. Items are ordered by how much they protect or clarify that claim.
   frontend (+4 App checks, +4 `summarizeChecks`, +4 `preserveInMemoryValidation`);
   actual 168. Native 104 and AI 15 unchanged.
 
+- **IA restructure slice E — proof is the destination (#9 + #10).** A verified
+  apply left the operator on the approval surface, where the product's entire
+  value proposition — exact-path post-apply verification — rendered as a disabled
+  **Patch applied and verified** pill and a `role="status"` paragraph. A verified
+  apply now navigates to **Changes**, on real read-only Git state, and the
+  verification is the **first child** of the changes dashboard: a heading naming
+  the exact applied path and stating that nothing was staged or committed, ahead
+  of the Git changed-files list in DOM order.
+
+  **Display and UI-local state only. No native, apply, or verification logic
+  changed.** A new `lastVerifiedApply` UI state carries the proof (path, applied
+  time, backup id) from the apply handler to Changes; `setActiveSection("changes")`
+  fires only on `applied_verified`, so a **quarantined** apply keeps the operator
+  on the approval surface where the recovery evidence and `INSPECTED`
+  acknowledgement live. The proof is scoped by repository id at the render site —
+  a switch cannot render one repository's verification over another's Git state —
+  and it is **retracted when the same artifact is rolled back**, so the
+  destination never claims a write that was undone. No types, tables, columns, or
+  serde names changed; the `PatchArtifacts` apply/verification rendering is
+  untouched (still shown if the operator navigates back to the approval).
+
+  Proven non-vacuous by neutralising the navigation and watching the Changes
+  verification heading never appear. The single live-apply test
+  (`requires typed confirmation and applies only through the ID-only native
+  boundary`) is re-pointed from the old approval-surface pill/prose to the new
+  landing: it asserts the heading naming `packages/ai/src/index.ts` and "nothing
+  was staged or committed" appears with no manual navigation, that the "Patch
+  applied and verified" pill is **absent** from the document (it lives on the
+  surface we left), and that the heading precedes the "Changed files" list via
+  `compareDocumentPosition`. Predicted 168 → 168 frontend (one existing test
+  re-pointed, none added); actual 168. Native 104 and AI 15 unchanged.
+
+  **Deliberately partial against #10.** #10 also argues Changes should drop the
+  full indexed-file browser it hosts. That is a separate surface removal with its
+  own test surface (the preview-state tests) and is **not** among this slice's
+  assertions; it is left for its own slice rather than bundled into a landing
+  change. So the verification is now the primary content *by position and
+  emphasis*, but whether it is the loudest thing on the screen — with the hero
+  card, feature grid, status card, and file browser still below it — is a visual
+  judgment this agent cannot make (eyes-only).
+
 ## Next
 
 ### #4d No gate enforces refreshed validation before retrying a failed apply
@@ -529,17 +570,22 @@ is the rationale later slices build on.
 
 ### #9 Make post-apply verification loud
 
-Exact-path post-apply verification is the product's entire value proposition and
-it renders as a status pill. The argument is that the proof — "only the approved
-path changed; nothing was staged or committed" — deserves to be the loudest
-thing on the screen after an apply, not a badge.
+**Landed as IA restructure slice E (with #10) — see the Done entry.** The proof
+is no longer a status pill: after a verified apply it renders as a heading naming
+the exact applied path and stating nothing was staged or committed, as the first
+child of the Changes dashboard. Kept here as a stub because the argument — that
+the product's entire value proposition deserves to be the loudest thing on screen
+rather than a badge — is the rationale for the emphasis this slice gave it.
 
 ### #10 Land in Changes after an apply
 
-After a successful apply the user stays put. The argument is that they should
-land in Changes, on real read-only Git state, with the verification result — the
-product's honest surface — and that Changes should drop the full indexed-file
-browser it also hosts, which is a second file explorer nobody asked for.
+**Landed as IA restructure slice E (with #9) — see the Done entry.** A verified
+apply now navigates to Changes, on real read-only Git state, with the
+verification result as the primary content by position. **One half is
+deliberately deferred:** dropping the full indexed-file browser Changes also
+hosts is a separate surface removal with its own test surface and is not among
+slice E's assertions, so it is left for its own slice. Kept here as a stub for
+that remaining half.
 
 ### #11 Rename and information architecture
 
@@ -568,7 +614,12 @@ stops asserting a first index that never happened (see the Done entry). C: valid
 and dry-run collapse into one Checks line that runs on review-open — a projection
 of `evaluateApplyReadiness`, not of the durable `validationStatus`, so a stale
 dry-run reads failed rather than "passed" forever (#4d), and the reload race it
-exposed is closed by `preserveInMemoryValidation` (see the Done entry). Remaining:
+exposed is closed by `preserveInMemoryValidation` (see the Done entry). E (#9 +
+#10): proof is the destination — a verified apply lands the operator in Changes
+with the exact-path verification as a heading (naming the path, stating nothing
+was staged or committed) ahead of the file list, rather than a pill left on the
+approval surface; #10's second half — dropping the indexed-file browser Changes
+hosts — is deliberately deferred to its own slice (see the Done entry). Remaining:
 3 nav rename, 4 domain nouns, 5 the six distinctions, 6 demo-workflow copy.
 (The letter/number split is intentional: these lettered slices — order A, B, D, C,
 E, F, G — are the restructure's stable identifiers; the numbers above predate them

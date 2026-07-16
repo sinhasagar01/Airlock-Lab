@@ -259,6 +259,17 @@ export function App() {
     status: "success" | "error";
     message: string;
   } | null>(null);
+  // The proof of a verified apply, carried to Changes so it can be the primary
+  // content there rather than a pill left behind on the approval surface. Scoped
+  // by repository id at the render site; cleared when the same artifact is rolled
+  // back so the claim never outlives its truth.
+  const [lastVerifiedApply, setLastVerifiedApply] = useState<{
+    artifactId: string;
+    repositoryId: string;
+    path: string;
+    appliedAt?: string;
+    backupId?: string;
+  } | null>(null);
   const [rollingBackPatchArtifactId, setRollingBackPatchArtifactId] = useState<
     string | null
   >(null);
@@ -521,6 +532,13 @@ export function App() {
     activeGitStatusSummary?.branch ?? activeRepository.branch;
   const isWorkingDirectoryClean =
     activeGitStatusSummary?.isClean ?? activeRepository.openChanges === 0;
+  // Only surface the proof for the repository the operator is actually looking
+  // at. The write targets the repository its proposal names, so a switch must
+  // not let one repository's verification render over another's Git state.
+  const activeVerifiedApply =
+    lastVerifiedApply && lastVerifiedApply.repositoryId === activeRepository.id
+      ? lastVerifiedApply
+      : null;
   const applyReadinessWorkingTreeState = !hasActiveRepository
     ? ("unknown" as const)
     : gitStatusState === "ready" && activeGitStatusSummary
@@ -1059,6 +1077,23 @@ export function App() {
         status: isVerifiedApply ? "success" : "error",
         message: result.message,
       });
+      // Proof is the destination. A verified apply lands the operator in Changes
+      // on real read-only Git state, with the exact-path verification as the
+      // primary content rather than a pill on the surface they just left. A
+      // quarantined result keeps them on the approval surface, where the recovery
+      // evidence and acknowledgement live.
+      if (isVerifiedApply) {
+        setLastVerifiedApply({
+          artifactId: artifact.id,
+          repositoryId: change.repositoryId,
+          path:
+            result.postApplyVerification.expectedPaths.join(", ") ||
+            artifact.filePath,
+          appliedAt: result.appliedAt,
+          backupId: result.backupId,
+        });
+        setActiveSection("changes");
+      }
 
       try {
         const attempts = await reconcileInterruptedPatchApplyAttempts();
@@ -1277,6 +1312,13 @@ export function App() {
         status: isVerifiedRollback ? "success" : "error",
         message: result.message,
       });
+      // A rolled-back artifact's apply is no longer true; retract its Changes
+      // proof so the destination cannot keep claiming a write that was undone.
+      if (isVerifiedRollback) {
+        setLastVerifiedApply((current) =>
+          current?.artifactId === artifact.id ? null : current,
+        );
+      }
     } catch (error) {
       setPatchRollbackFeedback({
         artifactId: artifact.id,
@@ -4009,6 +4051,34 @@ export function App() {
 
       {activeSection === "changes" ? (
         <section className="changes-dashboard">
+          {activeVerifiedApply ? (
+            <article
+              className="overview-card changes-verification-card"
+              aria-label="Post-apply verification"
+            >
+              <div className="changes-verification-card__mark">
+                <Icon name="approval" />
+              </div>
+              <div>
+                <p className="card-eyebrow">Post-apply verification</p>
+                <h2>
+                  Applied {activeVerifiedApply.path} — nothing was staged or
+                  committed
+                </h2>
+                <p>
+                  Airlock's native verification confirmed that only the approved
+                  path changed on disk. Nothing was staged and nothing was
+                  committed; Git history is untouched.
+                  {activeVerifiedApply.appliedAt
+                    ? ` Applied at ${activeVerifiedApply.appliedAt}.`
+                    : ""}
+                  {activeVerifiedApply.backupId
+                    ? ` Pre-apply backup: ${activeVerifiedApply.backupId}.`
+                    : " Backup reference unavailable."}
+                </p>
+              </div>
+            </article>
+          ) : null}
           <article className="overview-card changes-hero-card">
             <div className="changes-hero-card__content">
               <div className="changes-hero-card__mark">
