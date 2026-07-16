@@ -245,6 +245,7 @@ export function PatchArtifactDetail({
   const [acknowledgePhrase, setAcknowledgePhrase] = useState("");
   const [isConfirmingRollback, setIsConfirmingRollback] = useState(false);
   const [rollbackPhrase, setRollbackPhrase] = useState("");
+  const [showAdvancedGates, setShowAdvancedGates] = useState(false);
   const validationStatus = artifact
     ? initialPatchValidationStatus(artifact)
     : "unavailable";
@@ -297,7 +298,15 @@ export function PatchArtifactDetail({
     setAcknowledgePhrase("");
     setIsConfirmingRollback(false);
     setRollbackPhrase("");
+    setShowAdvancedGates(false);
   }, [artifact?.id]);
+
+  // Display-only: the readiness logic is authoritative and untouched. The full
+  // eighteen-gate list is evidence to inspect, not a workflow to walk, so it
+  // lives behind an explicit Advanced control. When application is not ready,
+  // the first blocking gate's reason stands in for the wall of gates.
+  const firstBlockingGate =
+    applyReadiness?.gates.find((item) => item.status === "blocked") ?? null;
 
   return (
     <section
@@ -548,23 +557,47 @@ export function PatchArtifactDetail({
             stage changes, and approval alone never applies a patch.
           </p>
           <p className="apply-readiness__summary">{applyReadiness.summary}</p>
-          <ul className="apply-readiness__gates">
-            {applyReadiness.gates.map((readinessGate) => (
-              <li key={readinessGate.id}>
-                <div>
-                  <strong>{readinessGate.label}</strong>
-                  <span>{readinessGate.detail}</span>
-                </div>
-                <StatusPill
-                  tone={readinessGateTone(readinessGate.status)}
-                  size="sm"
-                  showDot={false}
-                >
-                  {applyReadinessGateStatusLabel(readinessGate.status)}
-                </StatusPill>
-              </li>
-            ))}
-          </ul>
+          {firstBlockingGate ? (
+            <p className="apply-readiness__blocking" role="status">
+              First unmet gate:{" "}
+              <span className="apply-readiness__blocking-reason">
+                {firstBlockingGate.detail}
+              </span>
+            </p>
+          ) : null}
+          <div className="apply-readiness__advanced">
+            <SecondaryButton
+              aria-expanded={showAdvancedGates}
+              icon="approval"
+              onClick={() => setShowAdvancedGates((shown) => !shown)}
+            >
+              {showAdvancedGates
+                ? "Hide all readiness gates"
+                : "Advanced: show all 18 readiness gates"}
+            </SecondaryButton>
+            {showAdvancedGates ? (
+              <ul
+                className="apply-readiness__gates"
+                aria-label="Apply readiness gates"
+              >
+                {applyReadiness.gates.map((readinessGate) => (
+                  <li key={readinessGate.id}>
+                    <div>
+                      <strong>{readinessGate.label}</strong>
+                      <span>{readinessGate.detail}</span>
+                    </div>
+                    <StatusPill
+                      tone={readinessGateTone(readinessGate.status)}
+                      size="sm"
+                      showDot={false}
+                    >
+                      {applyReadinessGateStatusLabel(readinessGate.status)}
+                    </StatusPill>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
           <div className="apply-readiness__action">
             {applicationVerified ? (
               <SecondaryButton disabled icon="approval">

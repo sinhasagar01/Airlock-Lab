@@ -304,6 +304,35 @@ it did. Items are ordered by how much they protect or clarify that claim.
   untouched, so apply's safety surface is unchanged — this slice removes a
   *second door to the same room*, it does not alter the room.
 
+- **IA restructure slice B — the eighteen readiness gates become evidence, not
+  workflow.** The full gate list rendered on arrival, presenting a native audit
+  trail as eighteen steps to walk. It now lives behind an explicit **Advanced:
+  show all 18 readiness gates** control; on first render not one of the eighteen
+  gate labels is in the document. When application is not ready, a single summary
+  line — *First unmet gate: …* — names the **first blocking gate's reason** (its
+  detail, deliberately not its label, so the "no gate labels on arrival" property
+  holds) in place of the wall of gates. The overall count summary
+  (`applyReadiness.summary`) is kept.
+
+  **Display only. `applyReadiness.ts` was not touched** — the gate order,
+  statuses, `canApply`, and the four-way `status` are the same object, rendered
+  differently. So the apply button's disabled state is unchanged, and the tests
+  that pin it (`keeps patch application disabled while safety gates are blocked`
+  and the apply-flow tests) stayed **green unmodified**. Two existing tests that
+  read individual gate labels/details as a display assertion — the validated
+  OpenAI-plan test and `keeps apply readiness unknown …` — were updated to open
+  Advanced first; that is a display expectation following the display, not an
+  apply-button change.
+
+  Pinned by two new tests and shown failing for the right reason before the
+  change: one asserts none of the eighteen labels are present on arrival and all
+  eighteen appear after Advanced; the other derives the first blocked gate from
+  the expanded list, collapses it, and asserts the reason survives as one line
+  while the labels leave the document. Predicted 152 → 154 frontend; actual 154.
+  The brief cited `PatchArtifacts.tsx:551`; the file is at
+  `apps/desktop/src/features/proposed-changes/PatchArtifacts.tsx` (the path in
+  the brief was stale, the line was right).
+
 ## Next
 
 ### #4d No gate enforces refreshed validation before retrying a failed apply
@@ -430,8 +459,13 @@ once to `com.airlocklab.airlock` and is now pinned by a native test. 2: the mock
 repository fixture is retired — the last fabrication that could present itself as
 a saved repository. A (#8): one apply entry point — the patch artifact detail
 renders only behind Approval Review, and Agent Runs hands off to the linked
-approval (see the Done entry). Remaining: 3 nav rename, 4 domain nouns, 5 the six
-distinctions, 6 demo-workflow copy. (The letter/number split is intentional:
+approval (see the Done entry). B: the eighteen readiness gates are evidence, not
+workflow — they no longer render on arrival; an explicit Advanced control reveals
+them, and when application is not ready a single summary line names the first
+blocking gate's reason instead. `applyReadiness.ts` was untouched (display only),
+so the apply button's disabled state is unchanged and its pinning tests stayed
+green unmodified (see the Done entry). Remaining: 3 nav rename, 4 domain nouns,
+5 the six distinctions, 6 demo-workflow copy. (The letter/number split is intentional:
 these lettered slices — order A, B, D, C, E, F, G — are the restructure's
 stable identifiers; the numbers above predate them and are kept for continuity.) The bound throughout is user-visible copy
 only: types, tables, columns, and serde names keep their identifiers, because

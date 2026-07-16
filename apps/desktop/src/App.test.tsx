@@ -1423,6 +1423,92 @@ describe("App smoke tests", () => {
     ).toBeDisabled();
   });
 
+  // The eighteen readiness gates are evidence, not workflow. The default view
+  // must not present them as steps; they belong behind an explicit Advanced
+  // control. This lists every label so a renamed or dropped gate is caught here.
+  const APPLY_READINESS_GATE_LABELS = [
+    "Native desktop runtime",
+    "Durable records available",
+    "Artifact is in an appliable state",
+    "Approval request approved",
+    "Artifact generated",
+    "Artifact structure valid",
+    "Read-only dry-run passed",
+    "Linked repository selected",
+    "Named branch and HEAD available",
+    "Working tree clean",
+    "Artifact path allowed",
+    "No forbidden file touched",
+    "Artifact is text",
+    "Artifact within size limit",
+    "Artifact digest matches validation",
+    "Validation snapshot captured",
+    "Target files fingerprinted",
+    "Repository state unchanged",
+  ];
+
+  it("keeps the eighteen readiness gates out of the document until Advanced is activated", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
+
+    // The readiness section is on screen...
+    expect(
+      await screen.findByRole("heading", { name: "Apply Readiness" }),
+    ).toBeInTheDocument();
+
+    // ...but not one gate label is rendered on first arrival.
+    for (const label of APPLY_READINESS_GATE_LABELS) {
+      expect(screen.queryByText(label)).not.toBeInTheDocument();
+    }
+
+    await user.click(
+      screen.getByRole("button", { name: /Advanced.*readiness gates/i }),
+    );
+
+    // Every gate is present once revealed, each exactly once.
+    for (const label of APPLY_READINESS_GATE_LABELS) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+  });
+
+  it("names the first blocking gate's reason without listing every gate", async () => {
+    const { user } = renderApp();
+
+    await user.click(screen.getByRole("button", { name: "Agent Runs" }));
+    await user.click(screen.getByRole("button", { name: "Review approval" }));
+
+    await screen.findByRole("heading", { name: "Apply Readiness" });
+
+    // Reveal the gates to read the authoritative first blocking reason, without
+    // hardcoding which gate blocks first in the fixture's default state.
+    await user.click(
+      screen.getByRole("button", { name: /readiness gates/i }),
+    );
+    const gateList = screen.getByRole("list", {
+      name: "Apply readiness gates",
+    });
+    const firstBlockedItem = within(gateList)
+      .getAllByRole("listitem")
+      .find((item) => within(item).queryByText("Blocked"));
+    expect(firstBlockedItem).toBeDefined();
+    // The detail span sits inside the label div, before the status pill.
+    const firstBlockingDetail =
+      firstBlockedItem!.querySelector("div span")?.textContent ?? "";
+    expect(firstBlockingDetail.length).toBeGreaterThan(0);
+
+    // Collapse the gate list again: the reason survives as a single summary
+    // line while the eighteen gate labels leave the document.
+    await user.click(
+      screen.getByRole("button", { name: /readiness gates/i }),
+    );
+    for (const label of APPLY_READINESS_GATE_LABELS) {
+      expect(screen.queryByText(label)).not.toBeInTheDocument();
+    }
+    expect(screen.getByText(firstBlockingDetail)).toBeInTheDocument();
+  });
+
   const quarantinedProposedChanges = defaultProposedChanges.map((change) =>
     change.id === "proposal-mvp-shell"
       ? {
@@ -2192,6 +2278,10 @@ describe("App smoke tests", () => {
       ["src/App.tsx"],
     );
     expect(await screen.findByText("dry run passed")).toBeInTheDocument();
+    // Individual gate labels live behind the Advanced control now.
+    await user.click(
+      screen.getByRole("button", { name: /readiness gates/i }),
+    );
     expect(
       screen.getByText("Artifact digest matches validation"),
     ).toBeInTheDocument();
@@ -3062,6 +3152,11 @@ describe("repository-scoped facts", () => {
       await screen.findByRole("button", {
         name: /generated packages\/ai\/src\/index\.ts/,
       }),
+    );
+
+    // The eighteen gates are behind the Advanced control now.
+    await user.click(
+      await screen.findByRole("button", { name: /readiness gates/i }),
     );
 
     // The working-tree gate feeds apply readiness. A foreign clean tree must

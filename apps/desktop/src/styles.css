@@ -2878,6 +2878,22 @@ dt {
   line-height: 1.5;
 }
 
+.apply-readiness__blocking {
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 540;
+  line-height: 1.5;
+}
+
+.apply-readiness__blocking-reason {
+  font-weight: 640;
+}
+
+.apply-readiness__advanced {
+  display: grid;
+  gap: 8px;
+}
+
 .apply-readiness__gates {
   display: grid;
   gap: 8px;
